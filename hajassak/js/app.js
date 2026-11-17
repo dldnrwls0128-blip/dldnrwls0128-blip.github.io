@@ -351,7 +351,7 @@ ROUTES.unit = async (qq) => {
   setTab("list");
   const dong = qq.dong, ho = qq.ho || "";
   setHeader(`${dong} ${ho ? ho + "호" : ""}`);
-  const all = PD().filter((d) => d.dong === dong && (ho ? d.ho === ho : !d.ho));
+  const all = PD().filter((d) => d.dong === dong && (ho ? (d.ho === ho || M.normHo(d.ho) === M.normHo(ho)) : !d.ho));
   const onlyOpen = LS.get("unitOpen", true);
   const list = onlyOpen ? all.filter(M.isOpen) : all;
   const groups = M.groupByTradeVendor(list, vName);
@@ -379,7 +379,7 @@ ROUTES.grid = async (qq) => {
   setHeader("동 현황");
   if (!dong) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
   const list = PD().filter((d) => d.dong === dong.name);
-  const by = new Map(); for (const d of list) { if (!d.ho) continue; const m = by.get(d.ho) || { open: 0, all: 0, od: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d)) m.od++; by.set(d.ho, m); }
+  const by = new Map(); for (const d of list) { if (!d.ho) continue; const k = M.normHo(d.ho) || d.ho; const m = by.get(k) || { open: 0, all: 0, od: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d)) m.od++; by.set(k, m); }
   const th = M.heatThresholds(p, PD()); const cnt = (m) => (th.basis === "all" ? m.all : m.open);
   const floors = []; for (let f = dong.floors; f >= (dong.unitStart || 1); f--) if (M.unitsOf(dong, String(f)).length) floors.push(f);
   const lines = M.linesOf(dong);
