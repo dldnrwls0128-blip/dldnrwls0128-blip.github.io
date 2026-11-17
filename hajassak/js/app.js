@@ -6,6 +6,7 @@ import { compressImage, downloadBlob, shareOrDownload } from "./photo.js";
 import { shareKakao, copyText, contactPickerSupported, pickContacts, canShareFiles } from "./share.js";
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
+import * as Sync from "./sync.js";
 
 export const APP_VERSION = self.HAJASSAK_VERSION || "0.0.0"; // 유일 출처: /version.js (sw.js 캐시 이름도 같은 값)
 export const APP_NAME = "하자싹";
@@ -16,7 +17,7 @@ const LS = {
 const S = {
   projects: [], pid: LS.get("pid", ""), defects: [], vendors: [], plans: [], pidx: new Map(),
   filter: LS.get("filter", { status: "_open" }), listMode: LS.get("listMode", "list"), listLimit: 60,
-  draft: null, select: null, issuer: LS.get("issuer", ""),
+  draft: null, select: new Set(), selRoute: "", selAnchor: null, issuer: LS.get("issuer", ""),
 };
 const P = () => S.projects.find((p) => p.id === S.pid) || null;
 const PD = () => S.defects.filter((d) => d.projectId === S.pid);
@@ -95,6 +96,9 @@ async function route() {
     setTab("home"); setHeader(APP_NAME, { backBtn: false });
     view().innerHTML = noProject(); bindNoProject(); return;
   }
+  const selKey = location.hash.split("?")[0] === "#/list" ? "#/list" : location.hash;
+  if (selKey !== S.selRoute && !["item", "edit"].includes(path)) { S.select.clear(); S.selAnchor = null; S.selRoute = selKey; }
+  document.body.classList.remove("has-selbar");
   const fn = ROUTES[path] || ROUTES.home;
   try { await fn(q()); } catch (e) { console.error(e); view().innerHTML = `<div class="card"><p>화면 오류: ${esc(e.message)}</p></div>`; }
   window.scrollTo(0, 0);
@@ -117,7 +121,7 @@ function bindNoProject() {
 const ONBOARD = [
   { ico: "📍", t: "몇 번의 탭으로 하자 등록", d: "동 → 층 → 호 → 실을 차례로 누르고, 사진을 찍으면 위치·시간이 사진에 자동으로 찍혀요." },
   { ico: "📲", t: "업체에 카톡·문자로 바로 전달", d: "업체를 등록해 두면 미조치 목록을 한 번에 카톡·문자로 보내고, 보낸 건은 ‘업체전달’로 바뀌어요." },
-  { ico: "🔒", t: "인터넷 없이, 내 폰에만 저장", d: "모든 기록은 이 기기 안에만 저장돼요. 기기를 바꿀 땐 백업 파일(zip)로 옮기면 돼요." },
+  { ico: "🔒", t: "인터넷 없이도, 원하면 PC·폰 동기화", d: "기본은 이 기기 안에만 저장돼요. 설정 > 동기화에서 구글 로그인하면 컴퓨터와 폰에서 같은 데이터를 실시간으로 볼 수 있어요." },
 ];
 ROUTES.onboard = async (qq) => {
   const i = Math.min(Number(qq.i || 0), ONBOARD.length - 1);
@@ -128,7 +132,7 @@ ROUTES.onboard = async (qq) => {
     <div class="dots" aria-label="${i + 1} / ${ONBOARD.length}">${ONBOARD.map((_, j) => `<span class="${j === i ? "on" : ""}"></span>`).join("")}</div>
     <div class="ob-act">${i < ONBOARD.length - 1 ? `<button type="button" class="btn btn-ghost" data-a="skip">건너뛰기</button><button type="button" class="btn btn-primary btn-lg" data-a="next">다음</button>`
       : `<button type="button" class="btn btn-primary btn-lg" data-a="done">시작하기</button>`}</div>
-    <p class="help small">시작하면 <a href="#/privacy">개인정보처리방침</a>에 동의한 것으로 봅니다. 개인정보를 수집하지 않습니다.</p></div>`;
+    <p class="help small">시작하면 <a href="#/privacy">개인정보처리방침</a>에 동의한 것으로 봅니다. 동기화를 켜기 전에는 기기 밖으로 아무것도 보내지 않아요.</p></div>`;
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
     if (b.dataset.a === "next") go(`#/onboard?i=${i + 1}`);
     else { const again = !!qq.again; LS.set("onboarded", true); if (again) history.go(-(i + 1)); else if (i > 0) history.go(-i); else replace("#/home"); }
@@ -137,9 +141,9 @@ ROUTES.onboard = async (qq) => {
 
 /* ---------- 카드 ---------- */
 function defectCard(d, { sel = false } = {}) {
-  const pc = photoCount(d); const od = M.isOverdue(d);
-  return `<article class="dcard ${od ? "overdue" : ""} ${sel ? "selectable" : ""}" data-id="${d.id}" tabindex="0">
-    ${sel ? `<input type="checkbox" class="dsel" aria-label="선택" ${S.select?.has(d.id) ? "checked" : ""}>` : ""}
+  const pc = photoCount(d); const od = M.isOverdue(d); const on = sel && S.select.has(d.id);
+  return `<article class="dcard ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
+    ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
     <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span>${pill(d.status)}</div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>
@@ -149,13 +153,78 @@ function defectCard(d, { sel = false } = {}) {
 }
 function bindCards(root = view()) {
   $$(".dcard", root).forEach((c) => {
-    const open = (e) => {
-      if (S.select) { const cb = $(".dsel", c); if (e.target !== cb) cb.checked = !cb.checked; S.select[cb.checked ? "add" : "delete"](c.dataset.id); updateSelBar(); return; }
-      go(`#/item?id=${c.dataset.id}`);
-    };
+    const chk = $(".dchk", c);
+    if (chk) {
+      // 체크칸: 카드 상세로 가지 않고 선택만 바꾼다. Shift+클릭은 마지막으로 누른 칸부터 범위 선택(PC)
+      chk.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (e.target.tagName !== "INPUT") return; // label 클릭은 input click으로 다시 들어옴
+        const cb = e.target; const id = c.dataset.id;
+        if (e.shiftKey && S.selAnchor && S.selAnchor !== id) {
+          const ids = $$(".dcard[data-id] .dsel", view()).map((x) => x.dataset.sel);
+          const a = ids.indexOf(S.selAnchor), b = ids.indexOf(id);
+          if (a >= 0 && b >= 0) for (const x of ids.slice(Math.min(a, b), Math.max(a, b) + 1)) S.select[cb.checked ? "add" : "delete"](x);
+        } else S.select[cb.checked ? "add" : "delete"](id);
+        S.selAnchor = id; syncChecks();
+      });
+      chk.addEventListener("keydown", (e) => e.stopPropagation());
+    }
+    const open = () => go(`#/item?id=${c.dataset.id}`);
     c.addEventListener("click", open);
-    c.addEventListener("keydown", (e) => { if (e.key === "Enter") open(e); });
+    c.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === c) open(); });
   });
+}
+/* ---------- 체크 선택(세대·목록·업체 화면 공통) ---------- */
+const selItems = () => S.defects.filter((d) => S.select.has(d.id));
+function selBarHtml({ all = false } = {}) {
+  return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자"><span id="selcount"></span>
+    ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
+    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
+}
+/** 체크 상태를 화면(카드·그룹 전체칸·그룹 보내기 버튼·하단 바)에 반영 */
+function syncChecks() {
+  for (const cb of $$(".dsel", view())) { const on = S.select.has(cb.dataset.sel); cb.checked = on; cb.closest(".dcard")?.classList.toggle("checked", on); }
+  for (const g of $$("[data-gall]", view())) {
+    const ids = g.dataset.gall.split(","); const k = ids.filter((x) => S.select.has(x)).length;
+    g.checked = k > 0 && k === ids.length; g.indeterminate = k > 0 && k < ids.length;
+    const btn = $(`[data-g="${g.dataset.gi}"]`, view()); if (btn) btn.textContent = k ? `선택 ${k}건 보내기` : "보내기";
+  }
+  const vs = $("#btn-send"); if (vs) { vs.dataset.def ??= vs.textContent; const k = selItems().length; vs.textContent = k ? `선택 ${k}건 보내기` : vs.dataset.def; }
+  updateSelBar();
+}
+function updateSelBar() {
+  const bar = $("#selbar"); if (!bar) return;
+  const n0 = selItems().length; bar.hidden = !n0; document.body.classList.toggle("has-selbar", !!n0);
+  const c = $("#selcount"); if (c) c.textContent = `선택 ${n0}건`;
+}
+/** 하단 바 버튼. pool: ‘전체선택’ 대상 */
+function bindSelBar(pool = []) {
+  $$("[data-sa]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const a = b.dataset.sa; const sel = selItems();
+    if (a === "all") { pool.forEach((d) => S.select.add(d.id)); return syncChecks(); }
+    if (a === "clear") { S.select.clear(); return syncChecks(); }
+    if (!sel.length) return toast("먼저 하자를 체크하세요");
+    if (a === "send") return sendChecked(sel);
+    const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((x) => ({ label: x, value: x })));
+    if (!st) return;
+    for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
+    toast(`${sel.length}건을 ‘${st}’(으)로 바꿨어요`); S.select.clear(); rerender();
+  }));
+}
+/** 체크한 건 보내기: 업체가 여럿이면 어느 업체에 보낼지 고르고, 보낸 업체 건은 체크 해제(나머지는 남겨 차례로 보내기) */
+async function sendChecked(sel) {
+  const byV = new Map(); for (const d of sel) { const k = d.vendorId || ""; if (!byV.has(k)) byV.set(k, []); byV.get(k).push(d); }
+  let vid = [...byV.keys()][0];
+  if (byV.size > 1) {
+    vid = await choose(`체크한 ${sel.length}건 · 업체 ${byV.size}곳 — 어느 업체에 보낼까요?`, [...byV.entries()].sort((a, b) => b[1].length - a[1].length)
+      .map(([id, l]) => ({ icon: "🏢", label: id ? V(id)?.name || "?" : "업체 미지정", sub: `${l.length}건 · ${[...new Set(l.map((d) => M.tradeText(d)).filter(Boolean))].slice(0, 3).join(", ")}`, value: id || "_none" })));
+    if (vid === null) return;
+    if (vid === "_none") vid = "";
+  }
+  const items = byV.get(vid) || []; const vendor = vid ? V(vid) : null;
+  if (byV.size > 1) { for (const d of items) S.select.delete(d.id); syncChecks(); toast(`나머지 ${S.select.size}건은 체크된 채로 남아 있어요 · 이어서 보내세요`, { ms: 4000 }); }
+  const pool = [...new Set([...items, ...PD().filter((d) => (d.vendorId || "") === vid && d.status !== "확인완료")])];
+  return sendSheet({ items: vendor ? pool : items, vendor, preselect: items.map((d) => d.id) });
 }
 
 /* ---------- 홈 ---------- */
@@ -225,7 +294,7 @@ function filterChipText(k, v) {
 }
 ROUTES.list = async () => {
   setTab("list");
-  setHeader("하자 목록", { backBtn: navDepth() > 1, action: `<button type="button" class="hdr-btn" id="btn-sel">${S.select ? "선택 끝" : "선택"}</button>` });
+  setHeader("하자 목록", { backBtn: navDepth() > 1 });
   const f = S.filter; const all = PD();
   const list = M.applyFilter(all, f, { vendorName: vName }).sort((a, b) => (M.isOverdue(b) - M.isOverdue(a)) || (a.createdAt < b.createdAt ? 1 : -1));
   const chips = Object.entries(f).filter(([, v]) => v).map(([k, v]) => `<button type="button" class="chip on" data-rm="${k}">${esc(FILTER_LABEL[k])}: ${esc(filterChipText(k, v))} ✕</button>`).join("");
@@ -235,31 +304,17 @@ ROUTES.list = async () => {
     <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
     <div class="list-hd"><b>${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
-    <div id="cards">${list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: !!S.select })).join("") || `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
+    <div id="cards">${list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("") || `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
     ${list.length > S.listLimit ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(list.length - S.listLimit)}건 남음)</button>` : ""}
-    <div id="selbar" class="selbar" ${S.select ? "" : "hidden"}><span id="selcount"></span>
-      <button type="button" class="btn btn-sm" data-sa="all">전체선택</button><button type="button" class="btn btn-sm" data-sa="status">상태 변경</button>
-      <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button></div>`;
-  bindCards(); updateSelBar();
+    ${selBarHtml({ all: true })}`;
+  bindCards(); syncChecks(); bindSelBar(list);
   $("#lsearch").addEventListener("submit", (e) => { e.preventDefault(); S.filter = { ...S.filter, text: $("#ls").value.trim() }; LS.set("filter", S.filter); rerender(); });
   $("#btn-filter").addEventListener("click", () => filterSheet());
   $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { if (b.dataset.rm === "_all") S.filter = {}; else delete S.filter[b.dataset.rm]; LS.set("filter", S.filter); rerender(); }));
   $("#btn-more")?.addEventListener("click", () => { S.listLimit += 120; rerender(); });
-  $("#btn-sel").addEventListener("click", () => { S.select = S.select ? null : new Set(); rerender(); });
   $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
   $("#btn-sendlist").addEventListener("click", () => sendSheet({ items: list }));
-  $$("[data-sa]", view()).forEach((b) => b.addEventListener("click", async () => {
-    const a = b.dataset.sa; const sel = list.filter((d) => S.select.has(d.id));
-    if (a === "all") { list.forEach((d) => S.select.add(d.id)); return rerender(); }
-    if (!sel.length) return toast("먼저 하자를 선택하세요");
-    if (a === "send") return sendSheet({ items: sel });
-    const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((s) => ({ label: s, value: s })));
-    if (!st) return;
-    for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
-    toast(`${sel.length}건을 ‘${st}’(으)로 바꿨어요`); S.select = null; rerender();
-  }));
 };
-function updateSelBar() { const c = $("#selcount"); if (c && S.select) c.textContent = `${S.select.size}건 선택`; }
 function filterSheet() {
   const p = P(); const f = { ...S.filter };
   const sel = (k, opts, label) => `<label class="fld"><span>${label}</span><select class="inp" data-k="${k}"><option value="">전체</option>${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(f[k] || "") === String(v) ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>`;
@@ -300,13 +355,17 @@ ROUTES.unit = async (qq) => {
     <div class="unit-hd"><div><b>${n(all.filter(M.isOpen).length)}</b> 미조치 / ${n(all.length)}건 · 기한초과 ${all.filter((d) => M.isOverdue(d)).length}</div>
       <div class="chips"><button type="button" class="chip ${onlyOpen ? "on" : ""}" data-o="1">미조치</button><button type="button" class="chip ${!onlyOpen ? "on" : ""}" data-o="0">전체</button></div></div>
     <button type="button" class="btn btn-primary btn-block" id="btn-add">＋ 이 세대에 하자 등록</button>
-    ${groups.map((g, gi) => `<section class="group"><header class="grp-hd"><div><b>${esc(g.trade)}</b> · ${esc(g.vendor)} <span class="help">${g.items.length}건</span></div>
-      <button type="button" class="btn btn-sm btn-primary" data-g="${gi}">보내기</button></header>${g.items.map((d) => defectCard(d)).join("")}</section>`).join("") ||
-      `<div class="card empty-card"><p>${onlyOpen ? "미조치 하자가 없어요 👍" : "등록된 하자가 없어요."}</p></div>`}`;
-  bindCards();
+    ${groups.map((g, gi) => `<section class="group"><header class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="${g.items.map((d) => d.id).join(",")}" data-gi="${gi}" aria-label="${esc(g.trade)} · ${esc(g.vendor)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(g.trade)}</b> · ${esc(g.vendor)} <span class="help">${g.items.length}건</span></div>
+      <button type="button" class="btn btn-sm btn-primary" data-g="${gi}">보내기</button></header>${g.items.map((d) => defectCard(d, { sel: true })).join("")}</section>`).join("") ||
+      `<div class="card empty-card"><p>${onlyOpen ? "미조치 하자가 없어요 👍" : "등록된 하자가 없어요."}</p></div>`}
+    ${selBarHtml()}`;
+  bindCards(); bindSelBar();
+  $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = g.dataset.gall.split(","); const on = g.checked; for (const x of ids) S.select[on ? "add" : "delete"](x); syncChecks(); }));
+  syncChecks();
   $("#btn-add").addEventListener("click", () => { startDraft({ dong, ho, floor: M.floorOfHo(ho) }); go("#/new"); });
   $$("[data-o]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("unitOpen", b.dataset.o === "1"); rerender(); }));
-  $$("[data-g]", view()).forEach((b) => b.addEventListener("click", () => { const g = groups[+b.dataset.g]; sendSheet({ items: g.items, vendor: V(g.vendorId) }); }));
+  $$("[data-g]", view()).forEach((b) => b.addEventListener("click", () => { const g = groups[+b.dataset.g]; const picked = g.items.filter((d) => S.select.has(d.id)).map((d) => d.id);
+    sendSheet({ items: g.items, vendor: V(g.vendorId), preselect: picked.length ? picked : null }); }));
 };
 
 /* ---------- 동 현황(히트맵) ---------- */
@@ -317,25 +376,73 @@ ROUTES.grid = async (qq) => {
   if (!dong) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
   const list = PD().filter((d) => d.dong === dong.name);
   const by = new Map(); for (const d of list) { if (!d.ho) continue; const m = by.get(d.ho) || { open: 0, all: 0, od: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d)) m.od++; by.set(d.ho, m); }
-  const max = Math.max(1, ...[...by.values()].map((m) => m.open));
+  const th = M.heatThresholds(p, PD()); const cnt = (m) => (th.basis === "all" ? m.all : m.open);
   const floors = []; for (let f = dong.floors; f >= (dong.unitStart || 1); f--) if (M.unitsOf(dong, String(f)).length) floors.push(f);
   const lines = M.linesOf(dong);
   const common = list.filter((d) => !d.ho);
   view().innerHTML = `
     <div class="chips scroll">${p.dongs.map((d) => `<button type="button" class="chip ${d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div>
     <div class="list-hd"><b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span></div>
-    <div class="legend"><span class="hm h0"></span>0 <span class="hm h1"></span>적음 <span class="hm h3"></span>많음 <span class="hm odl"></span>기한초과</div>
+    ${heatLegendHtml(th)}
     <div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => { const us = new Set(M.unitsOf(dong, String(f))); return `<div class="hf">${f}F</div>` + lines.map((l) => String(f * 100 + l)).map((ho) => {
       if (!us.has(ho)) return `<span class="hc hx" aria-hidden="true"></span>`;
-      const m = by.get(ho) || { open: 0, all: 0, od: 0 }; const lv = m.open ? Math.min(3, Math.ceil((m.open / max) * 3)) : 0;
-      return `<button type="button" class="hc h${lv} ${m.od ? "od" : ""} ${m.all && !m.open ? "done" : ""}" data-ho="${ho}" aria-label="${ho}호 미조치 ${m.open}건"><span>${ho}</span>${m.all ? `<b>${m.open}</b>` : ""}</button>`;
+      const m = by.get(ho) || { open: 0, all: 0, od: 0 }; const n = cnt(m); const lv = M.heatLevel(n, th);
+      return `<button type="button" class="hc h${lv} ${m.od ? "od" : ""} ${m.all && !m.open && th.basis !== "all" ? "done" : ""}" data-ho="${ho}" data-n="${n}" data-lv="${lv}" aria-label="${ho}호 ${th.basis === "all" ? "전체" : "미조치"} ${n}건"><span>${ho}</span>${m.all ? `<b>${n}</b>` : ""}</button>`;
     }).join(""); }).join("")}</div>
     <h3 class="sec">공용부·세대 외 <small>${common.filter(M.isOpen).length} / ${common.length}건</small></h3>
     ${common.slice(0, 30).map((d) => defectCard(d)).join("") || '<p class="help">없음</p>'}`;
   bindCards();
   $$("[data-d]", view()).forEach((b) => b.addEventListener("click", () => replace(`#/grid?dong=${encodeURIComponent(b.dataset.d)}`)));
   $$("[data-ho]", view()).forEach((b) => b.addEventListener("click", () => go(`#/unit?dong=${encodeURIComponent(dong.name)}&ho=${b.dataset.ho}`)));
+  $("#heat-cfg", view())?.addEventListener("click", () => heatSheet());
 };
+function heatLegendHtml(th, { gear = true } = {}) {
+  return `<div class="legend" id="heat-legend">${M.heatLegend(th).map((x) => `<span class="lg"><span class="hm h${x.lv}"></span>${esc(x.label)}</span>`).join("")}<span class="lg"><span class="hm odl"></span>기한초과</span>
+    <span class="lg-basis">${th.basis === "all" ? "전체" : "미조치"} 기준${th.mode === "auto" ? " · 자동" : ""}</span>${gear ? '<button type="button" class="lg-gear" id="heat-cfg" aria-label="색 기준 설정" title="색 기준 설정">⚙</button>' : ""}</div>`;
+}
+/** 동현황 색 기준 설정(현장별 저장 → 동기화) */
+async function heatSheet() {
+  const p = P(); if (!p) return;
+  const c = M.heatCfg(p); const st = { ...c };
+  const auto0 = M.autoThresholds(M.unitCounts(PD(), st.basis));
+  if (st.mode === "auto") { st.low = auto0.low; st.high = auto0.high; }
+  const s = openSheet({ title: "동현황 색 기준", cls: "heat-sheet",
+    html: `<p class="help">세대별 하자 수에 따라 동현황 칸 색을 정해요. 0건은 ‘없음’이에요. 현장마다 따로 저장돼요.</p>
+      <div class="fld"><span>세는 기준</span><div class="seg" id="hs-basis"><button type="button" data-v="open">미조치만</button><button type="button" data-v="all">전체(완료 포함)</button></div></div>
+      <div class="fld"><span>기준 정하기</span><div class="seg" id="hs-mode"><button type="button" data-v="auto">자동(데이터 분포 기준)</button><button type="button" data-v="manual">직접 입력</button></div></div>
+      <div class="hs-nums"><label class="fld"><span>적음: 1건 ~</span><input class="inp" id="hs-low" type="number" inputmode="numeric" min="1" step="1"></label>
+        <label class="fld"><span>많음: 이 건수 이상</span><input class="inp" id="hs-high" type="number" inputmode="numeric" min="2" step="1"></label></div>
+      <p class="help small" id="hs-auto-note"></p><p class="err" id="hs-err" role="alert"></p>
+      <div class="fld"><span>미리보기</span><div id="hs-prev"></div><div class="hs-swatch" id="hs-sw"></div></div>`,
+    footer: '<button type="button" class="btn" data-a="cancel">취소</button><button type="button" class="btn btn-primary" data-a="save">저장</button>' });
+  const el = s.el; const low = $("#hs-low", el), high = $("#hs-high", el);
+  const read = () => ({ low: parseInt(low.value, 10), high: parseInt(high.value, 10) });
+  const paint = () => {
+    $$("#hs-basis button", el).forEach((b) => b.classList.toggle("on", b.dataset.v === st.basis));
+    $$("#hs-mode button", el).forEach((b) => b.classList.toggle("on", b.dataset.v === st.mode));
+    const isAuto = st.mode === "auto";
+    if (isAuto) { const a = M.autoThresholds(M.unitCounts(PD(), st.basis)); low.value = a.low; high.value = a.high; }
+    low.disabled = high.disabled = isAuto;
+    const n = M.unitCounts(PD(), st.basis).filter((x) => x > 0).length;
+    $("#hs-auto-note", el).textContent = isAuto ? `하자 있는 세대 ${n}곳의 분포로 계산했어요(하위 1/3까지 적음, 상위 20%부터 많음). 데이터가 바뀌면 기준도 따라 바뀌어요.` : "";
+    const v = read(); const err = M.validHeat(v.low, v.high); $("#hs-err", el).textContent = err;
+    $("[data-a=save]", el).disabled = !!err;
+    if (!err) { const t = { ...v, basis: st.basis, mode: st.mode }; $("#hs-prev", el).innerHTML = heatLegendHtml(t, { gear: false });
+      const samples = [0, 1, v.low, v.low + 1, v.high - 1, v.high, v.high + 5].filter((x, i, a) => x >= 0 && a.indexOf(x) === i).sort((a, b) => a - b);
+      $("#hs-sw", el).innerHTML = samples.map((x) => `<span class="hc h${M.heatLevel(x, t)}" data-lv="${M.heatLevel(x, t)}"><b>${x}</b><span>건</span></span>`).join(""); }
+    else { $("#hs-prev", el).innerHTML = ""; $("#hs-sw", el).innerHTML = ""; }
+  };
+  low.value = st.low; high.value = st.high; paint();
+  $("#hs-basis", el).addEventListener("click", (e) => { const b = e.target.closest("[data-v]"); if (b) { st.basis = b.dataset.v; paint(); } });
+  $("#hs-mode", el).addEventListener("click", (e) => { const b = e.target.closest("[data-v]"); if (!b) return; if (b.dataset.v === "manual" && st.mode === "auto") { /* 자동값에서 시작 */ } st.mode = b.dataset.v; paint(); });
+  low.addEventListener("input", paint); high.addEventListener("input", paint);
+  $("[data-a=cancel]", el).addEventListener("click", () => s.close());
+  $("[data-a=save]", el).addEventListener("click", async () => {
+    const v = read(); if (M.validHeat(v.low, v.high)) return;
+    p.heat = st.mode === "auto" ? { mode: "auto", basis: st.basis, low: c.low, high: c.high } : { mode: "manual", basis: st.basis, low: v.low, high: v.high };
+    await saveProject(p); await s.close(); toast("색 기준을 저장했어요"); rerender();
+  });
+}
 
 /* ---------- 대시보드 ---------- */
 ROUTES.dash = async () => {
@@ -1020,11 +1127,12 @@ ROUTES.vendor = async (qq) => {
     <div class="send-bar"><button type="button" class="btn btn-kakao btn-lg" id="btn-send">보내기 · 건별 선택 (${list.filter((d) => d.status !== "확인완료").length})</button>
       ${ph[0] ? `<button type="button" class="btn btn-lg" id="btn-sms">💬 문자</button>` : ""}<button type="button" class="btn btn-lg" id="btn-pdf">📄 요청서</button></div>
     ${mode === "done" && list.length ? `<button type="button" class="btn btn-block" id="btn-confirm-all">조치완료 ${list.length}건 모두 확인완료</button>` : ""}
-    <div>${list.map((d) => defectCard(d)).join("") || '<div class="card empty-card"><p>해당하는 하자가 없어요.</p></div>'}</div>`;
-  bindCards();
+    <div>${list.map((d) => defectCard(d, { sel: true })).join("") || '<div class="card empty-card"><p>해당하는 하자가 없어요.</p></div>'}</div>
+    ${selBarHtml({ all: true })}`;
+  bindCards(); syncChecks(); bindSelBar(list);
   $("#btn-vedit").addEventListener("click", () => go(`#/vendor-edit?id=${v.id}`));
   $$("[data-m]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("vmode", b.dataset.m); rerender(); }));
-  const sendAll = () => { const pool = [...new Set([...all.filter((d) => d.status !== "확인완료"), ...list])]; if (!pool.length) return toast("보낼 하자가 없어요"); sendSheet({ items: pool, vendor: v, preselect: ["unsent", "od", "done"].includes(mode) ? list.filter((d) => d.status !== "확인완료").map((d) => d.id) : null }); };
+  const sendAll = () => { const picked = selItems(); if (picked.length) return sendSheet({ items: [...new Set([...all.filter((d) => d.status !== "확인완료"), ...picked])], vendor: v, preselect: picked.map((d) => d.id) }); const pool = [...new Set([...all.filter((d) => d.status !== "확인완료"), ...list])]; if (!pool.length) return toast("보낼 하자가 없어요"); sendSheet({ items: pool, vendor: v, preselect: ["unsent", "od", "done"].includes(mode) ? list.filter((d) => d.status !== "확인완료").map((d) => d.id) : null }); };
   $("#btn-send").addEventListener("click", sendAll);
   $("#btn-sms")?.addEventListener("click", sendAll);
   $("#btn-pdf").addEventListener("click", () => (list.length ? printRequest({ vendor: v, items: list }) : toast("요청서에 넣을 하자가 없어요")));
@@ -1095,7 +1203,10 @@ ROUTES.settings = async () => {
     <h3 class="sec">현장</h3><div class="slist">
       ${p ? item("#/project", "🏗", esc(p.name), `${p.dongs.length}개 동 · 공종 ${p.trades.length} · 유형 ${p.types.length} · 도면 ${S.plans.filter((x) => x.projectId === p.id).length}`) : ""}
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장${Pro.isPro() ? "" : " · 무료판 1개"}`, 'data-a="switch"')}
+      ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "🧪", "샘플 현장 불러오기", "기능을 둘러볼 수 있는 가상 데이터", 'data-a="sample"')}</div>
+    <h3 class="sec">동기화</h3><div class="slist">
+      ${item("#/sync", "☁️", "동기화 (PC·폰)", Sync.attached() ? `${esc(Sync.state.email || "구글 계정")} · ${esc(Sync.status().label)}` : "꺼짐 · 구글 로그인하면 컴퓨터와 폰이 실시간으로 맞춰져요", 'id="si-sync"')}</div>
     <h3 class="sec">데이터</h3><div class="slist">
       ${p ? item("#/import", "📥", "엑셀·CSV 가져오기", "다른 시스템 하자 목록 → 열 매핑 후 가져오기") : ""}
       ${p ? item("", "📤", "전체 내보내기", "엑셀·CSV·요청서", 'data-a="export"') : ""}
@@ -1107,20 +1218,21 @@ ROUTES.settings = async () => {
       ${item("#/pro", "⭐", Pro.isPro() ? "하자싹 프로 (사용 중)" : "하자싹 프로", Pro.isPro() ? "모든 기능 사용 중" : "현장 무제한 · 요청서 워터마크 제거")}
       ${item("#/onboard?again=1", "📘", "사용법 다시 보기", "")}
       ${item("#/about", "ℹ️", "앱 정보", `버전 ${APP_VERSION}`)}
-      ${item("#/privacy", "🔒", "개인정보처리방침", "개인정보를 수집하지 않아요")}
-      ${item("", "🗑", "모든 데이터 삭제", "이 기기의 현장·하자·사진·업체", 'data-a="wipe"')}</div>`;
+      ${item("#/privacy", "🔒", "개인정보처리방침", Sync.attached() ? "동기화 중: 데이터가 Google Firebase에 저장돼요" : "동기화를 켜기 전에는 기기에만 저장")}
+      ${item("", "🗑", "모든 데이터 삭제", Sync.attached() ? "현장·하자·사진·업체 · 동기화된 기기·클라우드에서도 삭제" : "이 기기의 현장·하자·사진·업체", 'data-a="wipe"')}</div>`;
   bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", async () => {
     const a = b.dataset.a;
     if (a === "switch") return switchProject();
     if (a === "sample") return loadSample();
+    if (a === "heat") return heatSheet();
     if (a === "export") return exportSheet(PD(), "전체");
     if (a === "backup") return doBackup();
     if (a === "persist") { const ok = await navigator.storage?.persist?.(); toast(ok ? "저장공간 보호가 켜졌어요" : "브라우저가 거절했어요. 앱을 홈 화면에 설치하면 보통 허용돼요"); return rerender(); }
     if (a === "issuer") { const v = await prompt2("요청자 이름(요청서 표시)", S.issuer); if (v !== null) { S.issuer = v; LS.set("issuer", v); rerender(); } return; }
     if (a === "wipe") {
-      if (!(await ask("이 기기의 모든 현장·하자·사진·업체를 삭제할까요?\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요.", { ok: "모두 삭제", danger: true }))) return;
+      if (!(await ask(Sync.attached() ? "모든 현장·하자·사진·업체를 삭제할까요?\n동기화 중이라 클라우드와 다른 기기에서도 지워져요. 이 기기만 비우려면 먼저 동기화에서 로그아웃하세요.\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요." : "이 기기의 모든 현장·하자·사진·업체를 삭제할까요?\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요.", { ok: "모두 삭제", danger: true }))) return;
       for (const st of ["projects", "defects", "photos", "vendors", "plans"]) await db.clear(st);
       await loadAll(); toast("모두 삭제했어요"); replace("#/home");
     }
@@ -1457,7 +1569,7 @@ ROUTES.about = async () => {
   const last = await db.getMeta("lastBackupAt", "");
   view().innerHTML = `<section class="card about"><img src="./icons/icon-192.png" width="72" height="72" alt=""><h2>${APP_NAME}</h2><p>현장 시공불량·하자 관리</p>
     <p class="help" id="ver">버전 ${APP_VERSION}${Pro.isPro() ? " · 프로" : ""}</p>
-    <dl class="kv"><dt>데이터 저장</dt><dd>이 기기(IndexedDB)에만 저장 · 서버 전송 없음</dd><dt>마지막 백업</dt><dd>${last ? fmtDT(last) : "없음 — 설정에서 백업하세요"}</dd>
+    <dl class="kv"><dt>데이터 저장</dt><dd>${Sync.attached() ? `이 기기(IndexedDB) + Google Firebase 동기화 (${esc(Sync.state.email)})` : "이 기기(IndexedDB)에만 저장 · 서버 전송 없음"}</dd><dt>마지막 백업</dt><dd>${last ? fmtDT(last) : "없음 — 설정에서 백업하세요"}</dd>
       <dt>오픈소스</dt><dd>SheetJS Community Edition (Apache-2.0), JSZip (MIT)</dd></dl>
     <p><a href="#/privacy">개인정보처리방침</a></p></section>`;
   let taps = 0;
@@ -1467,14 +1579,17 @@ ROUTES.privacy = async () => {
   setTab(null); setHeader("개인정보처리방침", { backBtn: true });
   view().innerHTML = `<article class="card legal">${PRIVACY_HTML}</article>`;
 };
-export const PRIVACY_HTML = `<h2>하자싹 개인정보처리방침</h2><p class="help">시행일: 2026년 11월 17일</p>
-<p>하자싹(이하 ‘앱’)은 이용자의 개인정보를 수집·저장·전송하지 않습니다.</p>
-<h3>1. 수집하는 정보</h3><p>앱은 회원가입·로그인이 없으며 개발자 서버로 어떤 정보도 보내지 않습니다. 이용자가 입력한 현장·하자 내용, 사진, 업체명·전화번호, 도면 이미지는 <b>이용자 기기 안(브라우저 저장소)</b>에만 저장됩니다.</p>
-<h3>2. 기기 권한</h3><ul><li>카메라·사진: 하자 사진 촬영·첨부 시에만 사용</li><li>연락처(선택): ‘연락처에서 가져오기’를 누를 때 이용자가 고른 연락처의 이름·전화번호만 앱 안에 저장</li><li>마이크(선택): 음성 입력 시 기기의 음성 인식 기능 사용(기기·브라우저 제공자의 정책 적용)</li></ul>
-<h3>3. 제3자 제공</h3><p>앱은 정보를 제3자에게 제공하지 않습니다. 이용자가 ‘카톡으로 보내기’, ‘문자’, ‘공유’를 누르면 이용자가 고른 앱(카카오톡·문자 등)으로 내용이 전달되며, 이후 처리는 해당 앱의 정책을 따릅니다.</p>
-<h3>4. 보관 및 삭제</h3><p>데이터는 이용자가 삭제하거나 앱을 삭제할 때까지 기기에 남습니다. 설정 &gt; ‘모든 데이터 삭제’로 언제든 지울 수 있습니다. 백업 파일(zip)은 이용자가 직접 보관·관리합니다.</p>
-<h3>5. 아동</h3><p>앱은 업무용이며 아동을 대상으로 하지 않습니다.</p>
-<h3>6. 문의</h3><p>개발자 이메일: <span class="contact-email">(스토어 등록 시 기재)</span></p>`;
+export const PRIVACY_HTML = `<h2>하자싹 개인정보처리방침</h2><p class="help">시행일: 2026년 11월 17일 (동기화 기능 추가 반영)</p>
+<p>하자싹(이하 ‘앱’)은 기본적으로 이용자의 데이터를 이용자 기기 안에만 저장합니다. 이용자가 직접 <b>동기화</b>를 켠 경우에만 아래와 같이 Google Firebase에 저장됩니다.</p>
+<h3>1. 기기 저장(기본)</h3><p>회원가입 없이 사용할 수 있으며, 이용자가 입력한 현장·하자 내용, 사진, 업체명·전화번호, 도면 이미지는 <b>이용자 기기 안(브라우저 저장소)</b>에 저장됩니다. 동기화를 켜지 않으면 개발자나 외부 서버로 아무 정보도 보내지 않습니다.</p>
+<h3>2. 동기화(선택)</h3><p>설정 &gt; 동기화에서 구글 계정으로 로그인하면 여러 기기(PC·폰)에서 같은 데이터를 쓰기 위해 다음 정보가 <b>Google Firebase(Google LLC 제공, Cloud Firestore 서울 리전 asia-northeast3)</b>에 저장됩니다.</p>
+<ul><li>계정 정보: 구글 계정 이메일, 이름, 계정 식별자(Firebase Authentication)</li><li>앱 데이터: 현장·하자 내용, 사진·도면 이미지, 업체명·전화번호, 엑셀 열 맞춤 설정</li></ul>
+<p>데이터는 로그인한 본인 계정에서만 읽고 쓸 수 있도록 보안 규칙으로 제한되며, 전송 구간은 암호화(HTTPS)됩니다. 개발자는 이 데이터를 광고·분석 등 다른 목적으로 쓰지 않습니다. Google의 처리 방침: <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">firebase.google.com/support/privacy</a></p>
+<h3>3. 기기 권한</h3><ul><li>카메라·사진: 하자 사진 촬영·첨부 시에만 사용</li><li>연락처(선택): ‘연락처에서 가져오기’를 누를 때 이용자가 고른 연락처의 이름·전화번호만 앱 안에 저장</li><li>마이크(선택): 음성 입력 시 기기의 음성 인식 기능 사용(기기·브라우저 제공자의 정책 적용)</li></ul>
+<h3>4. 제3자 제공</h3><p>앱은 정보를 제3자에게 판매·제공하지 않습니다. 동기화를 켠 경우 저장·처리를 위해 Google Firebase(처리 위탁)를 이용합니다. 이용자가 ‘카톡으로 보내기’, ‘문자’, ‘공유’를 누르면 이용자가 고른 앱으로 내용이 전달되며, 이후 처리는 해당 앱의 정책을 따릅니다.</p>
+<h3>5. 보관 및 삭제</h3><p>기기 데이터는 이용자가 삭제하거나 앱을 삭제할 때까지 남습니다. 동기화 데이터는 이용자가 삭제할 때까지 보관되며, 동기화 중 설정 &gt; ‘모든 데이터 삭제’를 하면 클라우드에서도 삭제됩니다. 계정과 클라우드 데이터 전체 삭제는 아래 이메일로 요청할 수 있습니다. 로그아웃하면 동기화가 멈추고 기기 데이터는 그대로 남습니다.</p>
+<h3>6. 아동</h3><p>앱은 업무용이며 아동을 대상으로 하지 않습니다.</p>
+<h3>7. 문의</h3><p>개발자 이메일: <span class="contact-email">(스토어 등록 시 기재)</span></p>`;
 
 /* ---------- 샘플 현장 ---------- */
 async function loadSample() {
@@ -1532,6 +1647,84 @@ async function initUpdates() {
     setInterval(check, 30 * 60 * 1000);
   } catch {}
 }
+/* ---------- 동기화(Firebase) ---------- */
+const UNSAFE_ROUTES = ["new", "edit", "wizard", "import", "imported", "lists", "dong", "project"];
+let _remoteT = 0, _remoteToast = 0;
+function onRemoteChange() {
+  clearTimeout(_remoteT);
+  _remoteT = setTimeout(async () => {
+    await loadAll();
+    const path = (location.hash.split("?")[0] || "#/home").slice(2);
+    if (UNSAFE_ROUTES.includes(path) || document.body.classList.contains("sheet-open")) {
+      if (Date.now() - _remoteToast > 15000) { _remoteToast = Date.now(); toast("다른 기기에서 바뀐 내용을 받았어요"); }
+      return;
+    }
+    rerender();
+  }, 250);
+}
+function paintSyncChip(stt = Sync.status()) {
+  const c = $("#sync-chip"); if (!c) return;
+  c.hidden = false; c.dataset.k = stt.key; c.innerHTML = `<span class="sc-in">${esc(stt.label)}</span>`; c.title = stt.detail || stt.label;
+  c.setAttribute("aria-label", "동기화 상태: " + stt.label);
+  const si = $("#si-sync small"); if (si && Sync.attached()) si.textContent = `${Sync.state.email || "구글 계정"} · ${stt.label}`;
+  const box = $("#sync-status"); if (box) renderSyncStatus(box);
+}
+async function askMerge({ local, email }) {
+  const n = `현장 ${local.projects}개 · 하자 ${local.defects}건 · 사진 ${local.photos}장 · 업체 ${local.vendors}곳`;
+  const mode = await choose(`이 기기 데이터 처리 (${email || "구글 계정"})`, [
+    { icon: "🔀", label: "합치기 (권장)", sub: `이 기기(${n})와 클라우드 데이터를 모두 남겨요. 같은 건은 최근에 고친 쪽으로 맞춰요.`, value: "merge" },
+    { icon: "⬆️", label: "이 기기 데이터 올리기", sub: "이 기기 데이터를 클라우드에 올려요. 같은 건은 이 기기 내용이 우선이고, 클라우드에만 있는 건도 남아요.", value: "upload" },
+    { icon: "⬇️", label: "클라우드 데이터로 바꾸기", sub: "이 기기 데이터를 지우고 클라우드 데이터를 받아요. 지우기 전에 백업 파일을 저장해요.", value: "replace" },
+  ]);
+  if (mode !== "replace") return mode; // null(닫기) = 취소 → 로그인 취소, 아무것도 안 바뀜
+  if (!(await ask(`이 기기의 ${n}이 지워지고 클라우드 데이터로 바뀌어요.\n먼저 백업 파일(zip)을 저장한 뒤 바꿀게요.`, { ok: "백업 후 바꾸기", danger: true }))) return null;
+  try { busy(true, "백업 만드는 중…"); const { exportBackup } = await import("./backup.js"); const b = await exportBackup(APP_VERSION); busy(false);
+    await db.setMeta("lastBackupAt", new Date().toISOString()); downloadBlob(b, `하자싹_백업_교체전_${M.todayStr()}.zip`); }
+  catch (e) { busy(false); toast("백업 실패 — 바꾸지 않았어요: " + e.message); return null; }
+  return "replace";
+}
+function initSync() {
+  Sync.onChange((stt) => paintSyncChip(stt));
+  $("#sync-chip")?.addEventListener("click", () => go("#/sync"));
+  paintSyncChip();
+  Sync.boot({ onRemote: onRemoteChange, askMerge }).catch((e) => console.warn(e));
+}
+function renderSyncStatus(box) {
+  const stt = Sync.status(); const at = Sync.state.lastSync;
+  box.innerHTML = `<div class="sync-row"><span class="sync-chip big" data-k="${stt.key}">${esc(stt.label)}</span></div>
+    <dl class="kv"><dt>계정</dt><dd id="sync-email">${Sync.attached() ? esc(Sync.state.email || "-") : "로그인 안 됨"}</dd>
+    <dt>대기 중</dt><dd id="sync-pending">${Sync.state.pending}건</dd>
+    <dt>마지막 동기화</dt><dd>${at ? fmtDT(new Date(at).toISOString()) : "-"}</dd>${stt.detail && stt.key === "error" ? `<dt>오류</dt><dd class="err">${esc(stt.detail)}</dd>` : ""}</dl>`;
+}
+ROUTES.sync = async () => {
+  setTab("settings"); setHeader("동기화", { backBtn: true });
+  const on = Sync.attached();
+  view().innerHTML = `<section class="card"><h3>☁️ PC·폰 동기화</h3>
+      <p class="help">구글 계정으로 로그인하면 컴퓨터와 폰에서 같은 하자·사진·업체를 실시간으로 봐요. 인터넷이 없을 때 고친 내용은 모아 뒀다가 연결되면 올라가요. 로그인하지 않아도 앱은 지금처럼 이 기기에서만 쓸 수 있어요.</p>
+      <div id="sync-status"></div>
+      <div class="btn-col">${on ? `<button type="button" class="btn btn-primary btn-lg" data-a="now">🔄 지금 동기화</button>
+        ${Sync.status().key === "login" ? '<button type="button" class="btn btn-lg" data-a="login">구글로 다시 로그인</button>' : ""}
+        <button type="button" class="btn" data-a="logout">로그아웃 (이 기기 데이터는 남아요)</button>`
+      : `<button type="button" class="btn btn-primary btn-lg gbtn" data-a="login"><span class="g-logo" aria-hidden="true">G</span> Google 계정으로 로그인</button>`}</div></section>
+    <section class="card"><h3>알아 두세요</h3><ul class="help">
+      <li>데이터는 Google Firebase(서울 리전)에 본인 계정 전용으로 저장돼요. 다른 사람은 볼 수 없어요.</li>
+      <li>무료 한도: 저장 1GB(사진 약 5천~1만 장), 하루 읽기 5만·쓰기 2만 번. 넘으면 다음 날까지 동기화가 멈추고, 앱은 계속 쓸 수 있어요.</li>
+      <li>컴퓨터와 폰에서 같은 구글 계정으로 로그인하세요.</li>
+      <li>같은 건을 두 기기에서 동시에 고치면 나중에 고친 쪽으로 맞춰져요.</li></ul></section>`;
+  renderSyncStatus($("#sync-status"));
+  $$("[data-a]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const a = b.dataset.a;
+    try {
+      if (a === "login") { b.disabled = true; const r = await Sync.signIn(); if (r !== "redirect") { toast(Sync.attached() ? "로그인했어요 · 동기화를 시작해요" : "로그인을 취소했어요"); rerender(); } }
+      if (a === "now") { b.disabled = true; await Sync.syncNow(); toast("동기화했어요"); rerender(); }
+      if (a === "logout") {
+        const pend = Sync.state.pending;
+        if (!(await ask(`${pend ? `아직 올라가지 않은 변경 ${pend}건이 있어요. 로그아웃하면 이 변경은 이 기기에만 남아요.\n` : ""}동기화를 끄고 로그아웃할까요? 이 기기 데이터는 그대로 남아요.`, { ok: "로그아웃" }))) return;
+        await Sync.signOut(); toast("로그아웃했어요"); rerender();
+      }
+    } catch (e) { toast(e.message || String(e)); b.disabled = false; renderSyncStatus($("#sync-status")); }
+  }));
+};
 async function main() {
   $("#btn-back").addEventListener("click", () => back());
   $$(".tab-item").forEach((a) => a.addEventListener("click", (e) => {
@@ -1544,6 +1737,7 @@ async function main() {
   try { await loadAll(); } catch (e) { $("#view").innerHTML = `<div class="card"><p>저장소를 열 수 없어요: ${esc(e.message)}</p></div>`; return; }
   initNav(() => { ROUTES._cleanup?.(); ROUTES._cleanup = null; route(); });
   initUpdates();
-  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION }; // 테스트·디버그용
+  initSync();
+  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync }; // 테스트·디버그용
 }
 main();

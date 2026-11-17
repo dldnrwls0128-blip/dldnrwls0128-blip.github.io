@@ -1,13 +1,13 @@
-/* hajassak-v1.0.3 (build-deploy.sh가 version.js에서 찍음) */
-/* 하자싹 서비스 워커 — 앱 셸 캐시(오프라인). 사용자 데이터는 IndexedDB에만 있고 캐시하지 않음 */
+/* hajassak-v1.0.4 (build-deploy.sh가 version.js에서 찍음) */
+/* 하자싹 서비스 워커 — 앱 셸 캐시(오프라인). 사용자 데이터는 IndexedDB(+선택 시 Firebase 동기화)에 있고 SW는 캐시하지 않음. Firebase 요청(다른 도메인)은 가로채지 않음 */
 importScripts("./version.js"); // 버전 유일 출처
 const VERSION = self.HAJASSAK_VERSION || "0";
 const CACHE = "hajassak-v" + VERSION;
 const PRECACHE = ["./", "./index.html", "./version.js", "./manifest.webmanifest", "./css/app.css",
   "./js/app.js", "./js/ui.js", "./js/db.js", "./js/model.js", "./js/photo.js", "./js/share.js", "./js/pro.js", "./js/speech.js",
-  "./js/backup.js", "./js/importer.js", "./js/import-worker.js", "./js/exporter.js", "./js/sample.js",
+  "./js/backup.js", "./js/sync.js", "./js/importer.js", "./js/import-worker.js", "./js/exporter.js", "./js/sample.js",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/maskable-192.png", "./icons/maskable-512.png", "./icons/apple-touch-icon.png",
-  "./vendor/jszip/jszip.min.js", "./vendor/xlsx/xlsx.mjs", "./privacy.html"];
+  "./vendor/jszip/jszip.min.js", "./vendor/xlsx/xlsx.mjs", "./vendor/firebase/firebase-app.js", "./vendor/firebase/firebase-auth.js", "./vendor/firebase/firebase-firestore.js", "./privacy.html"];
 // 설치: HTTP 캐시를 거치지 않고 새로 받아 저장. 첫 설치이거나 업데이트 안내가 없는 옛 버전(≤1.0.2)에서 올라올 때만 바로 활성화,
 // 그 외에는 대기 → 앱이 ‘새 버전이 있어요 — 새로고침’ 안내 → 사용자가 누르면 SKIP_WAITING
 self.addEventListener("install", (e) => {

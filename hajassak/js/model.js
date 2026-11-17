@@ -260,3 +260,44 @@ export function planMatches(plan, dong, floor) {
     return fNum >= Math.min(v(m[1]), v(m[2])) && fNum <= Math.max(v(m[1]), v(m[2]));
   });
 }
+
+/* ---------- 동현황 색 기준(현장별 설정: project.heat) ---------- */
+export const HEAT_DEFAULT = { mode: "auto", basis: "open", low: 3, high: 10 };
+export const heatCfg = (p) => ({ ...HEAT_DEFAULT, ...(p?.heat || {}) });
+/** 세대 하자 수(기준: open=미조치만, all=전체) — ho가 있는 건만 */
+export function unitCounts(defects, basis = "open") {
+  const by = new Map();
+  for (const d of defects) { if (!d.ho || !d.dong) continue; if (basis === "open" && !isOpen(d)) continue; const k = d.dong + "|" + d.ho; by.set(k, (by.get(k) || 0) + 1); }
+  return [...by.values()];
+}
+const quant = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))];
+/** 자동 기준: 하자가 있는 세대 수 분포의 하위 1/3 → 적음 상한, 상위 20% → 많음 하한 */
+export function autoThresholds(counts) {
+  const s = counts.filter((n) => n > 0).sort((a, b) => a - b);
+  if (!s.length) return { low: 2, high: 5 };
+  let low = Math.max(1, quant(s, 1 / 3)); let high = Math.max(low + 1, quant(s, 0.8));
+  if (high <= low) high = low + 1;
+  return { low, high };
+}
+/** 실제 적용 기준 {low, high, basis, mode} */
+export function heatThresholds(p, defects) {
+  const c = heatCfg(p);
+  if (c.mode === "auto") return { ...autoThresholds(unitCounts(defects, c.basis)), basis: c.basis, mode: "auto" };
+  return { low: c.low, high: c.high, basis: c.basis, mode: "manual" };
+}
+export function validHeat(low, high) {
+  if (!Number.isInteger(low) || !Number.isInteger(high)) return "숫자를 입력해 주세요";
+  if (low < 1) return "적음 기준은 1건 이상이어야 해요";
+  if (high <= low) return "많음 기준은 적음 기준보다 커야 해요";
+  if (high > 999) return "많음 기준이 너무 커요";
+  return "";
+}
+/** 0=없음, 1=적음(1~low), 2=보통(low+1~high-1), 3=많음(high 이상) */
+export const heatLevel = (n, t) => (!n ? 0 : n >= t.high ? 3 : n <= t.low ? 1 : 2);
+export function heatLegend(t) {
+  const out = [{ lv: 0, label: "없음 0" }, { lv: 1, label: `적음 ${t.low > 1 ? "1~" + t.low : "1"}` }];
+  if (t.high - 1 >= t.low + 1) out.push({ lv: 2, label: `보통 ${t.high - 1 > t.low + 1 ? `${t.low + 1}~${t.high - 1}` : t.low + 1}` });
+  out.push({ lv: 3, label: `많음 ${t.high}+` });
+  return out;
+}
+export const heatLegendText = (t) => heatLegend(t).filter((x) => x.lv).map((x) => x.label).join(" · ");
