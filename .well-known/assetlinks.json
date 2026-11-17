@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "kr.hajassak.app",
+      "sha256_cert_fingerprints": [
+        "D7:A7:5A:8B:3E:16:C8:03:B5:B2:2E:89:0F:50:00:F4:74:62:B8:B1:4C:3F:9E:1F:CE:CE:BC:39:C8:9E:2C:E8"
+      ]
+    }
+  }
+]

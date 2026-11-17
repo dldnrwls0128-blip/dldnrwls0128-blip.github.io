@@ -1,0 +1,28 @@
+{
+  "id": "./",
+  "name": "하자싹 - 현장 하자·시공불량 관리",
+  "short_name": "하자싹",
+  "description": "현장 시공불량·하자를 사진으로 기록하고 업체에 카톡·문자로 바로 전달하는 오프라인 하자관리 앱",
+  "lang": "ko",
+  "dir": "ltr",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f766e",
+  "theme_color": "#0f766e",
+  "categories": ["productivity", "business"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/monochrome-512.png", "sizes": "512x512", "type": "image/png", "purpose": "monochrome" }
+  ],
+  "screenshots": [
+    { "src": "screenshots/store/01_home.png", "sizes": "1080x1920", "type": "image/png", "form_factor": "narrow", "label": "홈" },
+    { "src": "screenshots/store/02_register.png", "sizes": "1080x1920", "type": "image/png", "form_factor": "narrow", "label": "하자 등록" },
+    { "src": "screenshots/store/03_send.png", "sizes": "1080x1920", "type": "image/png", "form_factor": "narrow", "label": "업체에 카톡·문자 전달" },
+    { "src": "screenshots/store/04_grid.png", "sizes": "1080x1920", "type": "image/png", "form_factor": "narrow", "label": "동 현황" }
+  ]
+}

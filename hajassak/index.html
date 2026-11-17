@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f766e" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0b1f1d" media="(prefers-color-scheme: dark)" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="하자싹 — 현장 시공불량·하자를 사진으로 기록하고 업체에 카톡·문자로 바로 전달하는 오프라인 하자관리 앱" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="하자싹" />
+  <title>하자싹</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <button type="button" id="btn-back" hidden aria-label="뒤로">‹</button>
+      <h1 id="header-title">하자싹</h1>
+      <span class="hdr-spacer"></span>
+      <div id="hdr-action"></div>
+    </header>
+    <main id="view"><div class="splash"><img src="./icons/icon-192.png" alt="" width="96" height="96"><p>하자싹</p></div></main>
+    <nav class="tab-bar" aria-label="하단 메뉴">
+      <a class="tab-item" data-tab="home" href="#/home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 11l8-7 8 7v9H4v-9z"/><path d="M10 20v-6h4v6"/></svg>홈</a>
+      <a class="tab-item" data-tab="list" href="#/list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>목록</a>
+      <a class="tab-item tab-new" data-tab="new" href="#/new"><span class="plus" aria-hidden="true">＋</span>등록</a>
+      <a class="tab-item" data-tab="vendors" href="#/vendors"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20V9l8-5 8 5v11"/><path d="M9 20v-6h6v6"/></svg>업체</a>
+      <a class="tab-item" data-tab="settings" href="#/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a7.7 7.7 0 0 0 .1-6l-2.1-.3a6 6 0 0 0-1.3-2.2l.9-1.9-2.5-1.5-1.2 1.8a6 6 0 0 0-2.6 0L9.5 3.1 7 4.6l.9 1.9A6 6 0 0 0 6.6 8.7L4.5 9a7.7 7.7 0 0 0 .1 6l2.1.3a6 6 0 0 0 1.3 2.2l-.9 1.9 2.5 1.5 1.2-1.8a6 6 0 0 0 2.6 0l1.2 1.8 2.5-1.5-.9-1.9a6 6 0 0 0 1.3-2.2z"/></svg>설정</a>
+    </nav>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="busy" hidden><div class="busy-card"><div class="spinner"></div><div id="busy-text">처리 중…</div></div></div>
+  <div id="print-root" aria-hidden="true"></div>
+  <script src="./vendor/jszip/jszip.min.js"></script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
