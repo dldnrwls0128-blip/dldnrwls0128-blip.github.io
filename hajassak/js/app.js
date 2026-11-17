@@ -92,7 +92,7 @@ async function route() {
   document.body.classList.remove("printing");
   view().oninput = null;
   if (!LS.get("onboarded", false) && path !== "onboard" && path !== "privacy") return replace("#/onboard");
-  if (!P() && !["onboard", "wizard", "settings", "privacy", "about", "restore", "pro"].includes(path)) {
+  if (!P() && !["onboard", "wizard", "settings", "privacy", "about", "restore", "pro", "sync"].includes(path)) {
     setTab("home"); setHeader(APP_NAME, { backBtn: false });
     view().innerHTML = noProject(); bindNoProject(); return;
   }
@@ -108,12 +108,13 @@ function noProject() {
     <p class="help">동·층·호수를 한 번 만들어 두면 위치를 몇 번의 탭으로 고를 수 있어요.</p>
     <button type="button" class="btn btn-primary btn-lg" data-a="wizard">+ 새 현장 만들기</button>
     <button type="button" class="btn btn-lg" data-a="sample">샘플 현장 불러오기</button>
-    <button type="button" class="btn btn-ghost" data-a="restore">백업 파일에서 복원</button></div>`;
+    <button type="button" class="btn btn-ghost" data-a="restore">백업 파일에서 복원</button>
+    <button type="button" class="btn btn-ghost" data-a="sync">☁️ 다른 기기 데이터 받기 (구글 로그인)</button></div>`;
 }
 function bindNoProject() {
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
     const a = b.dataset.a;
-    if (a === "wizard") go("#/wizard"); else if (a === "sample") loadSample(); else go("#/restore");
+    if (a === "wizard") go("#/wizard"); else if (a === "sample") loadSample(); else if (a === "sync") go("#/sync"); else go("#/restore");
   }));
 }
 
@@ -1639,7 +1640,7 @@ async function initUpdates() {
     if (v && v !== APP_VERSION) toast(`새 버전(v${v})이 있어요 — 새로고침`, { action: "새로고침", onAction: () => location.reload(), ms: 600000 });
   });
   try {
-    const reg = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }); UPD.reg = reg;
+    const reg = await navigator.serviceWorker.register("./sw.js", { scope: "./", updateViaCache: "none" }); UPD.reg = reg;
     if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);
     reg.addEventListener("updatefound", () => { const w = reg.installing; w?.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) offerUpdate(w); }); });
     const check = () => reg.update().catch(() => {});
@@ -1712,10 +1713,21 @@ ROUTES.sync = async () => {
       <li>컴퓨터와 폰에서 같은 구글 계정으로 로그인하세요.</li>
       <li>같은 건을 두 기기에서 동시에 고치면 나중에 고친 쪽으로 맞춰져요.</li></ul></section>`;
   renderSyncStatus($("#sync-status"));
+  if (!on) Sync.preload();
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", async () => {
     const a = b.dataset.a;
     try {
-      if (a === "login") { b.disabled = true; const r = await Sync.signIn(); if (r !== "redirect") { toast(Sync.attached() ? "로그인했어요 · 동기화를 시작해요" : "로그인을 취소했어요"); rerender(); } }
+      if (a === "login") {
+        const label = b.innerHTML; b.disabled = true; b.textContent = "구글 로그인 여는 중…";
+        // 지켜보기: 10초 안에 로그인 화면으로 넘어가지 않으면 버튼을 되살리고 이유를 알려 줌(아무 반응 없음 방지)
+        let left = false; const onHide = () => { left = true; }; document.addEventListener("visibilitychange", onHide, { once: true }); window.addEventListener("pagehide", onHide, { once: true });
+        const wd = setTimeout(() => { if (!left && !Sync.attached() && b.isConnected) { b.disabled = false; b.innerHTML = label; toast("구글 로그인 화면이 열리지 않았어요. 인터넷 연결을 확인하고 다시 눌러 주세요", { ms: 6000 }); } }, 10000);
+        try {
+          const r = await Sync.signIn();
+          if (r !== "redirect") { clearTimeout(wd); if (Sync.attached()) toast("로그인했어요 · 동기화를 시작해요"); rerender(); }
+        } catch (e) { clearTimeout(wd); b.disabled = false; b.innerHTML = label; toast("로그인을 시작하지 못했어요: " + (e.message || e), { ms: 6000 }); }
+        return;
+      }
       if (a === "now") { b.disabled = true; await Sync.syncNow(); toast("동기화했어요"); rerender(); }
       if (a === "logout") {
         const pend = Sync.state.pending;

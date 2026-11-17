@@ -110,14 +110,19 @@ async function handleUser(u) {
 function isMobile() { return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent); }
 function isStandalone() { return matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true || document.referrer.startsWith("android-app://"); }
 /** 구글 로그인. 데스크톱: 팝업. 모바일·설치형 앱: 리디렉트(같은 도메인 auth 도우미가 있을 때), 실패하면 팝업. */
+/** 동기화 화면을 열 때 SDK를 미리 불러 둔다(탭 직후 바로 팝업/리디렉트가 시작되게) */
+export async function preload() { try { await ensureApp(); } catch (e) { console.warn("[sync] preload", e); } }
 export async function signIn() {
-  const F = await ensureApp();
-  if (!_started) await startAuth();
+  if (navigator.onLine === false) throw new Error("인터넷에 연결된 뒤 다시 눌러 주세요");
+  let F;
+  try { F = st.app ? await loadSdk() : await ensureApp(); }
+  catch (e) { console.warn(e); throw new Error("로그인 도구를 불러오지 못했어요. 인터넷 연결을 확인하고 앱을 껐다 켠 뒤 다시 눌러 주세요"); }
+  if (!_started) startAuth().catch(fail); // 기다리지 않음: 팝업은 탭 직후에 열려야 막히지 않음
   const provider = new F.GoogleAuthProvider(); provider.setCustomParameters({ prompt: "select_account" });
   const redirectOk = SELF_HOSTED_AUTH.includes(location.hostname);
   if ((isMobile() || isStandalone()) && redirectOk) {
     try { LS.set("sync.redirect", true); await F.signInWithRedirect(st.auth, provider); return "redirect"; }
-    catch (e) { LS.set("sync.redirect", false); console.warn("redirect 실패 → 팝업", e); }
+    catch (e) { LS.set("sync.redirect", false); console.warn("redirect 실패 → 팝업", e); st.err = errText(e); }
   }
   try { await F.signInWithPopup(st.auth, provider); return "popup"; }
   catch (e) {
