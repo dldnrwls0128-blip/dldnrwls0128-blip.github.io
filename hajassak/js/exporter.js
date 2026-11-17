@@ -1,5 +1,5 @@
 /** 내보내기: 엑셀·CSV, 업체별 하자조치 요청서(인쇄 → PDF 저장) */
-import { locText, tradeText, sortDefects, isOverdue, floorLabel } from "./model.js";
+import { locText, tradeText, sortDefects, isOverdue, floorLabel, hasSteps, stepsText, stepProgress } from "./model.js";
 const COLS = [
   ["번호", (d, i) => i + 1], ["외부ID", (d) => d.extId || ""], ["동", (d) => d.dong], ["층", (d) => floorLabel(d.floor)], ["호", (d) => d.ho],
   ["공용부", (d) => d.common || ""], ["실", (d) => d.room], ["부위", (d) => d.part], ["공종", (d) => d.trade], ["세부공종", (d) => d.subTrade],
@@ -8,6 +8,7 @@ const COLS = [
   ["조치기한", (d) => d.due || ""], ["기한초과", (d) => (isOverdue(d) ? "Y" : "")], ["조치완료일", (d) => d.doneAt?.slice(0, 10) || ""],
   ["확인완료일", (d) => d.confirmedAt?.slice(0, 10) || ""], ["메모", (d) => d.memo || ""], ["조치전 사진", (d, i, c) => c.photos(d).before],
   ["조치후 사진", (d, i, c) => c.photos(d).after],
+  ["공정 단계", (d) => stepsText(d)], ["공정 진행", (d) => stepProgress(d)],
 ];
 export function tableOf(list, ctx) {
   const rows = [...list].sort(sortDefects);
@@ -31,7 +32,7 @@ export function requestDocHtml({ project, vendor, items, photoUrls, watermark, i
   const rows = [...items].sort(sortDefects).map((d, i) => {
     const ph = (photoUrls.get(d.id) || []).slice(0, 2).map((u) => `<img src="${u}" alt="">`).join("");
     return `<tr><td class="c">${i + 1}</td><td>${esc(locText(d))}</td><td>${esc(tradeText(d))}<br><small>${esc(d.type || "")}</small></td>
-      <td>${esc(d.content || "")}${d.severity === "긴급" ? ' <b class="urg">긴급</b>' : ""}</td><td class="c">${esc(d.due || "")}</td><td class="ph">${ph}</td><td class="sig"></td></tr>`;
+      <td>${esc(d.content || "")}${d.severity === "긴급" ? ' <b class="urg">긴급</b>' : ""}${hasSteps(d) ? `<br><small class="steps">공정 ${esc(stepProgress(d))}: ${d.steps.map((s) => (s.status === "완료" ? `<s>${esc(s.trade)}</s>` : vendor && s.vendorId === vendor.id ? `<b>${esc(s.trade)}</b>` : esc(s.trade))).join(" → ")}</small>` : ""}</td><td class="c">${esc(d.due || "")}</td><td class="ph">${ph}</td><td class="sig"></td></tr>`;
   }).join("");
   return `<div class="doc">
     ${watermark ? '<div class="wm">하자싹 무료판</div>' : ""}

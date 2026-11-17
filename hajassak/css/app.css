@@ -308,3 +308,26 @@ body.has-selbar #view{padding-bottom:132px}
 #lp .btn-etc{min-height:36px;font-size:13px;padding:4px 10px;margin-top:4px}
 @media (min-width:700px){#lp .tiles{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}#lp .tiles.cm{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}}
 @media (min-width:700px){.sheet-wrap.full.lp-sheet .sheet{height:auto;min-height:min(460px,94vh)}}
+
+/* 1.0.8 후속 공정 */
+.stp-list{list-style:none;margin:0 0 8px;padding:0;display:flex;flex-direction:column;gap:6px}
+.stp{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:var(--card,#fff)}
+.stp.cur{border-color:var(--brand);box-shadow:inset 3px 0 0 var(--brand)}
+.stp.done .stp-t b{text-decoration:line-through;color:var(--sub)}
+.stp-n{flex:none;width:22px;height:22px;border-radius:50%;background:var(--chip);display:grid;place-items:center;font-size:12px;font-weight:700}
+.stp.cur .stp-n{background:var(--brand);color:#fff}
+.stp-t{flex:1;min-width:0;display:flex;flex-direction:column}.stp-t small{color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stp-st{border:0;cursor:pointer;flex:none}
+.stp .btn-sm{min-height:34px;padding:0 8px;flex:none}
+.stp-b{color:var(--brand);font-weight:700}
+.doc small.steps{color:#444}
+/* 1.0.8 도면 여러 장·실 목록 */
+.pimp{width:100%;border-collapse:collapse;font-size:13px}.pimp th,.pimp td{border-bottom:1px solid var(--line);padding:4px 3px;text-align:left;vertical-align:middle}
+.pimp input.inp{min-height:32px;padding:2px 6px;font-size:13px}.pimp td.fn{max-width:120px;word-break:break-all;font-size:12px;color:var(--sub)}
+.pimp .warn{color:var(--danger,#dc2626);font-size:11px}
+.pimp-wrap{overflow-x:auto}
+.rv-plan{border:1px solid var(--line);border-radius:10px;padding:6px 8px;margin:0 0 8px}.rv-plan summary{cursor:pointer;font-weight:700}
+.rv-plan summary small{font-weight:400;color:var(--sub)}
+.rv-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px;margin:6px 0}
+.rv-it{display:flex;align-items:center;gap:4px}.rv-it input[type=text]{flex:1;min-width:0;min-height:30px;padding:2px 6px;font-size:13px}
+.rv-quick{display:flex;flex-wrap:wrap;gap:4px}

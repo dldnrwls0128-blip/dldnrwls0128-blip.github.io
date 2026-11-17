@@ -73,14 +73,14 @@ async function requestPersist() {
   if (persistAsked || !navigator.storage?.persist) return; persistAsked = true;
   try { if (!(await navigator.storage.persisted())) await navigator.storage.persist(); } catch {}
 }
-async function addPhotos(defectId, files, kind, stampBase) {
+async function addPhotos(defectId, files, kind, stampBase, extra = {}) {
   let ok = 0;
   for (const f of files) {
     try {
       const at = new Date().toISOString();
       const on = stampOn();
       const { blob, thumb, w, h } = await compressImage(f, { stamp: on ? stampInfo(stampBase, kind, at) : null });
-      await db.put("photos", { id: M.uid("ph"), defectId, kind, blob, thumb, w, h, at, stamp: on ? "1" : "0" });
+      await db.put("photos", { id: M.uid("ph"), defectId, kind, blob, thumb, w, h, at, stamp: on ? "1" : "0", ...extra });
       const m = S.pidx.get(defectId) || { before: 0, after: 0 }; m[kind === "after" ? "after" : "before"]++; S.pidx.set(defectId, m); ok++;
     } catch (e) { toast(e.message || "사진 처리 실패"); }
   }
@@ -159,7 +159,7 @@ function defectCard(d, { sel = false } = {}) {
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
     <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span>${pill(d.status)}</div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
-    <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>
+    <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
       ${pc.before + pc.after ? `<span>📷${pc.before}${pc.after ? "/" + pc.after : ""}</span>` : ""}<span>${esc(d.category || "")}</span></div>
   </article>`;
@@ -296,13 +296,15 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
+const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
 function filterChipText(k, v) {
   if (k === "status") return v === "_open" ? "미조치" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
   if (k === "overdue") return "기한초과";
   if (k === "ho") return v + "호";
   if (k === "common") return v === "_any" ? "공용부·세대 외 전체" : v === "_bare" ? "공용부 미지정(동·층만)" : v;
+  if (k === "turn") return vLabel(v);
+  if (k === "chain") return "있는 하자";
   if (k === "floor") return v === "_none" ? "층 미지정" : M.floorLabel(v);
   if (k === "text") return `“${v}”`;
   return v;
@@ -346,6 +348,8 @@ function filterSheet() {
       ${sel("category", [...new Set([...M.catsOf(p), ...PD().map((d) => d.category).filter(Boolean)])].map((x) => [x, x]), "구분")}
       ${sel("trade", usedTrades.map((x) => [x, x]), "공종")}
       ${sel("vendorId", [["_none", "업체 미지정"], ...S.vendors.map((v) => [v.id, v.name])], "업체")}
+      ${sel("turn", S.vendors.map((v) => [v.id, v.name]), "내 차례 대기(업체)")}
+      ${sel("chain", [["1", "후속 공정 있는 하자"]], "후속 공정")}
       ${sel("type", usedTypes.map((x) => [x, x]), "유형")}
       ${sel("severity", M.SEVERITIES.map((x) => [x, x]), "중요도")}</div>
       <label class="check"><input type="checkbox" data-k="overdue" ${f.overdue ? "checked" : ""}> 기한초과만</label>
@@ -600,7 +604,20 @@ function onLongPress(root, sel, onLong) {
   root.addEventListener("contextmenu", (e) => { if (e.target.closest(sel)) e.preventDefault(); });
   root.addEventListener("click", (e) => { if (fired && e.target.closest(sel)) { e.stopImmediatePropagation(); e.preventDefault(); fired = false; } }, true);
 }
-function matchPlans(dr) { const p = P(); return S.plans.filter((pl) => pl.projectId === p.id && dr.dong && M.planMatches(pl, dr.dong, dr.floor || M.floorOfHo(dr.ho))); }
+/** 이 위치에 맞는 도면: 세대(호)면 평형 평면도, 동·층이면 그 동 도면, 단지 공용이면 동 지정 없는 도면. 실 이름이 들어 있는 도면을 먼저 */
+function matchPlans(dr) {
+  const p = P(); const ut = M.unitTypeOf(p, dr.dong, dr.ho); const fl = dr.floor || M.floorOfHo(dr.ho);
+  const ok = (pl) => {
+    if (pl.projectId !== p.id) return false;
+    if (pl.utype) return !!dr.ho && (!ut || M.normType(pl.utype) === ut);
+    if (pl.dongs?.length ? !pl.dongs.includes(dr.dong) : false) return false;
+    if (!dr.dong && !dr.common) return false;
+    return !fl || !String(pl.floors || "").trim() || M.planMatches({ ...pl, dongs: [] }, dr.dong, fl);
+  };
+  const want = [dr.room, dr.common].filter(Boolean);
+  const score = (pl) => (pl.rooms?.some((r) => want.includes(r.name)) ? 4 : 0) + (pl.utype ? 2 : 0) + (pl.dongs?.length ? 1 : 0);
+  return S.plans.filter(ok).sort((a, b) => score(b) - score(a));
+}
 function renderForm() {
   const p = P(); const dr = S.draft; const editing = !!dr._editId;
   setTab(editing ? null : "new"); setHeader(editing ? "하자 수정" : "하자 등록", { backBtn: navDepth() > 1 || editing });
@@ -754,7 +771,8 @@ function locationPicker(dr, onDone) {
 `;
       h += dongCommonHtml();
     } else if (STEPS[step] === "room") {
-      h += `<h4>실</h4><div class="tiles">${p.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r))).join("")}${addTile("실")}</div>`;
+      const rf = M.roomsFor(p, sel.dong, sel.ho);
+      h += `<h4>실${rf.type ? ` <small class="help">${esc(rf.type)} 평형</small>` : ""}</h4><div class="tiles">${rf.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r) && !(p.roomsByType?.[rf.type] || []).includes(r))).join("")}${addTile("실")}</div>`;
     } else {
       h += `<h4>부위</h4><div class="tiles">${p.parts.map((r) => tile(r, r, r === sel.part, "", isUserItem("parts", r))).join("")}${addTile("부위")}</div>`;
     }
@@ -921,20 +939,24 @@ function locationPicker(dr, onDone) {
 async function pinSheet(plans, dr, onDone) {
   let plan = plans.find((x) => x.id === dr.pin?.planId) || plans[0];
   let pin = dr.pin?.planId === plan.id ? { ...dr.pin } : null;
+  // 실·공용부 이름이 도면에 있으면 그 자리에 미리 찍어 두기(눌러서 고치면 됨)
+  let hint = "";
+  if (!pin) { const want = [dr.room, dr.common].filter(Boolean); for (const pl of plans) { const r = pl.rooms?.find((x) => want.includes(x.name) && x.x != null); if (r) { plan = pl; pin = { planId: pl.id, x: r.x, y: r.y, auto: 1 }; hint = r.name; break; } } }
   const s = openSheet({ title: "도면에 위치 표시", full: true,
     html: `${plans.length > 1 ? `<div class="chips scroll">${plans.map((x) => `<button type="button" class="chip ${x.id === plan.id ? "on" : ""}" data-pl="${x.id}">${esc(x.name)}</button>`).join("")}</div>` : ""}
-      <p class="help">도면을 눌러 하자 위치를 찍으세요. 두 손가락으로 확대할 수 있어요.</p><div class="plan" id="plan"><img id="plan-img" alt="도면"><i class="pin" hidden></i></div>`,
+      <p class="help">${hint ? `‘${esc(hint)}’ 자리에 미리 찍어 뒀어요. 정확한 곳을 눌러 고치세요.` : "도면을 눌러 하자 위치를 찍으세요. 두 손가락으로 확대할 수 있어요."}</p><div class="plan" id="plan"><img id="plan-img" alt="도면"><i class="pin" hidden></i></div>`,
     footer: `<button type="button" class="btn" data-a="clear">표시 지우기</button><button type="button" class="btn btn-primary" data-a="ok">확인</button>` });
   const img = $("#plan-img", s.el); const pinEl = $(".pin", s.el);
   const show = () => { img.src = URL.createObjectURL(plan.blob); pinEl.hidden = !pin; if (pin) { pinEl.style.left = pin.x * 100 + "%"; pinEl.style.top = pin.y * 100 + "%"; } };
   show();
+  if (pin?.auto) img.addEventListener("load", () => pinEl.scrollIntoView?.({ block: "center", inline: "center" }), { once: true });
   $("#plan", s.el).addEventListener("click", (e) => {
     const r = img.getBoundingClientRect(); const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
     if (x < 0 || y < 0 || x > 1 || y > 1) return;
     pin = { planId: plan.id, x: +x.toFixed(4), y: +y.toFixed(4) }; show();
   });
   $$("[data-pl]", s.el).forEach((b) => b.addEventListener("click", () => { plan = plans.find((x) => x.id === b.dataset.pl); pin = null; $$("[data-pl]", s.el).forEach((c) => c.classList.toggle("on", c === b)); show(); }));
-  $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => { dr.pin = b.dataset.a === "ok" ? pin : null; await s.close(); onDone(); }));
+  $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => { dr.pin = b.dataset.a === "ok" && pin ? (({ auto, ...x }) => x)(pin) : null; await s.close(); onDone(); }));
 }
 
 /* ---------- 상세 ---------- */
@@ -961,6 +983,7 @@ ROUTES.item = async (qq) => {
       <button type="button" class="btn btn-lg" id="btn-stany">상태 선택</button></div>
     ${v ? `<div class="contact-row">${(v.phones || []).slice(0, 1).map((ph) => `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`).join("")}
       <button type="button" class="btn btn-kakao" id="btn-kakao">카톡으로 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 보내기</button>`}
+    ${stepsHtml(d, photos)}
     <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
       <button type="button" class="ph-add" data-add="before">📷<span>추가</span></button></div></section>
     <section class="card"><h3>조치 후 사진 <small>${after.length}</small></h3><div class="photos">${after.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 후"></button>`).join("")}
@@ -982,6 +1005,7 @@ ROUTES.item = async (qq) => {
   }));
   $$("[data-ph]", view()).forEach((b) => b.addEventListener("click", () => photoViewer(photos, b.dataset.ph, () => rerender(), d)));
   $("#memo").addEventListener("change", async (e) => { d.memo = e.target.value; await saveDefect(d); toast("메모 저장"); });
+  bindSteps(d);
   $("#btn-del").addEventListener("click", async () => {
     if (!(await ask("이 하자와 사진을 삭제할까요? 되돌릴 수 없어요.", { ok: "삭제", danger: true }))) return;
     await db.delByIndex("photos", "by_defect", d.id); await db.del("defects", d.id);
@@ -991,12 +1015,14 @@ ROUTES.item = async (qq) => {
 /** 상세 화면 상태 단계 탭: 묻지 않고 바로 바꾸고 3초 ‘되돌리기’. 조치완료인데 조치 후 사진이 없으면 안내만(막지 않음) */
 async function quickStatus(d, st) {
   if (d.status === st) return toast(`이미 ‘${st}’ 상태예요`);
+  if (!(await stepsGuard(d, st))) return;
   const prev = d.status; setStatus(d, st); await saveDefect(d); rerender();
   const hint = st === "조치완료" && !photoCount(d).after ? " · 조치 후 사진은 아래 📷에서 추가" : "";
   toast(`‘${st}’(으)로 변경${hint}`, { ms: 3000, action: "되돌리기", onAction: async () => { setStatus(d, prev, "되돌리기"); await saveDefect(d); rerender(); } });
 }
 async function changeStatus(d, st) {
-  if (st === "업체전달") return sendSheet({ items: [d], vendor: V(d.vendorId) });
+  if (st === "업체전달") return sendSheet({ items: [d], vendor: V(M.turnVendorId(d) || d.vendorId) });
+  if (!(await stepsGuard(d, st))) return;
   if (st === "조치완료" && !photoCount(d).after) {
     const a = await choose("조치 완료 — 조치 후 사진", [{ label: "사진 찍고 완료", value: "cam", icon: "📷" }, { label: "앨범에서 고르고 완료", value: "alb", icon: "🖼" }, { label: "사진 없이 완료", value: "none", icon: "✔" }]);
     if (!a) return;
@@ -1006,6 +1032,136 @@ async function changeStatus(d, st) {
   if (st === "재접수") { note = (await prompt2("재접수 사유", "", { placeholder: "예: 실리콘 재시공 필요", ok: "재접수" })); if (note === null) return; }
   const prev = d.status; setStatus(d, st, note); await saveDefect(d); rerender();
   toast(`‘${st}’(으)로 변경`, { action: "되돌리기", onAction: async () => { setStatus(d, prev, "되돌리기"); await saveDefect(d); rerender(); } });
+}
+/* ---------- 1.0.8 후속 공정(공정 단계) ---------- */
+/** 공정 목록 준비: 첫 단계는 하자 자체 공종(own) — 하자의 공종·업체를 따라간다 */
+function ensureSteps(d) {
+  if (!Array.isArray(d.steps) || !d.steps.length) d.steps = [{ id: M.uid("st"), trade: d.trade || "공종 미지정", vendorId: d.vendorId || "", status: ["조치완료", "확인완료"].includes(d.status) ? "완료" : d.status === "조치중" ? "조치중" : d.status === "업체전달" ? "전달" : "대기", due: d.due || "", own: true }];
+  const own = d.steps.find((x) => x.own); if (own) { own.trade = d.trade || own.trade; own.vendorId = d.vendorId || own.vendorId; }
+  return d.steps;
+}
+function stepsHtml(d, photos) {
+  const has = M.hasSteps(d); if (has) ensureSteps(d);
+  const cur = M.curStepIdx(d); const pc = (st) => photos.filter((x) => x.stepId === st.id).length;
+  return `<section class="card" id="steps"><h3>공정 단계 ${has ? `<small>${M.stepProgress(d)}</small>` : '<small>여러 공종이 차례로 고칠 때</small>'}</h3>
+    ${has ? `<ol class="stp-list">${d.steps.map((st, i) => `<li class="stp ${i === cur ? "cur" : ""} ${st.status === "완료" ? "done" : ""}" data-si="${i}">
+      <span class="stp-n">${i + 1}</span><span class="stp-t"><b>${esc(st.trade)}</b><small>${esc(st.vendorId ? vLabel(st.vendorId) : "업체 미지정")}${st.due ? ` · 기한 ${shortDate(st.due)}` : ""}${i === cur ? " · 지금 차례" : ""}</small></span>
+      <button type="button" class="pill ${M.STEP_CLS[st.status] || ""} stp-st" data-sst="${i}" aria-label="${i + 1}단계 상태 ${st.status} 바꾸기">${st.status}</button>
+      <button type="button" class="btn btn-sm stp-ph" data-sph="${i}" aria-label="${i + 1}단계 사진">📷${pc(st) || ""}</button>
+      <button type="button" class="btn btn-sm stp-ed" data-sed="${i}" aria-label="${i + 1}단계 수정">✎</button></li>`).join("")}</ol>`
+      : '<p class="help">예: 도배가 찢겨 석고보드를 갈고 다시 도배 → 석고보드 교체 → 도배. 모든 단계가 끝나야 조치완료가 돼요.</p>'}
+    <div class="row"><button type="button" class="btn" id="btn-addstep">＋ 후속 공정 추가</button><button type="button" class="btn" id="btn-tpl">📋 템플릿</button></div></section>`;
+}
+function bindSteps(d) {
+  $("#btn-addstep")?.addEventListener("click", () => addStep(d));
+  $("#btn-tpl")?.addEventListener("click", () => applyTemplate(d));
+  $$("[data-sst]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const i = Number(b.dataset.sst); const st = d.steps[i];
+    const v = await choose(`${i + 1}단계 · ${st.trade}`, M.STEP_STATUSES.map((x) => ({ label: x, value: x, sub: x === st.status ? "현재" : "" }))); if (v) setStepStatus(d, i, v);
+  }));
+  $$("[data-sph]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const st = d.steps[Number(b.dataset.sph)]; const files = await pickFile("image/*", { capture: false, multiple: true }); if (!files.length) return;
+    busy(true, "사진 저장 중…"); await addPhotos(d.id, files, "after", { ...stampOf(d), work: `${st.trade} · ${stampOf(d).work}` }, { stepId: st.id }); busy(false); rerender();
+  }));
+  $$("[data-sed]", view()).forEach((b) => b.addEventListener("click", () => editStep(d, Number(b.dataset.sed))));
+}
+/** 업체 고르기(그 공종을 맡은 업체 먼저) */
+async function pickVendorFor(trade, cur = "") {
+  const t = String(trade || ""); const fit = (v) => (v.trades || []).some((x) => x && (t.includes(x) || x.includes(t)));
+  const vs = [...S.vendors].sort((a, b) => (fit(b) ? 1 : 0) - (fit(a) ? 1 : 0) || a.name.localeCompare(b.name, "ko"));
+  return choose(`‘${trade}’ 업체`, [...vs.map((v) => ({ label: v.name, value: v.id, sub: [fit(v) ? "이 공종 담당" : "", v.id === cur ? "현재" : ""].filter(Boolean).join(" · ") })), { label: "업체 미지정", value: "_none", icon: "—" }]);
+}
+const autoVendor = (trade) => { const t = String(trade || ""); return S.vendors.find((v) => (v.trades || []).some((x) => x && (t.includes(x) || x.includes(t))))?.id || ""; };
+async function addStep(d) {
+  const r = await formSheet({ title: "후속 공정 추가", ok: "다음: 업체 고르기", hint: "앞 공정이 끝나면 이 공정 업체에 보내라고 알려 드려요.",
+    fields: [{ k: "trade", label: "공종", placeholder: "예: 석고보드 교체, 도배, 미장" }, { k: "due", label: "기한 (선택)", type: "date" }], validate: ({ trade }) => (!trade ? "공종을 입력하세요" : trade.length > 20 ? "20자 이내로" : "") });
+  if (!r) return;
+  const vid = await pickVendorFor(r.trade); if (vid == null) return;
+  ensureSteps(d); d.steps.push({ id: M.uid("st"), trade: r.trade, vendorId: vid === "_none" ? "" : vid, status: "대기", due: r.due || "" });
+  if (["조치완료", "확인완료"].includes(d.status)) setStatus(d, "조치중", `후속 공정 ‘${r.trade}’ 추가`);
+  d.history = [...(d.history || []), { at: new Date().toISOString(), status: d.status, note: `후속 공정 추가: ${r.trade}` }];
+  await saveDefect(d); toast(`${d.steps.length}단계 ‘${r.trade}’ 추가`); rerender();
+}
+async function applyTemplate(d) {
+  const tpls = M.stepTemplatesOf(P());
+  const t = await choose("후속 공정 템플릿", [...tpls.map((x, i) => ({ label: x.name, value: String(i), sub: x.steps.join(" → ") })), { label: "템플릿 편집", value: "_edit", icon: "✎" }]);
+  if (t == null) return; if (t === "_edit") return editTemplates();
+  const tp = tpls[Number(t)];
+  if (M.hasSteps(d) && !(await ask(`지금 공정(${M.stepsText(d)})을 ‘${tp.steps.join(" → ")}’(으)로 바꿀까요?`, { ok: "바꾸기" }))) return;
+  const own = (x) => !!d.trade && (x.includes(d.trade) || d.trade.includes(x));
+  let usedOwn = false;
+  d.steps = tp.steps.map((x) => { const o = !usedOwn && own(x); if (o) usedOwn = true; return { id: M.uid("st"), trade: o ? d.trade : x, vendorId: o ? d.vendorId || "" : autoVendor(x), status: "대기", due: "", ...(o ? { own: true } : {}) }; });
+  if (["조치완료", "확인완료"].includes(d.status)) setStatus(d, "조치중", "후속 공정 템플릿 적용");
+  d.history = [...(d.history || []), { at: new Date().toISOString(), status: d.status, note: `공정 템플릿 ‘${tp.name}’: ${tp.steps.join(" → ")}` }];
+  await saveDefect(d); toast(`‘${tp.name}’ ${d.steps.length}단계 적용 — 업체는 각 단계 ✎에서 바꿀 수 있어요`, { ms: 3500 }); rerender();
+}
+async function editTemplates() {
+  const p = P(); const cur = M.templatesText(M.stepTemplatesOf(p));
+  const s = openSheet({ title: "후속 공정 템플릿", cls: "dialog", html: `<p class="help">한 줄에 하나씩 ‘이름: 공정 → 공정’ 형식으로 쓰세요.</p><textarea class="inp" id="tpl-t" rows="8">${esc(cur)}</textarea><p class="fs-err" role="alert"></p>`,
+    footer: `<button type="button" class="btn" data-a="reset">기본값</button><button type="button" class="btn btn-primary" data-a="save">저장</button>` });
+  $("[data-a=reset]", s.el).addEventListener("click", () => { $("#tpl-t", s.el).value = M.templatesText(M.DEFAULT_STEP_TEMPLATES); });
+  $("[data-a=save]", s.el).addEventListener("click", async () => {
+    const list = M.parseTemplates($("#tpl-t", s.el).value); if (!list.length) { $(".fs-err", s.el).textContent = "‘이름: 공정 → 공정’ 형식으로 한 줄 이상 쓰세요"; return; }
+    p.stepTemplates = list; await saveProject(p); await s.close(); toast(`템플릿 ${list.length}개 저장`); rerender();
+  });
+}
+async function editStep(d, i) {
+  const st = d.steps[i];
+  const a = await choose(`${i + 1}단계 · ${st.trade}`, [{ label: "업체 바꾸기", value: "v", icon: "🏢" }, { label: "기한 바꾸기", value: "due", icon: "📅" }, ...(st.own ? [] : [{ label: "공종 이름 바꾸기", value: "t", icon: "✎" }]),
+    ...(i > 0 ? [{ label: "앞으로 옮기기", value: "up", icon: "↑" }] : []), ...(st.own ? [] : [{ label: "이 단계 삭제", value: "del", icon: "🗑" }])]);
+  if (!a) return;
+  if (a === "v") { const vid = await pickVendorFor(st.trade, st.vendorId); if (vid == null) return; st.vendorId = vid === "_none" ? "" : vid; if (st.own) d.vendorId = st.vendorId; }
+  if (a === "due") { const r = await formSheet({ title: "기한", ok: "저장", fields: [{ k: "due", label: "기한", type: "date", value: st.due || "" }] }); if (!r) return; st.due = r.due; }
+  if (a === "t") { const r = await prompt2("공종 이름", st.trade, { ok: "저장" }); if (!r) return; st.trade = r.trim().slice(0, 20) || st.trade; }
+  if (a === "up") { [d.steps[i - 1], d.steps[i]] = [d.steps[i], d.steps[i - 1]]; }
+  if (a === "del") { if (!(await ask(`${i + 1}단계 ‘${st.trade}’를 삭제할까요?`, { ok: "삭제", danger: true }))) return; d.steps.splice(i, 1); if (d.steps.length < 2) d.steps = []; }
+  if (M.hasSteps(d) && d.steps.every((x) => x.status === "완료") && M.isOpen(d)) setStatus(d, "조치완료", "모든 공정 완료");
+  await saveDefect(d); rerender();
+}
+/** 단계 상태 바꾸기. 완료면 다음 단계 업체에 보낼지 묻고, 마지막이면 하자를 조치완료로 */
+async function setStepStatus(d, i, st) {
+  const step = d.steps[i]; if (step.status === st) return;
+  const now = new Date().toISOString(); const prevSt = step.status; const prevDefect = d.status;
+  step.status = st; if (st === "완료") step.doneAt = now; else step.doneAt = ""; if (st === "전달" && !step.sentAt) step.sentAt = now;
+  const note = `${i + 1}단계 ${step.trade}: ${prevSt} → ${st}`;
+  if (d.steps.every((x) => x.status === "완료")) setStatus(d, "조치완료", `모든 공정 완료 (${note})`);
+  else {
+    if (["조치완료", "확인완료"].includes(d.status)) setStatus(d, "조치중", note);
+    else if (d.status === "접수" && st !== "대기") setStatus(d, st === "전달" ? "업체전달" : "조치중", note);
+    else d.history = [...(d.history || []), { at: now, status: d.status, note, ...(Sync.attached() && Sync.signedIn() ? { by: Sync.actorName() } : {}) }];
+  }
+  await saveDefect(d); rerender();
+  const undo = async () => { step.status = prevSt; step.doneAt = ""; if (d.status !== prevDefect) setStatus(d, prevDefect, "되돌리기"); await saveDefect(d); rerender(); };
+  if (st !== "완료") return toast(`${i + 1}단계 ‘${step.trade}’ ${st}`, { action: "되돌리기", onAction: undo });
+  const next = d.steps.find((x, k) => k > i && x.status !== "완료");
+  if (!next) return toast(`모든 공정 완료 → ‘조치완료’${photoCount(d).after ? "" : " · 조치 후 사진은 📷에서"}`, { ms: 3500, action: "되돌리기", onAction: undo });
+  await sendNextStep(d, i, next);
+}
+/** 다음 공정 업체에 카톡·문자로 보내기(앞 공정 사진 첨부) */
+async function sendNextStep(d, i, next) {
+  const v = V(next.vendorId); const phone = v?.phones?.[0];
+  const how = await choose(`${i + 1}단계 완료 — 다음 ‘${next.trade}’ ${v ? v.name : "(업체 미지정)"}에 보낼까요?`, [
+    { label: "카톡·공유로 보내기 (사진 포함)", value: "kakao", icon: "💬" }, ...(phone ? [{ label: `문자로 보내기 (${phone})`, value: "sms", icon: "✉" }] : []),
+    ...(v ? [] : [{ label: "업체 먼저 고르기", value: "pick", icon: "🏢" }]), { label: "나중에", value: "later", icon: "⏱" }]);
+  if (!how || how === "later") return toast(`다음 차례: ${next.trade}`);
+  if (how === "pick") { const vid = await pickVendorFor(next.trade); if (vid && vid !== "_none") { next.vendorId = vid; await saveDefect(d); } return sendNextStep(d, i, next); }
+  const text = M.stepMessage({ project: P(), d, step: next, prev: d.steps[i] });
+  const photos = await db.byIndex("photos", "by_defect", d.id);
+  const prevId = d.steps[i].id; const ph = photos.filter((x) => x.stepId === prevId).pop() || photos.filter((x) => x.kind === "after").pop() || photos.filter((x) => x.kind !== "after")[0];
+  const files = ph ? [new File([await photoOut(ph, d)], `하자_${next.trade}_요청.jpg`, { type: "image/jpeg" })] : [];
+  window.__lastStepSend = { how, text, files: files.length, vendor: v?.name || "" };
+  if (how === "kakao") { const { shareKakao } = await import("./share.js"); const r = await shareKakao({ text, files }).catch(() => ""); if (r === "kakao-pc" && files[0]) { toast("문구를 복사했어요 · 사진은 내려받아 카톡에 붙여 주세요", { ms: 4000 }); shareOrDownload(files[0], files[0].name); } }
+  else { location.href = M.smsHref(phone, text); if (files.length) toast("문자에는 사진이 자동으로 붙지 않아요 — 사진은 카톡으로 보내 주세요", { ms: 4000 }); }
+  next.status = "전달"; next.sentAt = new Date().toISOString();
+  d.history = [...(d.history || []), { at: next.sentAt, status: d.status, note: `${d.steps.indexOf(next) + 1}단계 ${next.trade} ${how === "kakao" ? "카톡" : "문자"}로 전달` }];
+  await saveDefect(d); rerender();
+}
+/** 하자를 조치완료·확인완료로 바꿀 때 남은 공정이 있으면 묻기 */
+async function stepsGuard(d, st) {
+  if (!["조치완료", "확인완료"].includes(st) || !M.hasSteps(d)) return true;
+  const left = d.steps.filter((x) => x.status !== "완료"); if (!left.length) return true;
+  if (!(await ask(`남은 공정 ${left.length}개(${left.map((x) => x.trade).join(", ")})가 있어요. 모두 완료로 표시하고 ‘${st}’로 바꿀까요?`, { ok: "모두 완료" }))) return false;
+  const now = new Date().toISOString(); left.forEach((x) => { x.status = "완료"; x.doneAt = now; }); return true;
 }
 function photoViewer(photos, id, onChange, d = null) {
   let i = Math.max(0, photos.findIndex((p) => p.id === id)); let url = "";
@@ -1193,14 +1349,14 @@ ROUTES.vendor = async (qq) => {
   const v = V(qq.id); if (!v) return replace("#/vendors");
   setTab("vendors"); setHeader(v.name, { backBtn: true, action: `<button type="button" class="hdr-btn" id="btn-vedit">수정</button>` });
   const mode = LS.get("vmode", "unsent");
-  const all = PD().filter((d) => d.vendorId === v.id);
-  const sets = { unsent: all.filter((d) => d.status === "접수" || d.status === "재접수"), open: all.filter(M.isOpen), od: all.filter((d) => M.isOverdue(d)), done: all.filter((d) => d.status === "조치완료"), all };
-  const list = sets[mode].sort(M.sortDefects);
+  const all = PD().filter((d) => d.vendorId === v.id || (M.hasSteps(d) && d.steps.some((x) => x.vendorId === v.id)));
+  const sets = { turn: all.filter((d) => M.isTurnOf(d, v.id)), later: all.filter((d) => M.isLaterOf(d, v.id)), unsent: all.filter((d) => d.status === "접수" || d.status === "재접수"), open: all.filter(M.isOpen), od: all.filter((d) => M.isOverdue(d)), done: all.filter((d) => d.status === "조치완료"), all };
+  const list = (sets[mode] || sets.unsent).sort(M.sortDefects);
   const ph = v.phones || [];
   view().innerHTML = `
     <section class="card"><div class="vinfo"><div><b>${esc(v.person || "담당자 미입력")}</b><small>${esc((v.trades || []).join(", ") || "공종 미지정")}</small>${v.memo ? `<small>${esc(v.memo)}</small>` : ""}</div></div>
       <div class="contact-row">${ph.map((p) => `<a class="btn" href="${M.telHref(p)}">📞 ${esc(p)}</a>`).join("") || '<span class="help">전화번호가 없어요 · 수정에서 추가</span>'}</div></section>
-    <div class="chips scroll">${[["unsent", "미전달"], ["open", "미조치"], ["od", "기한초과"], ["done", "조치완료(확인 대기)"], ["all", "전체"]].map(([k, l]) => `<button type="button" class="chip ${k === mode ? "on" : ""}" data-m="${k}">${l} ${sets[k].length}</button>`).join("")}</div>
+    <div class="chips scroll">${[["turn", "내 차례 대기"], ...(sets.later.length ? [["later", "앞 공정 대기"]] : []), ["unsent", "미전달"], ["open", "미조치"], ["od", "기한초과"], ["done", "조치완료(확인 대기)"], ["all", "전체"]].map(([k, l]) => `<button type="button" class="chip ${k === mode ? "on" : ""}" data-m="${k}">${l} ${sets[k].length}</button>`).join("")}</div>
     <div class="send-bar"><button type="button" class="btn btn-kakao btn-lg" id="btn-send">보내기 · 건별 선택 (${list.filter((d) => d.status !== "확인완료").length})</button>
       ${ph[0] ? `<button type="button" class="btn btn-lg" id="btn-sms">💬 문자</button>` : ""}<button type="button" class="btn btn-lg" id="btn-pdf">📄 요청서</button></div>
     ${mode === "done" && list.length ? `<button type="button" class="btn btn-block" id="btn-confirm-all">조치완료 ${list.length}건 모두 확인완료</button>` : ""}
@@ -1358,8 +1514,9 @@ ROUTES.project = async () => {
       ${[["dongCommons", "🏢", "동 공용부(계단실·EV홀 등)", M.dongCommonsOf(p)], ["commons", "🅿", "단지 공용", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["categories", "🗂", "구분", M.catsOf(p)], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
         .map(([k, ico, t, arr]) => `<button type="button" class="sitem" data-list="${k}"><span class="si-ico">${ico}</span><span><b>${t}</b><small>${esc(arr.slice(0, 6).join(", "))}${arr.length > 6 ? " …" : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <h3 class="sec">도면 <small>동·층별 평면도 이미지 → 하자 위치를 도면에 찍기</small></h3>
-    <div class="slist">${plans.map((pl) => `<button type="button" class="sitem" data-plan="${pl.id}"><span class="si-ico">🗺</span><span><b>${esc(pl.name)}</b><small>${esc(pl.dongs?.length ? pl.dongs.join(", ") : "전체 동")} · ${esc(pl.floors || "전체 층")}</small></span><span class="chev">›</span></button>`).join("") || '<p class="help">등록된 도면이 없어요</p>'}</div>
-    <button type="button" class="btn" id="btn-addplan">＋ 도면 이미지 추가</button>
+    <div class="slist">${plans.map((pl) => `<button type="button" class="sitem" data-plan="${pl.id}"><span class="si-ico">🗺</span><span><b>${esc(pl.name)}</b><small>${esc(pl.utype ? `평형 ${pl.utype} 세대` : pl.dongs?.length ? pl.dongs.join(", ") : "전체 동")} · ${esc(pl.floors || "전체 층")}${pl.rooms?.length ? ` · 실 ${pl.rooms.length}` : ""}</small></span><span class="chev">›</span></button>`).join("") || '<p class="help">등록된 도면이 없어요</p>'}</div>
+    <div class="row wrap"><button type="button" class="btn" id="btn-addplan">＋ 도면 이미지 추가</button><button type="button" class="btn" id="btn-bulkplan">🗂 도면 여러 장 가져오기</button><button type="button" class="btn" id="btn-planrooms">🚪 도면에서 실 목록 자동 채우기</button></div>
+    <p class="help">여러 장: 이미지 여러 개 또는 .zip(매핑표 file·dongs·floors·name TSV/CSV, rooms.json 함께 넣어도 돼요). 표가 없으면 파일 이름(301동_기준층, 지하주차장_B1, 84A_세대평면)으로 추측해요.</p>
     <button type="button" class="btn btn-danger btn-block" id="btn-delproj">이 현장 삭제</button>`;
   $("#pj-name").addEventListener("change", async (e) => { p.name = e.target.value.trim() || p.name; await saveProject(p); toast("저장"); });
   $("#pj-due").addEventListener("change", async (e) => { p.dueDays = Math.max(0, Number(e.target.value) || 0); await saveProject(p); toast("저장"); });
@@ -1373,6 +1530,8 @@ ROUTES.project = async () => {
     busy(true, "도면 압축 중…"); const c = await compressImage(f, { max: 2400, quality: 0.8 }); busy(false);
     planEdit({ id: M.uid("pl"), projectId: p.id, name: f.name.replace(/\.\w+$/, "").slice(0, 30) || "평면도", dongs: [], floors: "", blob: c.blob, w: c.w, h: c.h }, true);
   });
+  $("#btn-bulkplan").addEventListener("click", () => bulkPlans());
+  $("#btn-planrooms").addEventListener("click", () => planRoomsFromFile());
   $("#btn-delproj").addEventListener("click", async () => {
     const cnt = PD().length;
     if (!(await ask(`‘${p.name}’ 현장과 하자 ${cnt}건·사진을 모두 삭제할까요? 되돌릴 수 없어요.`, { ok: "현장 삭제", danger: true }))) return;
@@ -1382,19 +1541,145 @@ ROUTES.project = async () => {
     await loadAll(); busy(false); toast("현장을 삭제했어요"); replace("#/home");
   });
 };
+/* ---------- 1.0.8 도면 여러 장 가져오기 · 실 목록 자동 채우기 ---------- */
+const IMG_RE = /\.(jpe?g|png|webp|gif|bmp)$/i;
+const mimeOf = (n) => (/\.png$/i.test(n) ? "image/png" : /\.webp$/i.test(n) ? "image/webp" : /\.gif$/i.test(n) ? "image/gif" : "image/jpeg");
+/** 고른 파일(이미지·zip·매핑표·rooms.json)을 펼쳐 읽기 */
+async function readPlanFiles(files) {
+  const imgs = []; let mapText = "", rooms = null;
+  const take = async (name, blob, text) => {
+    const base = name.split("/").pop(); if (!base || base.startsWith(".") || name.includes("__MACOSX")) return;
+    if (IMG_RE.test(base)) { if (/^contact_sheet/i.test(base)) return; imgs.push({ file: base, blob: await blob() }); }
+    else if (/\.(tsv|csv|txt)$/i.test(base)) mapText = await text();
+    else if (/\.json$/i.test(base)) { try { const j = JSON.parse(await text()); if (j && typeof j === "object") rooms = j; } catch { /* 무시 */ } }
+  };
+  for (const f of files) {
+    if (/\.zip$/i.test(f.name)) {
+      if (!globalThis.JSZip) throw new Error("JSZip을 불러오지 못했어요");
+      const zip = await globalThis.JSZip.loadAsync(f);
+      for (const e of Object.values(zip.files)) if (!e.dir) await take(e.name, async () => new Blob([await e.async("arraybuffer")], { type: mimeOf(e.name) }), () => e.async("string"));
+    } else await take(f.name, async () => f, () => f.text());
+  }
+  imgs.sort((a, b) => a.file.localeCompare(b.file, "ko", { numeric: true }));
+  return { imgs, mapText, rooms };
+}
+async function bulkPlans() {
+  const p = P();
+  const files = await pickFile("image/*,.zip,.tsv,.csv,.txt,.json", { multiple: true }); if (!files.length) return;
+  busy(true, "파일 읽는 중…"); let got;
+  try { got = await readPlanFiles(files); } catch (e) { busy(false); return toast("파일을 읽지 못했어요: " + (e.message || e)); }
+  busy(false);
+  if (!got.imgs.length) return got.rooms ? planRoomsFrom(got.rooms) : toast("도면 이미지(jpg·png)가 없어요");
+  const map = M.parseMapping(got.mapText);
+  const mine = S.plans.filter((x) => x.projectId === p.id);
+  const rows = got.imgs.map((x) => { const m = map.get(x.file); const g = M.guessPlan(x.file, p); const dup = mine.find((pl) => pl.file === x.file);
+    return { ...x, on: true, dup, src: m ? "표" : "이름", name: m?.name || dup?.name || g.name, dongs: (m ? m.dongs : g.dongs).join(","), floors: m ? m.floors : g.floors, utype: m?.utype || g.utype, rooms: got.rooms?.[x.file] || null }; });
+  planReview(rows, { mapped: map.size, hasRooms: !!got.rooms });
+}
+function planReview(rows, { mapped, hasRooms }) {
+  const p = P(); const dn = new Set(p.dongs.map((d) => d.name));
+  const warn = (r) => r.dongs.split(/[,\s]+/).filter(Boolean).filter((x) => !dn.has(x)).join(",");
+  const s = openSheet({ title: `도면 ${rows.length}장 확인`, full: true, cls: "pimp-sheet",
+    html: `<p class="help">${mapped ? `매핑표 ${mapped}행으로 채웠어요` : "매핑표가 없어 파일 이름으로 추측했어요"}${hasRooms ? " · rooms.json 있음 → 저장 후 실 목록 검토" : ""}. 동은 쉼표로(비우면 전체 동), 층은 2-26 · B2,1 형식(비우면 전체 층), 평형은 세대 평면도일 때만.</p>
+      <div class="pimp-wrap"><table class="pimp"><thead><tr><th><input type="checkbox" id="pi-all" checked aria-label="모두 선택"></th><th>파일</th><th>이름</th><th>동</th><th>층</th><th>평형</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr data-i="${i}"><td><input type="checkbox" class="pi-on" ${r.on ? "checked" : ""} aria-label="${esc(r.file)} 저장"></td><td class="fn">${esc(r.file)}${r.dup ? '<br><small class="help">기존 도면 교체</small>' : ""}<br><small class="help">${r.src}${r.rooms?.rooms?.length ? ` · 실 ${r.rooms.rooms.length}` : ""}</small></td>
+        <td><input class="inp" data-f="name" value="${esc(r.name)}"></td><td><input class="inp" data-f="dongs" value="${esc(r.dongs)}" placeholder="전체"><span class="warn">${warn(r) ? "없는 동: " + esc(warn(r)) : ""}</span></td>
+        <td><input class="inp" data-f="floors" value="${esc(r.floors)}" placeholder="전체"></td><td><input class="inp" data-f="utype" value="${esc(r.utype)}" placeholder="-" size="4"></td></tr>`).join("")}</tbody></table></div>`,
+    footer: `<button type="button" class="btn" data-a="no">취소</button><button type="button" class="btn btn-primary" data-a="save" id="pi-save">저장</button>` });
+  const cnt = () => { const n = $$(".pi-on:checked", s.el).length; $("#pi-save", s.el).textContent = `${n}장 저장`; };
+  cnt();
+  $("#pi-all", s.el).addEventListener("change", (e) => { $$(".pi-on", s.el).forEach((c) => { c.checked = e.target.checked; }); cnt(); });
+  $$(".pi-on", s.el).forEach((c) => c.addEventListener("change", cnt));
+  $$("input[data-f=dongs]", s.el).forEach((inp) => inp.addEventListener("input", () => { const r = { dongs: inp.value }; inp.nextElementSibling.textContent = warn(r) ? "없는 동: " + warn(r) : ""; }));
+  $("[data-a=no]", s.el).addEventListener("click", () => s.close());
+  $("[data-a=save]", s.el).addEventListener("click", async () => {
+    const pick = $$("tbody tr", s.el).filter((tr) => $(".pi-on", tr).checked).map((tr) => { const r = rows[Number(tr.dataset.i)]; const v = (f) => $(`[data-f=${f}]`, tr).value.trim();
+      return { ...r, name: v("name") || r.file.replace(/\.\w+$/, ""), dongs: v("dongs").split(/[,\s]+/).filter(Boolean).map((x) => (/^\d+$/.test(x) ? x + "동" : x)), floors: v("floors").replace(/\s+/g, ""), utype: M.normType(v("utype")) }; });
+    if (!pick.length) return toast("저장할 도면을 고르세요");
+    await s.close();
+    const saved = []; let fail = 0;
+    for (const [k, r] of pick.entries()) {
+      busy(true, `도면 압축·저장 ${k + 1}/${pick.length}…`);
+      try {
+        const c = await compressImage(r.blob, { max: 2400, quality: 0.8 });
+        const rooms = r.rooms?.rooms?.length ? M.roomCandidates(r.rooms.rooms, { evac: false }).map(({ name, x, y }) => ({ name, x, y })) : r.dup?.rooms || [];
+        const pl = { ...(r.dup || {}), id: r.dup?.id || M.uid("pl"), projectId: p.id, name: r.name.slice(0, 40), dongs: r.dongs, floors: r.floors, utype: r.utype, file: r.file, kind: r.rooms?.kind || r.dup?.kind || "", rooms, blob: c.blob, w: c.w, h: c.h };
+        await db.put("plans", pl); const j = S.plans.findIndex((x) => x.id === pl.id); if (j >= 0) S.plans[j] = pl; else S.plans.push(pl);
+        saved.push({ pl, raw: r.rooms });
+      } catch (e) { fail++; }
+    }
+    busy(false); toast(`도면 ${saved.length}장 저장${fail ? ` · 실패 ${fail}` : ""}`, { ms: 3000 }); rerender();
+    const withRooms = saved.filter((x) => x.raw?.rooms?.length);
+    if (withRooms.length) roomsReview(withRooms);
+  });
+}
+/** 이미 올린 도면에 rooms.json(또는 그게 든 zip)으로 실 목록 채우기 */
+async function planRoomsFromFile() {
+  const files = await pickFile(".json,.zip", { multiple: true }); if (!files.length) return;
+  busy(true, "읽는 중…"); let got; try { got = await readPlanFiles(files); } catch (e) { busy(false); return toast("파일을 읽지 못했어요: " + (e.message || e)); } busy(false);
+  if (!got.rooms) return toast("rooms.json이 없어요");
+  planRoomsFrom(got.rooms);
+}
+function planRoomsFrom(rooms) {
+  const p = P(); const mine = S.plans.filter((x) => x.projectId === p.id);
+  const items = Object.entries(rooms).map(([file, raw]) => ({ pl: mine.find((x) => x.file === file || x.name === file.replace(/\.\w+$/, "")), raw })).filter((x) => x.pl && x.raw?.rooms?.length);
+  if (!items.length) return toast("rooms.json의 파일 이름과 맞는 도면이 없어요 — 먼저 ‘도면 여러 장 가져오기’로 올리세요", { ms: 4000 });
+  roomsReview(items);
+}
+/** 실 목록 검토: 도면마다 체크·이름 고치기 → 평형별 실 / 동 공용부 / 단지 공용에 추가, 좌표는 도면에 저장 */
+function roomsReview(items) {
+  const p = P();
+  const target = (pl) => (pl.utype ? { k: "type", label: `${pl.utype} 평형 실 목록` } : pl.dongs?.length ? { k: "dongCommons", label: "동 공용부 목록" } : { k: "commons", label: "단지 공용 목록" });
+  const QUICK = (pl) => (pl.utype ? ["발코니", "발코니2", "대피공간"] : ["계단실", "복도", "전실", "발코니"]);
+  const groups = items.map(({ pl, raw }) => ({ pl, t: target(pl), cands: M.roomCandidates(raw.rooms, { evac: false }).map((c) => ({ ...c, on: c.on && target(pl).k !== "commons" })) }));
+  const s = openSheet({ title: "도면에서 실 목록 채우기", full: true,
+    html: `<label class="check"><input type="checkbox" id="rv-evac" checked> ‘하향식피난구’를 ‘대피공간’으로 바꾸기</label>
+      <p class="help">체크한 이름만 추가돼요. 이름은 바로 고칠 수 있어요. 단지 배치도 등 단지 공용은 기본으로 꺼 뒀어요(필요한 것만 체크).</p>
+      ${groups.map((g, gi) => `<details class="rv-plan" data-g="${gi}" ${gi < 4 ? "open" : ""}><summary>${esc(g.pl.name)} <small>→ ${esc(g.t.label)} · <span class="rv-n"></span></small></summary>
+        <div class="rv-list">${g.cands.map((c, ci) => `<label class="rv-it"><input type="checkbox" data-ci="${ci}" ${c.on ? "checked" : ""}><input type="text" class="inp" data-cn="${ci}" value="${esc(c.name === "하향식피난구" ? "대피공간" : c.name)}" data-orig="${esc(c.name)}"></label>`).join("")}</div>
+        <div class="rv-quick">${QUICK(g.pl).map((x) => `<button type="button" class="btn btn-sm" data-qa="${esc(x)}">＋ ${esc(x)}</button>`).join("")}<button type="button" class="btn btn-sm" data-all="1">전체 선택/해제</button></div></details>`).join("")}`,
+    footer: `<button type="button" class="btn" data-a="no">취소</button><button type="button" class="btn btn-primary" data-a="ok">실 목록에 추가</button>` });
+  const count = () => $$(".rv-plan", s.el).forEach((d) => { $(".rv-n", d).textContent = `${$$(".rv-list input[type=checkbox]:checked", d).length}개 선택`; });
+  count(); s.el.addEventListener("change", count);
+  $("#rv-evac", s.el).addEventListener("change", (e) => $$("input[data-orig='하향식피난구']", s.el).forEach((i) => { if (["하향식피난구", "대피공간"].includes(i.value)) i.value = e.target.checked ? "대피공간" : "하향식피난구"; }));
+  $$("[data-qa]", s.el).forEach((b) => b.addEventListener("click", () => {
+    const list = $(".rv-list", b.closest(".rv-plan")); const n = list.children.length;
+    list.insertAdjacentHTML("beforeend", `<label class="rv-it"><input type="checkbox" data-ci="q${n}" checked><input type="text" class="inp" data-cn="q${n}" value="${esc(b.dataset.qa)}" data-orig=""></label>`); count();
+  }));
+  $$("[data-all]", s.el).forEach((b) => b.addEventListener("click", () => { const cs = $$(".rv-list input[type=checkbox]", b.closest(".rv-plan")); const on = !cs.every((c) => c.checked); cs.forEach((c) => { c.checked = on; }); count(); }));
+  $("[data-a=no]", s.el).addEventListener("click", () => s.close());
+  $("[data-a=ok]", s.el).addEventListener("click", async () => {
+    const tally = { type: 0, dongCommons: 0, commons: 0 }; const uniq = (a) => [...new Set(a.filter(Boolean))];
+    if (!Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS];
+    busy(true, "실 목록 저장 중…");
+    for (const [gi, g] of groups.entries()) {
+      const box = $(`.rv-plan[data-g="${gi}"]`, s.el);
+      const picked = $$(".rv-it", box).map((it) => ({ on: $("input[type=checkbox]", it).checked, name: $("input[type=text]", it).value.trim().slice(0, 20), ci: $("input[type=checkbox]", it).dataset.ci })).filter((x) => x.on && x.name);
+      const names = uniq(picked.map((x) => x.name));
+      if (g.t.k === "type") { p.roomsByType = p.roomsByType || {}; const before = p.roomsByType[g.pl.utype] || []; p.roomsByType[g.pl.utype] = uniq([...before, ...names]); tally.type += p.roomsByType[g.pl.utype].length - before.length; }
+      else { const arr = g.t.k === "dongCommons" ? p.dongCommons : p.commons; const add = names.filter((x) => !arr.includes(x)); arr.push(...add); tally[g.t.k] += add.length; }
+      // 좌표: 체크한 실(이름 고친 것 포함)을 도면에 저장 → 하자 등록 때 그 실 고르면 도면 핀을 그 자리에
+      g.pl.rooms = uniq(picked.map((x) => x.name)).map((name) => { const x = picked.find((y) => y.name === name); const c = /^q/.test(x.ci) ? null : g.cands[Number(x.ci)]; return c ? { name, x: c.x, y: c.y } : { name }; });
+      await db.put("plans", g.pl);
+    }
+    await saveProject(p); busy(false); await s.close();
+    toast(`실 목록 추가: 평형별 ${tally.type} · 동 공용부 ${tally.dongCommons} · 단지 공용 ${tally.commons}`, { ms: 4000 }); rerender();
+  });
+}
 function planEdit(pl, isNew = false) {
   const p = P();
   const s = openSheet({ title: isNew ? "도면 추가" : "도면 수정", full: true,
     html: `<div class="plan mini"><img id="pe-img" alt="도면"></div>
       <label class="fld"><span>이름</span><input class="inp" id="pe-name" value="${esc(pl.name)}" placeholder="예: 84A 기준층"></label>
       <div class="fld"><span>적용 동 <small>(아무것도 안 고르면 전체 동)</small></span><div class="chips wrap" id="pe-dongs">${p.dongs.map((d) => `<button type="button" class="chip ${pl.dongs?.includes(d.name) ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div></div>
-      <label class="fld"><span>적용 층 <small>(예: 3-25, B2-B1 · 비우면 전체)</small></span><input class="inp" id="pe-floors" value="${esc(pl.floors || "")}" placeholder="3-25"></label>`,
+      <label class="fld"><span>적용 층 <small>(예: 3-25, B2-B1 · 비우면 전체)</small></span><input class="inp" id="pe-floors" value="${esc(pl.floors || "")}" placeholder="3-25"></label>
+      <label class="fld"><span>세대 평형 <small>(세대 평면도일 때: 예 84A · 비우면 동·층 도면)</small></span><input class="inp" id="pe-utype" value="${esc(pl.utype || "")}" placeholder="84A"></label>`,
     footer: `${isNew ? "" : '<button type="button" class="btn btn-danger" data-a="del">삭제</button>'}<button type="button" class="btn btn-primary" data-a="save">저장</button>` });
   const u = URL.createObjectURL(pl.blob); $("#pe-img", s.el).src = u; s.onClose = () => URL.revokeObjectURL(u);
   $("#pe-dongs", s.el).addEventListener("click", (e) => { const b = e.target.closest("[data-d]"); if (b) b.classList.toggle("on"); });
   $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.a === "del") { await db.del("plans", pl.id); S.plans = S.plans.filter((x) => x.id !== pl.id); }
-    else { Object.assign(pl, { name: $("#pe-name", s.el).value.trim() || "평면도", dongs: $$("#pe-dongs .chip.on", s.el).map((x) => x.dataset.d), floors: $("#pe-floors", s.el).value.trim() });
+    else { Object.assign(pl, { name: $("#pe-name", s.el).value.trim() || "평면도", dongs: $$("#pe-dongs .chip.on", s.el).map((x) => x.dataset.d), floors: $("#pe-floors", s.el).value.trim(), utype: M.normType($("#pe-utype", s.el).value) });
       await db.put("plans", pl); const i = S.plans.findIndex((x) => x.id === pl.id); if (i >= 0) S.plans[i] = pl; else S.plans.push(pl); }
     await s.close(); rerender();
   }));
@@ -1584,7 +1869,7 @@ async function runImport(addDongs) {
   for (const d of res.toPut) { const o = byId.get(d.id); if (o) undo.prev.push(o); else undo.added.push(d.id); }
   await db.setMeta("importUndo", undo);
   await db.putMany("defects", res.toPut); for (const v of res.newVendors) await saveVendor(v);
-  Object.assign(p, { dongs: pcopy.dongs, dongCommons: pcopy.dongCommons, commons: pcopy.commons }); await saveProject(p);
+  Object.assign(p, { dongs: pcopy.dongs, dongCommons: pcopy.dongCommons, commons: pcopy.commons, ...(pcopy.unitTypes ? { unitTypes: pcopy.unitTypes } : {}) }); await saveProject(p);
   const maps = await db.getMeta("importMaps", {}); maps[imp.sig] = { map: imp.map, defCat: imp.defCat, at: new Date().toISOString() }; await db.setMeta("importMaps", maps);
   hist.push({ at: undo.at, file: imp.file, projectId: p.id, sig: imp.sig, ...st }); await db.setMeta("imports", hist.slice(-20));
   S.defects = await db.getAll("defects"); busy(false); S.imp = null; requestPersist();

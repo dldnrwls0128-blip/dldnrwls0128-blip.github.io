@@ -1,5 +1,5 @@
 /** 범용 엑셀/CSV 가져오기: 열 매핑(자동 추정 + 저장), 외부ID 기준 병합(내 수정 유지) */
-import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong, DEFAULT_DONG_COMMONS } from "./model.js";
+import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong, DEFAULT_DONG_COMMONS, normType, unitKey } from "./model.js";
 
 export const FIELDS = [
   { key: "extId", label: "외부 ID(순번·접수번호)", syn: ["순번", "번호", "접수번호", "id", "no", "하자번호", "관리번호"] },
@@ -18,6 +18,7 @@ export const FIELDS = [
   { key: "createdAt", label: "접수일", syn: ["접수일", "등록일", "접수일자", "date"] },
   { key: "due", label: "조치기한", syn: ["조치기한", "기한", "완료예정일", "due"] },
   { key: "category", label: "구분", syn: ["구분", "단계", "접수구분"] },
+  { key: "utype", label: "평형(타입)", syn: ["평형", "타입", "주택형", "평형타입", "세대타입", "주택타입"] },
 ];
 const norm = (s) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
 export function headerSignature(headers) { return headers.map(norm).filter(Boolean).join("|"); }
@@ -107,7 +108,7 @@ export function rowsToRecords(rows, headerRow, map, { project, defaultCategory =
       room: common && g(r, "room") === common ? "" : g(r, "room"), part: g(r, "part"), trade: g(r, "trade"), subTrade: g(r, "subTrade"), type: g(r, "type"),
       content, vendorName: g(r, "vendorName"), status: mapStatus(g(r, "status")),
       createdAt: created ? new Date(created + "T09:00:00").toISOString() : new Date().toISOString(),
-      due: toDate(g(r, "due")), category: mapCategory(g(r, "category"), defaultCategory),
+      due: toDate(g(r, "due")), category: mapCategory(g(r, "category"), defaultCategory), utype: normType(g(r, "utype")),
     });
   }
   return out;
@@ -158,6 +159,8 @@ export function mergeRecords({ project, existing, records, vendors, addMissingDo
       project.dongs.push({ id: uid("d"), name, alias: Number.isFinite(num) ? aliasOf(num) : "", floors: 15, lines: 4, basement: 2, unitStart: 1, roof: true, skipLines: "", ...(dv || {}) }); delete project.dongs.at(-1).dropped;
     }
   }
+  // 평형 열이 있으면 세대(동|호) → 평형 기억: 도면의 평형별 실 목록·평면도 고르기에 사용
+  for (const r of records) { if (!r.utype || !r.dong || !r.ho) continue; project.unitTypes = project.unitTypes || {}; project.unitTypes[unitKey(r.dong, r.ho)] = r.utype; }
   // 가져온 공용부 이름을 현장 목록에 추가(동 있는 건 → 동 공용부, 동 없는 건 → 단지 공용)
   if (!Array.isArray(project.dongCommons)) project.dongCommons = [...DEFAULT_DONG_COMMONS];
   if (!Array.isArray(project.commons)) project.commons = [];

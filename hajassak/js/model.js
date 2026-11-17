@@ -180,6 +180,8 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || d.common : d.common !== f.common)) return false;
     if (f.floor && (f.floor === "_none" ? d.floor || d.ho : (d.floor || floorOfHo(d.ho)) !== f.floor)) return false;
     if (f.trade && d.trade !== f.trade) return false;
+    if (f.turn && !isTurnOf(d, f.turn)) return false;
+    if (f.chain && !hasSteps(d)) return false;
     if (f.vendorId && (f.vendorId === "_none" ? d.vendorId : d.vendorId !== f.vendorId)) return false;
     if (f.type && d.type !== f.type) return false;
     if (f.category && d.category !== f.category) return false;
@@ -187,13 +189,13 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.status === "_open" ? !isOpen(d) : f.status && d.status !== f.status) return false;
     if (f.overdue && !isOverdue(d, today)) return false;
     if (text) {
-      const hay = `${d.dong} ${d.ho} ${d.floor ? floorLabel(d.floor) : ""} ${d.common || ""} ${d.locEtc || ""} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
+      const hay = `${d.dong} ${d.ho} ${d.floor ? floorLabel(d.floor) : ""} ${d.common || ""} ${d.locEtc || ""} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${(d.steps || []).map((x) => x.trade).join(" ")} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
       if (!hay.includes(text)) return false;
     }
     return true;
   });
 }
-export const filterCount = (f) => ["dong", "ho", "common", "floor", "trade", "vendorId", "type", "category", "severity", "status", "overdue", "text"].filter((k) => f[k]).length;
+export const filterCount = (f) => ["dong", "ho", "common", "floor", "trade", "turn", "chain", "vendorId", "type", "category", "severity", "status", "overdue", "text"].filter((k) => f[k]).length;
 
 export function countBy(list, key) {
   const m = new Map();
@@ -309,3 +311,100 @@ export function heatLegend(t) {
   return out;
 }
 export const heatLegendText = (t) => heatLegend(t).filter((x) => x.lv).map((x) => x.label).join(" · ");
+
+/* ---------- 1.0.8 후속 공정(공정 단계) ---------- */
+/** 한 하자를 여러 공종이 차례로 고치는 경우(예: 석고보드 교체 → 도배). d.steps = [{id, trade, vendorId, status, due, sentAt, doneAt, own}] */
+export const STEP_STATUSES = ["대기", "전달", "조치중", "완료"];
+export const STEP_CLS = { 대기: "s0", 전달: "s1", 조치중: "s2", 완료: "s3" };
+export const DEFAULT_STEP_TEMPLATES = [
+  { name: "도배 찢김", steps: ["석고보드 교체", "도배"] },
+  { name: "바닥 파손", steps: ["미장", "마루"] },
+  { name: "누수", steps: ["방수", "석고보드", "도배"] },
+];
+export const stepTemplatesOf = (p) => (Array.isArray(p?.stepTemplates) ? p.stepTemplates : DEFAULT_STEP_TEMPLATES);
+export const hasSteps = (d) => Array.isArray(d?.steps) && d.steps.length > 1;
+export const stepsDone = (d) => (hasSteps(d) ? d.steps.filter((s) => s.status === "완료").length : 0);
+export const curStepIdx = (d) => (hasSteps(d) ? d.steps.findIndex((s) => s.status !== "완료") : -1);
+export const curStep = (d) => { const i = curStepIdx(d); return i >= 0 ? d.steps[i] : null; };
+export const stepProgress = (d) => (hasSteps(d) ? `${stepsDone(d)}/${d.steps.length} 단계` : "");
+export const stepsText = (d) => (hasSteps(d) ? d.steps.map((s) => `${s.trade}(${s.status})`).join(" → ") : "");
+/** 지금 차례인 업체(공정이 없으면 하자 업체) */
+export const turnVendorId = (d) => (hasSteps(d) ? curStep(d)?.vendorId || "" : d.vendorId || "");
+/** 이 업체 차례로 기다리는 미조치 하자 */
+export const isTurnOf = (d, vid) => isOpen(d) && turnVendorId(d) === vid && (!hasSteps(d) || curStep(d)?.status !== "완료");
+/** 이 업체가 뒤 공정에 있어 앞 공정을 기다리는 하자 */
+export const isLaterOf = (d, vid) => hasSteps(d) && isOpen(d) && turnVendorId(d) !== vid && d.steps.slice(curStepIdx(d) + 1).some((s) => s.vendorId === vid);
+export const templatesText = (list) => list.map((t) => `${t.name}: ${t.steps.join(" → ")}`).join("\n");
+export function parseTemplates(text) {
+  const out = [];
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const m = line.match(/^\s*([^:：]+?)\s*[:：]\s*(.+)$/); if (!m) continue;
+    const steps = m[2].split(/\s*(?:→|->|>|,|·)\s*/).map((s) => s.trim()).filter(Boolean).slice(0, 8);
+    if (steps.length) out.push({ name: m[1].trim().slice(0, 20), steps });
+  }
+  return out;
+}
+/** 다음 공정 업체에 보낼 문구 */
+export function stepMessage({ project, d, step, prev, appName = "하자싹" }) {
+  const loc = locText(d) || "위치 미지정";
+  return [`[${project?.name || "현장"}] 후속 공정 요청 — ${step.trade}`, "", `■ ${loc}`,
+    `- ${tradeText(d)}${d.type ? " [" + d.type + "]" : ""} ${d.content || ""}`.replace(/\s+/g, " ").trim(),
+    prev ? `- 앞 공정 ‘${prev.trade}’ 완료${prev.doneAt ? ` (${prev.doneAt.slice(5, 10).replace("-", "/")})` : ""}` : "",
+    `- 이번 공정: ${step.trade}${step.due ? ` (기한 ${step.due.slice(5).replace("-", "/")})` : ""}`,
+    "", `조치 후 사진 회신 부탁드립니다. — ${appName}`].filter((x, i, a) => x !== "" || a[i - 1] !== "").join("\n");
+}
+
+/* ---------- 1.0.8 평형(타입)·도면 ---------- */
+/** ‘84.97A’, ‘84㎡A’, ‘84A타입’ → ‘84A’ */
+export function normType(s) {
+  const t = String(s || "").replace(/㎡|m2|타입|type|형|평|\s/gi, "").toUpperCase();
+  const m = t.match(/^(\d+)(?:\.\d+)?([A-Z]*)$/); return m ? m[1] + m[2] : t;
+}
+export const unitKey = (dong, ho) => `${dong}|${normHo(ho) || ho}`;
+export const unitTypeOf = (p, dong, ho) => (dong && ho ? normType(p?.unitTypes?.[unitKey(dong, ho)] || "") : "");
+/** 실 목록: 세대 평형을 알면 그 평형 실 먼저 */
+export function roomsFor(p, dong, ho) {
+  const t = unitTypeOf(p, dong, ho); const tr = t ? p.roomsByType?.[t] || [] : [];
+  return { type: tr.length ? t : "", rooms: [...new Set([...tr, ...(p.rooms || [])])] };
+}
+/** 파일 이름으로 동·층·평형 추측: 301동_기준층 → 동, 지하주차장_B1 → 층 B1, 84A_세대평면 → 평형 84A(전체 동) */
+export function guessPlan(fileName, p) {
+  const base = String(fileName).split("/").pop().replace(/\.[a-z0-9]+$/i, "");
+  const g = { name: base.slice(0, 40), dongs: [], floors: "", utype: "" };
+  const dm = [...base.matchAll(/(\d{2,4})\s*동/g)].map((m) => m[1] + "동");
+  if (dm.length) g.dongs = [...new Set(dm)].filter((x) => !p?.dongs?.length || p.dongs.some((d) => d.name === x) || true);
+  const fm = base.match(/(?:^|[_\-\s])(B\d{1,2}|지하\d{1,2}|\d{1,2}F|\d{1,2}층)(?=$|[_\-\s.])/i);
+  if (fm) { const f = normFloor(fm[1].replace(/F$/i, "")); if (f) g.floors = f; }
+  const fr = base.match(/(?:^|[_\-\s])(B?\d{1,2})\s*[-~]\s*(B?\d{1,2})층?(?=$|[_\-\s])/i); if (fr && !dm.some((x) => fr[0].includes(x.replace("동", "")))) g.floors = `${fr[1].toUpperCase()}-${fr[2].toUpperCase()}`;
+  if (/세대|평면|타입|unit/i.test(base) && !dm.length) { const tm = base.match(/^(\d{2,3}(?:\.\d+)?[A-Z]{0,2})(?=[_\-\s]|타입|형|$)/i); if (tm) g.utype = normType(tm[1]); }
+  return g;
+}
+/** 매핑 표(TSV/CSV): file, dongs, floors, name, (평형) */
+export function parseMapping(text) {
+  const lines = String(text || "").replace(/^\uFEFF/, "").split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return new Map();
+  const sep = lines[0].includes("\t") ? "\t" : ",";
+  const split = (l) => { if (sep === "\t") return l.split("\t"); const out = []; let cur = "", q = false; for (const ch of l) { if (ch === '"') q = !q; else if (ch === "," && !q) { out.push(cur); cur = ""; } else cur += ch; } out.push(cur); return out; };
+  const head = split(lines[0]).map((h) => h.trim().toLowerCase());
+  const col = (...names) => head.findIndex((h) => names.includes(h));
+  const ci = { file: col("file", "파일", "파일명", "filename"), dongs: col("dongs", "dong", "동"), floors: col("floors", "floor", "층"), name: col("name", "이름", "도면명"), utype: col("type", "utype", "평형", "타입") };
+  if (ci.file < 0) return new Map();
+  const m = new Map();
+  for (const l of lines.slice(1)) {
+    const c = split(l).map((x) => x.trim()); const f = c[ci.file]; if (!f) continue;
+    m.set(f.split("/").pop(), { dongs: ci.dongs >= 0 && c[ci.dongs] ? c[ci.dongs].split(/[,\s]+/).filter(Boolean).map((x) => (/^\d+$/.test(x) ? x + "동" : x)) : [], floors: ci.floors >= 0 ? (c[ci.floors] || "").replace(/\s+/g, "") : "", name: ci.name >= 0 ? c[ci.name] || "" : "", utype: ci.utype >= 0 ? normType(c[ci.utype] || "") : "" });
+  }
+  return m;
+}
+/** rooms.json의 실 이름 정리: 기본 체크 여부(라인·동 번호·기호 등은 끔) */
+export function roomCandidates(rooms, { evac = true } = {}) {
+  const by = new Map();
+  for (const r of rooms || []) {
+    let name = String(r.name || "").trim(); if (!name) continue;
+    if (evac && name === "하향식피난구") name = "대피공간";
+    if (!by.has(name)) by.set(name, { name, x: r.x, y: r.y, n: 0, conf: r.confidence ?? 1 });
+    by.get(name).n++;
+  }
+  const noise = (n) => /^\d+라인$/.test(n) || /^\d{2,4}동/.test(n) || /^[A-Z]{1,4}$/.test(n) || /^(TPS|AV\/PD|DA|PIT|ELEV)$/i.test(n) || n.length < 2;
+  return [...by.values()].map((c) => ({ ...c, on: !noise(c.name) && c.conf >= 0.5 }));
+}
