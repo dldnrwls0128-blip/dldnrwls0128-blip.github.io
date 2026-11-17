@@ -31,6 +31,21 @@ const PULL_COLLS = ["b", ...BLOB_COLLS];
 function hashId(id) { let h = 2166136261; const t = String(id); for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
 const bucketOf = (store, id) => `${store}~${hashId(id) % NB[store]}`;
 const PUSH_TIMEOUT = 90_000;
+/* 1.1.1: 한 번에 올리는 양을 줄여(느린 휴대폰 연결에서도 한 묶음이 끝나게) 조금씩 자주 커밋 */
+const BATCH_BYTES = 1_500_000;       // 커밋 1회 데이터 상한(UTF-8 기준, 사진은 base64로 늘어나니 여유 있게)
+const DAY_WRITE_BUDGET = 18_000;     // 무료 Spark 하루 쓰기 2만 회 중 이 기기가 쓸 상한(태평양 자정 = 한국 오후 4~5시에 초기화)
+const SYNC_PHOTO_MAX = 180_000;      // 이보다 큰 사진은 올릴 때만 1280px로 줄여 올림(이 기기 원본은 그대로)
+const u8len = (s) => { let n = 0; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); n += c < 0x80 ? 1 : c < 0x800 ? 2 : (c >= 0xd800 && c < 0xdc00) ? (i++, 4) : 3; } return n; };
+/** 할당량 기준 날짜(미국 태평양 시간) */
+const quotaDay = () => { try { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date()); } catch { return new Date(Date.now() - 8 * 3600e3).toISOString().slice(0, 10); } };
+/** 다음 초기화 시각(한국 시간 문자열) */
+export function quotaResetText() {
+  const day = quotaDay(); let t = Date.now();
+  for (let i = 0; i < 26 * 4; i++) { t += 15 * 60e3; try { if (new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(new Date(t)) !== day) break; } catch { break; } }
+  const d = new Date(t); return `${d.getHours() >= 12 ? "오후" : "오전"} ${((d.getHours() + 11) % 12) + 1}시쯤`;
+}
+function writesToday() { const w = LS.get("sync.writes", null); return w && w.day === quotaDay() ? w.n : 0; }
+function addWrites(n) { const day = quotaDay(); const w = LS.get("sync.writes", null); LS.set("sync.writes", { day, n: (w && w.day === day ? w.n : 0) + n }); }
 const INLINE_MAX = 900_000;  // 한 문서에 넣을 블롭 합계 상한(Firestore 문서 1MB)
 const CHUNK = 900_000;
 const LS = { get: (k, d) => { try { return JSON.parse(localStorage.getItem("hs:" + k)) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem("hs:" + k, JSON.stringify(v)); } catch {} } };
@@ -44,6 +59,7 @@ const st = {
   phase: "off",          // off | loading | ready | error
   pending: 0, pushing: false, pulling: 0, lastSync: 0, err: "",
   unsubs: [], listeners: new Set(), onRemote: null, onTeam: null, emu: false,
+  pendingBy: {}, quota: "", quotaMsg: "", slowWhy: "",
 };
 export const state = st;
 export const attached = () => !!(st.ws && db.DB_NAME === db.wsDbName(st.ws.id));
@@ -61,7 +77,8 @@ export function status() {
   if (st.phase === "off" || st.phase === "needauth") return { key: "login", label: "로그인 필요", detail: st.email };
   if (!online) return { key: "offline", label: `오프라인 · 대기 ${st.pending}건`, n: st.pending };
   const nf = (n) => Number(n).toLocaleString("ko-KR");
-  if (st.slow) return { key: "busy", label: `업로드 지연 · 대기 ${nf(st.pending)}건`, n: st.pending, detail: "오늘 무료 쓰기 한도를 넘었거나 연결이 불안정해요. 이 기기 데이터는 안전하게 남아 있고, 앱을 켜 두면 자동으로 이어서 올라가요(무료 한도는 매일 오후 5시쯤 초기화)." };
+  if (st.quota && st.pending) return { key: "busy", label: `무료 한도 대기 · ${nf(st.pending)}건`, n: st.pending, quota: st.quota, detail: `${st.quota === "budget" ? `오늘 이 기기의 업로드 한도(${nf(DAY_WRITE_BUDGET)}회)를 다 써서 쉬는 중이에요` : "Firebase 무료 사용량을 넘었다고 서버가 알려 왔어요"}. 이 기기 데이터는 안전하게 남아 있고, ${quotaResetText()}(한국 시간) 한도가 초기화되면 앱을 켜 두는 동안 자동으로 이어서 올려요.${st.quotaMsg ? " (" + st.quotaMsg + ")" : ""}` };
+  if (st.slow) return { key: "busy", label: `업로드 지연 · 대기 ${nf(st.pending)}건`, why: st.slowWhy, n: st.pending, detail: (st.slowWhy === "network" ? "인터넷이 느리거나 불안정해서 오래 걸려요(무료 한도 문제는 아니에요). 와이파이에서 앱을 켜 두세요. " : "오늘 무료 쓰기 한도를 넘었거나 연결이 불안정해요. ") + `이 기기 데이터는 안전하게 남아 있고, 앱을 켜 두면 자동으로 이어서 올라가요(무료 한도는 매일 ${quotaResetText()} 초기화).` };
   if (st.pushing && st.pushTotal > 20) return { key: "busy", label: `올리는 중 ${nf(Math.min(st.pushDone, st.pushTotal))}/${nf(st.pushTotal)}`, n: st.pending };
   if (st.pulling && st.pullTotal > 3) return { key: "busy", label: `받는 중 ${nf(Math.min(st.pullDone || 0, st.pullTotal))}/${nf(st.pullTotal)}묶음`, n: st.pending };
   if (st.phase === "loading" || st.pushing || st.pulling || st.pending) return { key: "busy", label: st.pending ? `동기화 중 · ${nf(st.pending)}건` : "동기화 중", n: st.pending };
@@ -333,7 +350,35 @@ export async function localCounts(name = db.LOCAL_DB) {
 }
 
 /* ---------- 위로(업로드) ---------- */
-async function refreshPending() { try { st.pending = await db.count("outbox"); } catch { st.pending = 0; } emit(); }
+async function refreshPending() {
+  try { const d = await db.openDb(); const keys = await new Promise((res, rej) => { const r = d.transaction("outbox").objectStore("outbox").getAllKeys(); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    st.pending = keys.length; const by = {}; for (const k of keys) { const s0 = String(k).split("/")[0]; by[s0] = (by[s0] || 0) + 1; } st.pendingBy = by;
+  } catch { try { st.pending = await db.count("outbox"); } catch { st.pending = 0; } }
+  emit();
+}
+/** 대기 건 종류별 요약: "사진 5,000 · 하자 300 · 도면 2" */
+export function pendingText() {
+  const KO = { photos: "사진", defects: "하자", plans: "도면", projects: "현장", vendors: "업체", meta: "설정" };
+  return Object.entries(st.pendingBy || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${KO[k] || k} ${Number(n).toLocaleString("ko-KR")}`).join(" · ");
+}
+/** 업로드가 오래 걸릴 때 원인 확인: 작은 시험 쓰기를 REST로 직접 보내 ‘한도 초과(429)’인지 ‘연결 문제’인지 가린다(10분에 한 번) */
+let _probeAt = 0;
+export async function probe(force = false) {
+  if (!st.user || (!force && Date.now() - _probeAt < 600_000)) return st.slowWhy; _probeAt = Date.now();
+  if (navigator.onLine === false) { st.slowWhy = "offline"; emit(); return st.slowWhy; }
+  try {
+    const tok = await st.user.getIdToken();
+    const base = st.emu ? "http://127.0.0.1:8080" : "https://firestore.googleapis.com";
+    const name = `projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents/users/${st.uid}/meta/probe`;
+    const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), 20_000);
+    const r = await fetch(`${base}/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents:commit`, { method: "POST", signal: ctl.signal, headers: { "Content-Type": "application/json", Authorization: "Bearer " + tok },
+      body: JSON.stringify({ writes: [{ update: { name, fields: { at: { integerValue: String(Date.now()) }, dev: { stringValue: db.deviceId() } } } }] }) }).finally(() => clearTimeout(to));
+    addWrites(1);
+    if (r.status === 429 || r.status === 403) { const j = await r.json().catch(() => ({})); const msg = j?.error?.message || ""; if (r.status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(msg + (j?.error?.status || ""))) { st.slowWhy = "quota"; st.quota = "server"; st.quotaMsg = msg.slice(0, 120); } else st.slowWhy = "denied"; }
+    else st.slowWhy = r.ok ? "network" : "error" + r.status;
+  } catch (e) { st.slowWhy = e?.name === "AbortError" ? "network" : "network"; }
+  emit(); return st.slowWhy;
+}
 let _pushT = 0;
 function pushSoon(ms = 400) { if (!st.user || !attached() || st.removed) return; clearTimeout(_pushT); _pushT = setTimeout(() => push().catch(fail), ms); }
 const ref = (coll, id) => st.F.doc(st.fs, "workspaces", st.ws.id, coll, String(id));
@@ -354,12 +399,32 @@ async function toDoc(coll, v) {
 }
 const packVal = (v) => JSON.stringify(v, (k, x) => (x instanceof Blob || typeof x === "function" ? undefined : x));
 /** 커밋이 오래 안 끝나면(무료 한도 초과·연결 불안정) 상태에 표시. 커밋 자체는 SDK가 계속 재시도하므로 기다린다. */
-async function commitWatched(batch) {
-  let slow = setTimeout(() => { st.slow = true; emit(); }, PUSH_TIMEOUT);
-  try { await batch.commit(); } finally { clearTimeout(slow); if (st.slow) { st.slow = false; emit(); } }
+async function commitWatched(batch, ops = 1) {
+  let slow = setTimeout(() => { st.slow = true; emit(); probe().catch(() => {}); }, PUSH_TIMEOUT);
+  try { await batch.commit(); addWrites(ops); if (st.quota === "server") { st.quota = ""; st.quotaMsg = ""; } }
+  catch (e) { if (e?.code === "resource-exhausted") { st.quota = "server"; st.quotaMsg = String(e.message || "").slice(0, 120); emit(); } throw e; }
+  finally { clearTimeout(slow); if (st.slow) { st.slow = false; st.slowWhy = st.slowWhy === "quota" ? "quota" : ""; emit(); } }
 }
+/** 올릴 때만 쓰는 작은 사진(원본은 이 기기에 그대로). 실패하면 원본 그대로 */
+async function syncPhotoCopy(v) {
+  const f = v.blob || v.data || v.image; const key = v.blob ? "blob" : v.data ? "data" : v.image ? "image" : "";
+  if (!key || !(f instanceof Blob) || f.size <= SYNC_PHOTO_MAX || !/^image\/(jpeg|png|webp)/.test(f.type || "image/jpeg")) return v;
+  try {
+    const bmp = await createImageBitmap(f); const sc = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+    const w = Math.round(bmp.width * sc), h = Math.round(bmp.height * sc);
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h; cv.getContext("2d").drawImage(bmp, 0, 0, w, h); bmp.close?.();
+    const out = await new Promise((r) => cv.toBlob(r, "image/jpeg", 0.62));
+    if (out && out.size < f.size * 0.85) return { ...v, [key]: out };
+  } catch { /* 원본 그대로 */ }
+  return v;
+}
+let _quotaT = 0;
 async function push() {
   if (st.pushing || !st.user || !attached() || st.removed) return;
+  if (writesToday() >= DAY_WRITE_BUDGET) { // 이 기기의 오늘 쓰기 한도 → 초기화 후 다시
+    st.quota = "budget"; emit(); clearTimeout(_quotaT); _quotaT = setTimeout(() => { if (writesToday() < DAY_WRITE_BUDGET) { st.quota = ""; pushSoon(0); } else push().catch(fail); }, 15 * 60e3); return;
+  }
+  if (st.quota === "budget") st.quota = "";
   st.pushing = true; st.pushDone = 0; st.pushTotal = await db.count("outbox").catch(() => 0); emit();
   let vnames = null;
   try {
@@ -375,7 +440,7 @@ async function push() {
       const pre = new Map(); { const by = {}; for (const e of all.slice(0, 12000)) if (PACKED.has(e.store) && !e.del) (by[e.store] ||= []).push(e.id);
         for (const [store, ids] of Object.entries(by)) { const vals = await db.getMany(store, ids); ids.forEach((id, k) => pre.set(store + "/" + id, vals[k] || null)); } }
       for (const e of all) {
-        if (ops >= 450 || bytes > 6_000_000) break;
+        if (ops >= 450 || bytes > BATCH_BYTES || writesToday() + ops >= DAY_WRITE_BUDGET) break;
         if (PACKED.has(e.store)) {
           const bid = bucketOf(e.store, e.id); let b = buckets.get(bid);
           if (!b) { if (ops >= 450) break; b = { store: e.store, items: {} }; buckets.set(bid, b); ops++; }
@@ -389,17 +454,18 @@ async function push() {
             }
             val = packVal(v);
           }
-          b.items[e.id] = val; bytes += val.length + 40; used.push(e); continue;
+          b.items[e.id] = val; bytes += u8len(val) + 40; used.push(e); continue;
         }
         if (e.del) {
           batch.set(ref(e.store, e.id), { _del: true, _u: e.at, _dev: db.deviceId(), _su: F.serverTimestamp() }); ops++;
           for (const [f, size] of Object.entries(e.blobSizes || {})) { const tot = Object.values(e.blobSizes).reduce((a, b) => a + b, 0); if (tot > INLINE_MAX) for (let i = 0; i < Math.ceil(size / CHUNK); i++) { batch.delete(ref("chunks", chunkId(e.store, e.id, f, i))); ops++; } }
         } else {
-          const v = await db.get(e.store, e.id);
+          let v = await db.get(e.store, e.id);
           if (!v) { used.push(e); continue; } // 그사이 지워짐(삭제 항목이 따로 있음)
+          if (e.store === "photos") v = await syncPhotoCopy(v);
           const d = await toDoc(e.store, v);
-          if (used.length && bytes + d.bytes > 6_000_000) break;
-          batch.set(ref(e.store, e.id), d.data); ops++; bytes += d.bytes;
+          if (used.length && bytes + d.bytes * 1.37 > BATCH_BYTES) break; // Bytes는 base64로 전송(≈1.37배)
+          batch.set(ref(e.store, e.id), d.data); ops++; bytes += d.bytes * 1.37;
           for (const c of d.chunks) { batch.set(ref("chunks", c.id), { o: e.store + "/" + e.id, b: c.b, _u: v._u || e.at }); ops++; }
         }
         used.push(e);
@@ -410,7 +476,11 @@ async function push() {
         const fields = ["s", "_su", ...Object.keys(b.items).map((id) => new F.FieldPath("i", String(id)))];
         batch.set(ref("b", bid), data, { mergeFields: fields });
       }
-      if (ops) await commitWatched(batch); // 오프라인이면 연결될 때까지 대기
+      if (!ops && !used.length) { // 오늘 한도에 닿음
+        if (writesToday() >= DAY_WRITE_BUDGET - 1) { st.quota = "budget"; clearTimeout(_quotaT); _quotaT = setTimeout(() => push().catch(fail), 15 * 60e3); }
+        break;
+      }
+      if (ops) await commitWatched(batch, ops); // 오프라인이면 연결될 때까지 대기
       // 커밋 중에 같은 항목이 다시 수정됐으면(at 변경) 남겨 둔다
       const d = await db.openDb(); const tx = d.transaction("outbox", "readwrite"); const os = tx.objectStore("outbox");
       for (const e of used) { const r = os.get(e.k); r.onsuccess = () => { if (r.result && r.result.at === e.at) os.delete(e.k); }; }

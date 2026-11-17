@@ -471,3 +471,86 @@ export function placeSpots(p, plans, place, floor = "") {
 }
 /** 도면이 있는 장소(현장 단지 공용 목록에 없어도 첫 화면에 보이게) */
 export const placesWithPlans = (p, plans) => [...new Set(plans.filter((pl) => pl.projectId === p.id && pl.rooms?.length).map((pl) => placeOf(pl, p)).filter(Boolean))];
+
+/* ---------- 1.1.1 업체 담당자 여러 명: v.contacts = [{name, role, phones[]}] ---------- */
+export const CONTACT_ROLES = ["소장", "반장", "과장", "대리", "팀장", "실장", "대표", "사무실", "기사"];
+/** 담당자 목록(옛 기록 person·phones는 첫 담당자로 읽음) */
+export function contactsOf(v) {
+  if (!v) return [];
+  if (Array.isArray(v.contacts) && v.contacts.length) return v.contacts.map((c) => ({ name: String(c.name || "").trim(), role: String(c.role || "").trim(), phones: (c.phones || []).filter(Boolean) }));
+  const phones = (v.phones || []).filter(Boolean);
+  return v.person || phones.length ? [{ name: String(v.person || "").trim(), role: "", phones }] : [];
+}
+/** 저장 전 정리: 빈 담당자 빼고, 옛 앱·다른 기기 호환용 person(첫 담당자)·phones(모든 번호)도 함께 */
+export function setContacts(v, list) {
+  const cs = (list || []).map((c) => ({ name: String(c.name || "").trim().slice(0, 30), role: String(c.role || "").trim().slice(0, 12), phones: [...new Set((c.phones || []).map(normPhone).filter(Boolean))] })).filter((c) => c.name || c.phones.length);
+  v.contacts = cs; v.person = cs[0]?.name || ""; v.phones = [...new Set(cs.flatMap((c) => c.phones))];
+  return v;
+}
+/** 담당자 표시 이름: ‘김철수 반장’ */
+export const contactLabel = (c) => [c?.name, c?.role].filter(Boolean).join(" ") || "담당자";
+/** 번호 하나하나: [{name, role, phone, label}] (문자·전화 고르기용) */
+export function vendorPhones(v) {
+  const out = [];
+  for (const c of contactsOf(v)) for (const ph of c.phones) out.push({ name: c.name, role: c.role, phone: ph, label: `${contactLabel(c)} ${ph}` });
+  return out;
+}
+/** 업체 한 줄 요약: ‘김반장 · 010-… 외 1명’ */
+export function contactSummary(v) {
+  const cs = contactsOf(v); if (!cs.length) return "";
+  const c = cs[0]; return [contactLabel(c) === "담당자" && !c.name ? "" : contactLabel(c), c.phones[0]].filter(Boolean).join(" · ") + (cs.length > 1 ? ` 외 ${cs.length - 1}명` : "");
+}
+/** 엑셀·요청서용: ‘김철수 반장 010-…; 이영희 소장 010-…’ */
+export const contactsText = (v) => contactsOf(v).map((c) => [contactLabel(c), c.phones.join(", ")].filter(Boolean).join(" ")).join("; ");
+const PH_RE = /(?:\+?82[-\s.]?)?0?1[016789][-\s.)]?\d{3,4}[-\s.]?\d{4}|0(?:2|[3-6]\d)[-\s.)]?\d{3,4}[-\s.]?\d{4}/g;
+const ROLE_RE = new RegExp(`(${CONTACT_ROLES.join("|")}|부장|차장|주임|사원|기사님|사장)`);
+/** 복사한 글(카톡 프로필·연락처 공유·문자 등)에서 이름과 전화번호 뽑기 → [{name, role, phones}] */
+export function parseContactText(text) {
+  const lines = String(text || "").replace(/\r/g, "").split(/[\n;]/).map((l) => l.trim()).filter(Boolean);
+  const out = []; let pendingName = "";
+  const clean = (s) => s.replace(PH_RE, " ").replace(/\[[^\]]*\]/g, " ").replace(/(연락처|카카오톡|전화번호|휴대폰번호|핸드폰번호)/g, " ").replace(/(^|\s)(이름|성명|담당자?|연락처|전화(번호)?|휴대폰|핸드폰|HP|H\.P|TEL|Tel|tel|M|Mobile|mobile|전화|번호|사무실|팩스|FAX|fax)\s*[:：]\s*/g, " ").replace(/^(이름|성명|담당자?|연락처|전화(번호)?|휴대폰|핸드폰|HP|H\.P|TEL|Tel|tel|M|Mobile|mobile|전화|번호)\s*[:：]?\s*/g, "").replace(/[<>()[\]{}"'‘’“”:：,·|/\\-]+/g, " ").replace(/\s+/g, " ").trim();
+  const okName = (r) => r && r.length <= 20 && /[가-힣A-Za-z]/.test(r) && !/https?:|www\.|카카오|공유|연락처를|프로필/.test(r);
+  const push = (name0, phones) => {
+    const rm = (name0 || "").match(ROLE_RE); const role = rm ? rm[1].replace(/님$/, "") : "";
+    const name = (name0 || "").replace(ROLE_RE, " ").replace(/님(?=\s|$)/g, "").replace(/\s+/g, " ").trim();
+    const prev = out.find((c) => c.name && c.name === name);
+    if (prev) { prev.phones.push(...phones.filter((p) => !prev.phones.includes(p))); if (!prev.role) prev.role = role; return prev; }
+    const c = { name, role, phones: [...new Set(phones)] }; out.push(c); return c;
+  };
+  const np = (m) => normPhone(m.replace(/^\+?82[-\s.]?/, "0").replace(/^00/, "0"));
+  for (const line of lines) {
+    if (!line.match(PH_RE)) { const rest = clean(line); if (okName(rest)) pendingName = rest; continue; }
+    // 한 줄에 여러 명: "김철수 010-… 이영희 010-…" → 번호마다 끊어 앞 글을 이름으로
+    const chunks = line.replace(PH_RE, (m) => m + "\u0001").split("\u0001");
+    const tail = clean(chunks.pop() || ""); let last = null; const lineOut = [];
+    for (const ch of chunks) {
+      const ph = np((ch.match(PH_RE) || [""]).pop()); const nm = clean(ch);
+      if (okName(nm)) { last = push(nm, [ph]); lineOut.push(last); }
+      else if (last) { if (!last.phones.includes(ph)) last.phones.push(ph); }
+      else { last = push(pendingName, [ph]); lineOut.push(last); }
+      pendingName = "";
+    }
+    // "010-1234-5678 김철수 반장"처럼 이름이 뒤에 오는 경우
+    if (okName(tail) && lineOut.length === 1 && !lineOut[0].name) { const rm = tail.match(ROLE_RE); lineOut[0].role = rm ? rm[1].replace(/님$/, "") : lineOut[0].role; lineOut[0].name = tail.replace(ROLE_RE, " ").replace(/님(?=\s|$)/g, "").replace(/\s+/g, " ").trim(); }
+  }
+  // 같은 이름 합치기(번호 없는 빈 항목 제거)
+  return out.filter((c) => c.name || c.phones.length);
+}
+/** vCard(.vcf) → [{name, role, phones, org}] — 휴대폰 연락처 앱 ‘공유 → vCard 파일’ */
+export function parseVcf(text) {
+  const raw = String(text || "").replace(/\r\n/g, "\n").replace(/\n[ \t]/g, ""); // 접힌 줄 펴기
+  const out = [];
+  for (const card of raw.split(/BEGIN:VCARD/i).slice(1)) {
+    const lines = card.split("\n"); const get = (key) => lines.filter((l) => new RegExp(`^(item\\d+\\.)?${key}[;:]`, "i").test(l));
+    const val = (l) => { const i = l.indexOf(":"); let v = i >= 0 ? l.slice(i + 1) : ""; const head = l.slice(0, i);
+      if (/ENCODING=QUOTED-PRINTABLE/i.test(head)) { const bytes = []; v = v.replace(/=\n/g, ""); for (let k = 0; k < v.length; k++) { if (v[k] === "=" && /^[0-9A-F]{2}$/i.test(v.substr(k + 1, 2))) { bytes.push(parseInt(v.substr(k + 1, 2), 16)); k += 2; } else bytes.push(v.charCodeAt(k)); } try { v = new TextDecoder("utf-8").decode(new Uint8Array(bytes)); } catch { /* 그대로 */ } }
+      return v.replace(/\\,/g, ",").replace(/\\;/g, ";").replace(/\\n/gi, " ").trim(); };
+    let name = get("FN").map(val)[0] || "";
+    if (!name) { const n = (get("N").map(val)[0] || "").split(";"); name = `${n[0] || ""}${n[1] || ""}`.trim(); }
+    const phones = [...new Set(get("TEL").map(val).map(normPhone).filter(Boolean))];
+    const title = get("TITLE").map(val)[0] || ""; const org = (get("ORG").map(val)[0] || "").replace(/;+$/, "").replace(/;/g, " ").trim();
+    const rm = `${title} ${name}`.match(ROLE_RE);
+    if (name || phones.length) out.push({ name: name.replace(ROLE_RE, " ").replace(/\s+/g, " ").trim() || name, role: rm ? rm[1].replace(/님$/, "") : title.slice(0, 12), phones, org });
+  }
+  return out;
+}

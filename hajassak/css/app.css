@@ -333,3 +333,13 @@ body.has-selbar #view{padding-bottom:132px}
 .rv-it{display:flex;align-items:center;gap:4px}.rv-it input[type=text]{flex:1;min-width:0;min-height:30px;padding:2px 6px;font-size:13px}
 .rv-quick{display:flex;flex-wrap:wrap;gap:4px}
 #lp h4.sub{font-size:12px;font-weight:600;color:var(--sub);margin:6px 0 3px}
+/* 1.1.1 담당자 여러 명 · 연락처 가져오기 */
+.warnbox{background:#fff7e6;border:1px solid #f3c56b;border-radius:10px;padding:10px 12px;color:#7a4b00}
+.vc-ed{padding:10px;margin:6px 0;display:flex;flex-direction:column;gap:6px}
+.vc-ed .row{gap:6px;align-items:center}.vc-ed [data-c=name]{flex:1.4;min-width:0}.vc-ed .vc-role{flex:1;min-width:0;max-width:110px}
+.vc-ed .vc-ph input{flex:1;min-width:0}.vc-ed [data-addph]{align-self:flex-start}
+.vcontact{padding:8px 0;border-top:1px solid var(--line,#e5e7eb)}.vcontact:first-of-type{border-top:0}.vcontact b small.tag{font-weight:500;font-size:12px;padding:1px 6px;border-radius:8px;background:#eef2ff;color:#3730a3}
+.cimp-opts{display:flex;flex-direction:column;gap:10px}.cimp-opts textarea{width:100%;min-height:96px}
+.ci-it{display:grid;grid-template-columns:auto 1.3fr 1fr;gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line,#e5e7eb)}
+.ci-it small{grid-column:2/4;color:var(--muted,#6b7280)}.ci-it .inp{min-width:0}
+.btn small{font-size:12px;opacity:.8}

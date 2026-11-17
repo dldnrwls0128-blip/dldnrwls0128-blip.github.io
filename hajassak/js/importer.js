@@ -1,5 +1,5 @@
 /** 범용 엑셀/CSV 가져오기: 열 매핑(자동 추정 + 저장), 외부ID 기준 병합(내 수정 유지) */
-import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong, DEFAULT_DONG_COMMONS, normType, unitKey } from "./model.js";
+import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong, DEFAULT_DONG_COMMONS, normType, unitKey, parseContactText, contactsOf, setContacts, normPhone } from "./model.js";
 
 export const FIELDS = [
   { key: "extId", label: "외부 ID(순번·접수번호)", syn: ["순번", "번호", "접수번호", "id", "no", "하자번호", "관리번호"] },
@@ -14,6 +14,8 @@ export const FIELDS = [
   { key: "type", label: "유형", syn: ["유형", "하자유형", "불량유형", "type"] },
   { key: "content", label: "내용", req: true, syn: ["하자내용", "내용", "상세내용", "불량내용", "description", "비고"] },
   { key: "vendorName", label: "업체", syn: ["시공업체명", "업체", "업체명", "협력업체", "시공사", "담당업체"] },
+  { key: "vendorPerson", label: "업체 담당자", syn: ["업체담당자", "현장대리인", "협력업체담당자", "업체담당"] },
+  { key: "vendorPhone", label: "업체 연락처", syn: ["업체담당자·연락처", "업체연락처", "업체전화번호", "협력업체연락처", "업체전화", "업체휴대폰"] },
   { key: "status", label: "처리상태", syn: ["처리상태", "상태", "진행상태", "status"] },
   { key: "createdAt", label: "접수일", syn: ["접수일", "등록일", "접수일자", "date"] },
   { key: "due", label: "조치기한", syn: ["조치기한", "기한", "완료예정일", "due"] },
@@ -106,7 +108,7 @@ export function rowsToRecords(rows, headerRow, map, { project, defaultCategory =
     out.push({
       extId: g(r, "extId"), dong, ho, floor: floor || floorOfHo(ho), common,
       room: common && g(r, "room") === common ? "" : g(r, "room"), part: g(r, "part"), trade: g(r, "trade"), subTrade: g(r, "subTrade"), type: g(r, "type"),
-      content, vendorName: g(r, "vendorName"), status: mapStatus(g(r, "status")),
+      content, vendorName: g(r, "vendorName"), vendorPerson: g(r, "vendorPerson"), vendorPhone: g(r, "vendorPhone"), status: mapStatus(g(r, "status")),
       createdAt: created ? new Date(created + "T09:00:00").toISOString() : new Date().toISOString(),
       due: toDate(g(r, "due")), category: mapCategory(g(r, "category"), defaultCategory), utype: normType(g(r, "utype")),
     });
@@ -121,15 +123,28 @@ export function mergeRecords({ project, existing, records, vendors, addMissingDo
   const key = (d) => (d.extId ? "x:" + d.extId : `k:${d.dong}|${d.ho}|${d.trade}|${d.content}`);
   const old = new Map(existing.filter((d) => d.projectId === project.id).map((d) => [key(d), d]));
   const vByName = new Map(vendors.map((v) => [norm(v.name), v]));
-  const newVendors = []; const toPut = []; const newDongs = new Set();
+  const newVendors = []; const updatedVendors = []; const toPut = [];
+  /** 엑셀의 담당자·연락처를 새 업체(또는 담당자가 비어 있던 업체)에 넣기 — 기존 담당자는 건드리지 않음 */
+  function addImportedContacts(v) {
+    const r = cur; let add = parseContactText(`${r.vendorPerson || ""} ${r.vendorPhone || ""}`.trim());
+    if (!add.length && r.vendorPerson) add = [{ name: r.vendorPerson, role: "", phones: [] }];
+    if (add.length === 1 && !add[0].name && r.vendorPerson && !/\d{3}/.test(r.vendorPerson)) add[0].name = r.vendorPerson;
+    const have = contactsOf(v); const phs = new Set(have.flatMap((c) => c.phones));
+    const fresh = add.filter((c) => !c.phones.length ? !have.some((h) => h.name === c.name) : c.phones.some((p) => !phs.has(normPhone(p))));
+    if (!fresh.length) return v;
+    if (!newVendors.includes(v) && !updatedVendors.includes(v)) { v = structuredClone(v); vByName.set(norm(v.name), v); updatedVendors.push(v); }
+    setContacts(v, [...have, ...fresh]); return v;
+  }
+  let cur = null; const newDongs = new Set();
   let added = 0, updated = 0, kept = 0, same = 0;
   const now = new Date().toISOString();
   for (const r of records) {
-    let vendorId = "";
+    cur = r; let vendorId = "";
     if (r.vendorName) {
       let v = vByName.get(norm(r.vendorName));
       if (!v) { v = { id: uid("v"), name: r.vendorName, person: "", phones: [], trades: r.trade ? [r.trade] : [], memo: "가져오기로 추가", createdAt: now }; vByName.set(norm(v.name), v); newVendors.push(v); }
       else if (r.trade && !v.trades.includes(r.trade) && newVendors.includes(v)) v.trades.push(r.trade);
+      if ((r.vendorPerson || r.vendorPhone) && (newVendors.includes(v) || !contactsOf(v).length || updatedVendors.includes(v))) v = addImportedContacts(v);
       vendorId = v.id;
     }
     if (r.dong && !findDong(project, dongNum(r.dong))) newDongs.add(r.dong);
@@ -191,7 +206,7 @@ export function mergeRecords({ project, existing, records, vendors, addMissingDo
       fitted.push({ name: d.name, unitStart: dv.unitStart, floors: dv.floors, floorCount: new Set(dv.units.map((h) => Math.floor(h / 100))).size, units: dv.units.length, lines: dv.lines, dropped, before });
     }
   }
-  return { toPut, newVendors, newDongs: [...newDongs], fitted, stats: { added, updated, kept, same, total: records.length } };
+  return { toPut, newVendors, updatedVendors, newDongs: [...newDongs], fitted, stats: { added, updated, kept, same, total: records.length } };
 }
 
 export async function parseFile(file) {

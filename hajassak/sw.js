@@ -1,4 +1,4 @@
-/* hajassak-v1.1.0 (build-deploy.sh가 version.js에서 찍음) */
+/* hajassak-v1.1.1 (build-deploy.sh가 version.js에서 찍음) */
 /* 하자싹 서비스 워커 — 앱 셸 캐시(오프라인). 사용자 데이터는 IndexedDB(+선택 시 Firebase 동기화)에 있고 SW는 캐시하지 않음. Firebase 요청(다른 도메인)은 가로채지 않음 */
 importScripts("./version.js"); // 버전 유일 출처
 const VERSION = self.HAJASSAK_VERSION || "0";

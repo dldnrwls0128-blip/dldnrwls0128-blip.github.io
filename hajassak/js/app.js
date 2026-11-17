@@ -3,7 +3,7 @@ import * as db from "./db.js";
 import * as M from "./model.js";
 import { $, $$, esc, n, toast, busy, initNav, go, replace, back, rerender, navDepth, pushLayer, closeLayer, unwind, openSheet, ask, prompt2, choose, pickFile } from "./ui.js";
 import { compressImage, downloadBlob, shareOrDownload, stampBlob } from "./photo.js";
-import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactPickerSupported, pickContacts, canShareFiles } from "./share.js";
+import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactPickerSupported, contactPickerInfo, pickContacts, canShareFiles } from "./share.js";
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
 import * as Sync from "./sync.js";
@@ -1000,7 +1000,7 @@ ROUTES.item = async (qq) => {
     <div class="act-row">${nx ? `<button type="button" class="btn btn-primary btn-lg" data-st="${nx}">${nx === "업체전달" ? "업체에 보내기" : nx + " 처리"}</button>` : ""}
       ${d.status === "조치완료" || d.status === "확인완료" ? `<button type="button" class="btn btn-lg btn-warn" data-st="재접수">재접수</button>` : ""}
       <button type="button" class="btn btn-lg" id="btn-stany">상태 선택</button></div>
-    ${v ? `<div class="contact-row">${(v.phones || []).slice(0, 1).map((ph) => `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`).join("")}
+    ${v ? `<div class="contact-row">${(() => { const vp = M.vendorPhones(v); if (!vp.length) return ""; if (vp.length === 1) { const ph = vp[0].phone; return `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`; } return `<button type="button" class="btn" id="btn-dtel">📞 전화 ▾</button><button type="button" class="btn" id="btn-dsms">💬 문자 ▾</button>`; })()}
       <button type="button" class="btn btn-kakao" id="btn-kakao">카톡으로 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 보내기</button>`}
     ${stepsHtml(d, photos)}
     <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
@@ -1018,6 +1018,8 @@ ROUTES.item = async (qq) => {
   $("#btn-stany").addEventListener("click", async () => { const st = await choose("상태 선택", M.STATUSES.map((s2) => ({ label: s2, value: s2, sub: s2 === d.status ? "현재" : "" }))); if (st) changeStatus(d, st); });
   $("#btn-kakao").addEventListener("click", () => sendSheet({ items: [d], vendor: v }));
   $("[data-sms]", view())?.addEventListener("click", () => setTimeout(() => markSent([d], "문자"), 300));
+  $("#btn-dtel", view())?.addEventListener("click", async () => { const ph = await pickPhone(V(d.vendorId), "전화"); if (ph) location.href = M.telHref(ph); });
+  $("#btn-dsms", view())?.addEventListener("click", async () => { const ph = await pickPhone(V(d.vendorId), "문자"); if (!ph) return; location.href = M.smsHref(ph, M.shareMessage({ project: P(), vendor: V(d.vendorId), items: [d] })); setTimeout(() => markSent([d], "문자"), 300); });
   $$("[data-add]", view()).forEach((b) => b.addEventListener("click", async () => {
     const files = await pickFile("image/*", { capture: false, multiple: true }); if (!files.length) return;
     busy(true, "사진 저장 중…"); await addPhotos(d.id, files, b.dataset.add, stampOf(d)); busy(false); rerender();
@@ -1158,17 +1160,18 @@ async function setStepStatus(d, i, st) {
 }
 /** 다음 공정 업체에 카톡·문자로 보내기(앞 공정 사진 첨부) */
 async function sendNextStep(d, i, next) {
-  const v = V(next.vendorId); const phone = v?.phones?.[0];
-  const how = await choose(`${i + 1}단계 완료 — 다음 ‘${next.trade}’ ${v ? v.name : "(업체 미지정)"}에 보낼까요?`, [
-    { label: "카톡·공유로 보내기 (사진 포함)", value: "kakao", icon: "💬" }, ...(phone ? [{ label: `문자로 보내기 (${phone})`, value: "sms", icon: "✉" }] : []),
+  const v = V(next.vendorId); const vps = M.vendorPhones(v);
+  let how = await choose(`${i + 1}단계 완료 — 다음 ‘${next.trade}’ ${v ? v.name : "(업체 미지정)"}에 보낼까요?`, [
+    { label: "카톡·공유로 보내기 (사진 포함)", value: "kakao", icon: "💬" }, ...vps.map((x, k) => ({ label: `문자로 보내기 · ${M.contactLabel(x)}`, sub: x.phone, value: "sms:" + k, icon: "✉" })),
     ...(v ? [] : [{ label: "업체 먼저 고르기", value: "pick", icon: "🏢" }]), { label: "나중에", value: "later", icon: "⏱" }]);
   if (!how || how === "later") return toast(`다음 차례: ${next.trade}`);
   if (how === "pick") { const vid = await pickVendorFor(next.trade); if (vid && vid !== "_none") { next.vendorId = vid; await saveDefect(d); } return sendNextStep(d, i, next); }
+  let phone = ""; if (how.startsWith("sms:")) { phone = vps[Number(how.slice(4))]?.phone || ""; how = "sms"; }
   const text = M.stepMessage({ project: P(), d, step: next, prev: d.steps[i] });
   const photos = await db.byIndex("photos", "by_defect", d.id);
   const prevId = d.steps[i].id; const ph = photos.filter((x) => x.stepId === prevId).pop() || photos.filter((x) => x.kind === "after").pop() || photos.filter((x) => x.kind !== "after")[0];
   const files = ph ? [new File([await photoOut(ph, d)], `하자_${next.trade}_요청.jpg`, { type: "image/jpeg" })] : [];
-  window.__lastStepSend = { how, text, files: files.length, vendor: v?.name || "" };
+  window.__lastStepSend = { how, text, files: files.length, vendor: v?.name || "", phone };
   if (how === "kakao") { const { shareKakao } = await import("./share.js"); const r = await shareKakao({ text, files }).catch(() => ""); if (r === "kakao-pc" && files[0]) { toast("문구를 복사했어요 · 사진은 내려받아 카톡에 붙여 주세요", { ms: 4000 }); shareOrDownload(files[0], files[0].name); } }
   else { location.href = M.smsHref(phone, text); if (files.length) toast("문자에는 사진이 자동으로 붙지 않아요 — 사진은 카톡으로 보내 주세요", { ms: 4000 }); }
   next.status = "전달"; next.sentAt = new Date().toISOString();
@@ -1225,7 +1228,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
   const phOn = new Set(list.filter((d) => photoCount(d).before).map((d) => d.id));
   const sel = () => list.filter((d) => chosen.has(d.id));
   const dongs = [...new Set(list.map((d) => d.dong || d.common).filter(Boolean))];
-  const phones = vendor?.phones || [];
+  const vps = M.vendorPhones(vendor); const phones = vps.map((x) => x.phone);
   const vname = vendor?.name || "업체";
   const msgOf = () => M.shareMessage({ project: P(), vendor, items: sel(), appName: APP_NAME });
   let dirty = false;
@@ -1246,7 +1249,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
       <div class="send-grid">
         <button type="button" class="btn btn-kakao btn-lg" data-s="kakao">카카오톡으로 보내기</button>
         <p class="help small kakao-hint" id="kakao-hint">${isMobileDevice() ? (isAndroid() ? "카카오톡이 바로 열려요(내용은 복사도 돼요). 사진을 붙이면 공유창에서 <b>카카오톡</b>을 골라 주세요." : "공유창에서 <b>카카오톡</b>을 골라 주세요. 내용은 미리 복사돼요.") : "PC: 내용이 복사되고 카카오톡 PC가 열려요. 업체 채팅방에 <b>Ctrl+V</b>로 붙여넣으세요. 사진은 PC에서 자동으로 붙지 않아요(요청서 PDF를 쓰세요)."}</p>
-        ${phones.map((ph) => `<a class="btn btn-lg" data-s="sms" href="#" data-ph="${esc(ph)}">💬 문자 ${esc(ph)}</a><a class="btn btn-lg" href="${M.telHref(ph)}" data-s="tel">📞 전화 ${esc(ph)}</a>`).join("")}
+        ${vps.map((x) => `<a class="btn btn-lg" data-s="sms" href="#" data-ph="${esc(x.phone)}">💬 문자 ${vps.length > 1 || x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a><a class="btn btn-lg" href="${M.telHref(x.phone)}" data-s="tel">📞 전화 ${vps.length > 1 || x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a>`).join("")}
         <button type="button" class="btn btn-lg" data-s="copy">📋 내용 복사</button>
         <button type="button" class="btn btn-lg" data-s="share">📤 다른 앱으로 공유</button>
         <button type="button" class="btn btn-lg" data-s="pdf">📄 요청서 PDF(인쇄)</button></div>
@@ -1346,8 +1349,8 @@ ROUTES.vendors = async () => {
   const vs = S.vendors.map((v) => ({ v, s: stat(v.id) })).sort((a, b) => b.s.unsent - a.s.unsent || b.s.open - a.s.open || a.v.name.localeCompare(b.v.name, "ko"));
   const none = list.filter((d) => !d.vendorId && M.isOpen(d)).length;
   view().innerHTML = `
-    ${contactPickerSupported() ? `<button type="button" class="btn btn-block" id="btn-contacts">📇 연락처에서 업체 가져오기</button>` : ""}
-    ${vs.map(({ v, s }) => `<article class="vcard" data-v="${v.id}" tabindex="0"><div class="vc-main"><b>${esc(v.name)}</b><small>${esc([v.person, (v.phones || [])[0]].filter(Boolean).join(" · ") || "연락처 없음")}</small>
+    <button type="button" class="btn btn-block" id="btn-contacts">📇 연락처에서 업체 가져오기</button>
+    ${vs.map(({ v, s }) => `<article class="vcard" data-v="${v.id}" tabindex="0"><div class="vc-main"><b>${esc(v.name)}</b><small>${esc(M.contactSummary(v) || "연락처 없음")}</small>
       <small class="help">${esc((v.trades || []).join(", ") || "공종 미지정")}</small></div>
       <div class="vc-num"><span><b>${s.unsent}</b>미전달</span><span><b>${s.open}</b>미조치</span>${s.od ? `<span class="od"><b>${s.od}</b>초과</span>` : ""}</div></article>`).join("") ||
       `<div class="card empty-card"><p>등록된 업체가 없어요.<br>업체를 등록하면 공종에 맞춰 담당업체가 자동으로 지정되고, 카톡·문자로 바로 보낼 수 있어요.</p></div>`}
@@ -1358,11 +1361,60 @@ ROUTES.vendors = async () => {
   $("#btn-contacts")?.addEventListener("click", importContacts);
 };
 async function importContacts() {
-  try {
-    const cs = await pickContacts(); let k = 0;
-    for (const c of cs) { if (!c.name && !c.phones.length) continue; await saveVendor({ id: M.uid("v"), name: c.name || c.phones[0], person: "", phones: c.phones.map(M.normPhone), trades: [], memo: "", createdAt: new Date().toISOString() }); k++; }
-    if (k) { toast(`${k}개 업체를 추가했어요. 공종을 지정해 주세요`); rerender(); }
-  } catch (e) { if (e?.name !== "AbortError") toast("연락처를 가져올 수 없어요"); }
+  const cs = await contactImportSheet({ title: "연락처에서 업체 가져오기", forVendors: true }); if (!cs?.length) return;
+  let k = 0;
+  for (const c of cs) { if (!c.name && !c.phones.length) continue; const v = { id: M.uid("v"), name: (c.org || c.name || c.phones[0]).slice(0, 30), trades: [], memo: "", createdAt: new Date().toISOString() }; M.setContacts(v, [{ name: c.name, role: c.role, phones: c.phones }]); await saveVendor(v); k++; }
+  if (k) { toast(`${k}개 업체를 추가했어요. 공종을 지정해 주세요`); rerender(); }
+}
+/** 담당자 번호 고르기(한 명이면 바로) */
+async function pickPhone(v, verb = "연락") {
+  const list = M.vendorPhones(v); if (!list.length) { toast("등록된 전화번호가 없어요"); return ""; }
+  if (list.length === 1) return list[0].phone;
+  return (await choose(`${v.name} — 누구에게 ${verb}할까요?`, list.map((x) => ({ icon: verb === "전화" ? "📞" : "💬", label: M.contactLabel(x), sub: x.phone, value: x.phone })))) || "";
+}
+/** 1.1.1 연락처 가져오기: ① 휴대폰 연락처 고르기(되는 기기만) ② 복사한 글 붙여넣기 ③ 연락처 파일(.vcf). 고른 담당자 목록을 돌려줌 */
+function contactImportSheet({ title = "연락처에서 가져오기", forVendors = false } = {}) {
+  return new Promise((resolve) => {
+    const info = contactPickerInfo(); let result = null;
+    const s = openSheet({ title, full: true, cls: "cimp-sheet",
+      html: `<div class="cimp-opts">
+        ${info.ok ? `<button type="button" class="btn btn-lg btn-block" id="ci-pick">📱 휴대폰 연락처에서 고르기</button>` : `<p class="help warnbox" id="ci-nopick">📱 휴대폰 연락처 바로 고르기는 이 기기에서 안 돼요 — ${esc(info.why)}. 아래 두 방법을 쓰세요.</p>`}
+        <p class="help" id="ci-err" hidden></p>
+        <label class="fld"><span>📋 복사한 글 붙여넣기 <small>(카톡 프로필·연락처 공유·문자 내용 등 — 이름과 010 번호를 찾아요)</small></span>
+          <textarea class="inp" id="ci-text" rows="4" placeholder="예)
+김철수 반장 010-1234-5678
+이영희 소장 010-9876-5432"></textarea></label>
+        <div class="row wrap"><button type="button" class="btn" id="ci-paste">붙여넣기</button><button type="button" class="btn btn-primary" id="ci-read">글에서 찾기</button><button type="button" class="btn" id="ci-vcf">📁 연락처 파일(.vcf) 열기</button></div>
+        <p class="help small">연락처 파일 만드는 법(삼성 연락처): 연락처 앱 → 사람 길게 눌러 고르기 → <b>공유</b> → <b>vCard 파일(VCF)</b> → ‘내 파일’에 저장한 뒤 여기서 열기.</p></div>
+        <div id="ci-list"></div>`,
+      footer: `<button type="button" class="btn" data-a="no">취소</button><button type="button" class="btn btn-primary" data-a="ok" id="ci-ok" disabled>추가</button>`,
+ });
+    s.onClose = () => resolve(result); const el = s.el; let found = [];
+    const show = (list, src) => {
+      found = list.filter((c) => c.name || c.phones?.length);
+      $("#ci-list", el).innerHTML = found.length ? `<p class="help"><b>${esc(src)}</b>에서 ${found.length}명 찾음 — 체크한 사람만 ${forVendors ? "업체로" : "담당자로"} 추가돼요(이름·직책은 고칠 수 있어요)</p>${found.map((c, i) => `<div class="ci-it"><label class="check"><input type="checkbox" data-ci="${i}" checked></label><input class="inp" data-cn="${i}" value="${esc(c.name)}" placeholder="이름"><input class="inp ci-role" data-cr="${i}" value="${esc(c.role || "")}" placeholder="직책" list="ci-roles"><small>${esc(c.phones.join(", ") || "번호 없음")}${c.org ? ` · ${esc(c.org)}` : ""}</small></div>`).join("")}<datalist id="ci-roles">${M.CONTACT_ROLES.map((r) => `<option value="${r}">`).join("")}</datalist>` : `<p class="help warnbox">${esc(src)}에서 이름이나 전화번호를 찾지 못했어요</p>`;
+      $("#ci-ok", el).disabled = !found.length; $("#ci-ok", el).textContent = found.length ? `${found.length}명 추가` : "추가";
+      setTimeout(() => $("#ci-list", el)?.scrollIntoView({ block: "start", behavior: "smooth" }), 50);
+      el.querySelector("#ci-list").addEventListener("change", () => { const n = $$("[data-ci]:checked", el).length; $("#ci-ok", el).textContent = `${n}명 추가`; $("#ci-ok", el).disabled = !n; });
+    };
+    const err = (msg) => { const e = $("#ci-err", el); e.hidden = false; e.className = "help warnbox"; e.textContent = msg; };
+    $("#ci-pick", el)?.addEventListener("click", async () => {
+      try { const cs = await pickContacts({ multiple: true }); window.__contactPick = { ok: true, n: cs.length }; if (!cs.length) return err("고른 연락처가 없어요"); show(cs.map((c) => ({ ...c, phones: c.phones.map(M.normPhone) })), "휴대폰 연락처"); }
+      catch (e) { window.__contactPick = { ok: false, name: e?.name, msg: e?.message }; try { localStorage.setItem("hs:contactPickErr", JSON.stringify({ at: new Date().toISOString(), name: e?.name, msg: String(e?.message || e).slice(0, 200), ua: navigator.userAgent })); } catch { /* 무시 */ }
+        if (e?.name === "AbortError") return; err(`연락처 선택 창을 열지 못했어요(${e?.name || "오류"}${e?.message ? ": " + e.message : ""}). 아래 ‘복사한 글 붙여넣기’나 ‘연락처 파일’을 써 주세요.`); }
+    });
+    $("#ci-paste", el).addEventListener("click", async () => { try { const t = await navigator.clipboard.readText(); $("#ci-text", el).value = t; if (t.trim()) show(M.parseContactText(t), "붙여넣은 글"); else err("복사된 글이 없어요 — 칸을 길게 눌러 붙여넣기 하세요"); } catch { err("자동 붙여넣기가 막혀 있어요 — 칸을 길게 눌러 ‘붙여넣기’ 하세요"); $("#ci-text", el).focus(); } });
+    $("#ci-read", el).addEventListener("click", () => { const t = $("#ci-text", el).value; if (!t.trim()) return err("먼저 글을 붙여넣으세요"); show(M.parseContactText(t), "붙여넣은 글"); });
+    $("#ci-vcf", el).addEventListener("click", async () => {
+      const [f] = await pickFile(".vcf,text/vcard,text/x-vcard,text/directory,text/plain"); if (!f) return;
+      const t = await f.text(); const list = /BEGIN:VCARD/i.test(t) ? M.parseVcf(t) : M.parseContactText(t); show(list, f.name);
+    });
+    $("[data-a=no]", el).addEventListener("click", () => s.close());
+    $("[data-a=ok]", el).addEventListener("click", () => {
+      result = found.map((c, i) => ({ ...c, name: ($(`[data-cn="${i}"]`, el)?.value || "").trim(), role: ($(`[data-cr="${i}"]`, el)?.value || "").trim() })).filter((c, i) => $(`[data-ci="${i}"]`, el)?.checked && (c.name || c.phones.length));
+      s.close();
+    });
+  });
 }
 ROUTES.vendor = async (qq) => {
   const v = V(qq.id); if (!v) return replace("#/vendors");
@@ -1371,10 +1423,10 @@ ROUTES.vendor = async (qq) => {
   const all = PD().filter((d) => d.vendorId === v.id || (M.hasSteps(d) && d.steps.some((x) => x.vendorId === v.id)));
   const sets = { turn: all.filter((d) => M.isTurnOf(d, v.id)), later: all.filter((d) => M.isLaterOf(d, v.id)), unsent: all.filter((d) => d.status === "접수" || d.status === "재접수"), open: all.filter(M.isOpen), od: all.filter((d) => M.isOverdue(d)), done: all.filter((d) => d.status === "조치완료"), all };
   const list = (sets[mode] || sets.unsent).sort(M.sortDefects);
-  const ph = v.phones || [];
+  const ph = v.phones || []; const cs = M.contactsOf(v);
   view().innerHTML = `
-    <section class="card"><div class="vinfo"><div><b>${esc(v.person || "담당자 미입력")}</b><small>${esc((v.trades || []).join(", ") || "공종 미지정")}</small>${v.memo ? `<small>${esc(v.memo)}</small>` : ""}</div></div>
-      <div class="contact-row">${ph.map((p) => `<a class="btn" href="${M.telHref(p)}">📞 ${esc(p)}</a>`).join("") || '<span class="help">전화번호가 없어요 · 수정에서 추가</span>'}</div></section>
+    <section class="card"><div class="vinfo"><div><small>${esc((v.trades || []).join(", ") || "공종 미지정")}</small>${v.memo ? `<small>${esc(v.memo)}</small>` : ""}</div></div>
+      ${cs.map((c) => `<div class="vcontact"><b>${esc(c.name || "담당자")}${c.role ? ` <small class="tag">${esc(c.role)}</small>` : ""}</b><div class="contact-row">${c.phones.map((p) => `<a class="btn" href="${M.telHref(p)}">📞 ${esc(p)}</a>`).join("") || '<span class="help">번호 없음</span>'}</div></div>`).join("") || '<div class="contact-row"><span class="help">담당자·전화번호가 없어요 · 수정에서 추가</span></div>'}</section>
     <div class="chips scroll">${[["turn", "내 차례 대기"], ...(sets.later.length ? [["later", "앞 공정 대기"]] : []), ["unsent", "미전달"], ["open", "미조치"], ["od", "기한초과"], ["done", "조치완료(확인 대기)"], ["all", "전체"]].map(([k, l]) => `<button type="button" class="chip ${k === mode ? "on" : ""}" data-m="${k}">${l} ${sets[k].length}</button>`).join("")}</div>
     <div class="send-bar"><button type="button" class="btn btn-kakao btn-lg" id="btn-send">보내기 · 건별 선택 (${list.filter((d) => d.status !== "확인완료").length})</button>
       ${ph[0] ? `<button type="button" class="btn btn-lg" id="btn-sms">💬 문자</button>` : ""}<button type="button" class="btn btn-lg" id="btn-pdf">📄 요청서</button></div>
@@ -1391,27 +1443,44 @@ ROUTES.vendor = async (qq) => {
   $("#btn-confirm-all")?.addEventListener("click", async () => { if (!(await ask(`${list.length}건을 확인완료로 바꿀까요?`))) return; for (const d of list) { setStatus(d, "확인완료", "일괄 확인"); await saveDefect(d); } rerender(); });
 };
 ROUTES["vendor-edit"] = async (qq) => {
-  const p = P(); const v = V(qq.id) || { id: M.uid("v"), name: "", person: "", phones: [""], trades: [], memo: "", createdAt: new Date().toISOString() };
+  const p = P(); const v = V(qq.id) ? structuredClone(V(qq.id)) : { id: M.uid("v"), name: "", person: "", phones: [], trades: [], memo: "", createdAt: new Date().toISOString() };
   const isNew = !V(qq.id);
   setTab(null); setHeader(isNew ? "업체 등록" : "업체 수정", { backBtn: true });
   const trades = [...new Set([...p.trades.map((t) => t.name), ...(v.trades || [])])];
   view().innerHTML = `<form id="vform" class="form">
     <label class="fld"><span>업체명 <em>*</em></span><input class="inp" id="v-name" value="${esc(v.name)}" placeholder="예: ○○타일" required></label>
-    <label class="fld"><span>담당자</span><input class="inp" id="v-person" value="${esc(v.person || "")}" placeholder="예: 김반장"></label>
-    <div class="fld"><span>전화번호</span><div id="v-phones">${(v.phones.length ? v.phones : [""]).map((ph) => `<div class="row"><input class="inp" type="tel" inputmode="tel" value="${esc(ph)}" placeholder="010-0000-0000"><button type="button" class="btn btn-sm" data-rmp>삭제</button></div>`).join("")}</div>
-      <div class="row"><button type="button" class="btn btn-sm" id="v-addph">＋ 번호 추가</button>${contactPickerSupported() ? `<button type="button" class="btn btn-sm" id="v-pick">📇 연락처에서</button>` : ""}</div></div>
+    <div class="fld"><span>담당자 <small>(여러 명 가능 · 소장·반장 등)</small></span><div id="v-contacts"></div>
+      <div class="row wrap"><button type="button" class="btn btn-sm" id="v-addc">＋ 담당자 추가</button><button type="button" class="btn btn-sm" id="v-pick">📇 연락처에서</button></div>
+      <datalist id="v-roles">${M.CONTACT_ROLES.map((r) => `<option value="${r}">`).join("")}</datalist></div>
     <div class="fld"><span>담당 공종 <small>(이 공종 하자 등록 시 자동 지정)</small></span><div class="chips wrap" id="v-trades">${trades.map((t) => `<button type="button" class="chip ${(v.trades || []).includes(t) ? "on" : ""}" data-t="${esc(t)}">${esc(t)}</button>`).join("")}</div></div>
     <label class="fld"><span>메모</span><input class="inp" id="v-memo" value="${esc(v.memo || "")}" placeholder="예: 오전 현장 상주"></label>
     <div class="form-act">${isNew ? "" : `<button type="button" class="btn btn-danger" id="v-del">삭제</button>`}<button type="submit" class="btn btn-primary btn-lg">저장</button></div></form>`;
-  const phoneRow = (val = "") => { const r = document.createElement("div"); r.className = "row"; r.innerHTML = `<input class="inp" type="tel" inputmode="tel" value="${esc(val)}" placeholder="010-0000-0000"><button type="button" class="btn btn-sm" data-rmp>삭제</button>`; $("#v-phones").appendChild(r); };
-  $("#v-phones").addEventListener("click", (e) => { if (e.target.matches("[data-rmp]")) e.target.parentElement.remove(); });
-  $("#v-addph").addEventListener("click", () => phoneRow());
-  $("#v-pick")?.addEventListener("click", async () => { try { const [c] = await pickContacts(); if (!c) return; if (!$("#v-name").value) $("#v-name").value = c.name; c.phones.forEach((p2) => phoneRow(M.normPhone(p2))); } catch {} });
+  const phRow = (val = "") => `<div class="row vc-ph"><input class="inp" type="tel" inputmode="tel" data-c="phone" value="${esc(val)}" placeholder="010-0000-0000"><button type="button" class="btn btn-sm" data-rmp aria-label="번호 삭제">✕</button></div>`;
+  const addContact = (c = { name: "", role: "", phones: [""] }) => {
+    const box = document.createElement("div"); box.className = "vc-ed card";
+    box.innerHTML = `<div class="row"><input class="inp" data-c="name" value="${esc(c.name || "")}" placeholder="이름 (예: 김철수)" aria-label="담당자 이름"><input class="inp vc-role" data-c="role" value="${esc(c.role || "")}" placeholder="직책" list="v-roles" aria-label="직책"><button type="button" class="btn btn-sm btn-danger" data-rmc aria-label="담당자 삭제">삭제</button></div>
+      <div class="vc-phs">${(c.phones?.length ? c.phones : [""]).map(phRow).join("")}</div><button type="button" class="btn btn-sm" data-addph>＋ 번호</button>`;
+    $("#v-contacts").appendChild(box);
+  };
+  const cs0 = M.contactsOf(v); (cs0.length ? cs0 : [undefined]).forEach((c) => addContact(c));
+  $("#v-contacts").addEventListener("click", (e) => {
+    if (e.target.matches("[data-rmp]")) { const phs = e.target.closest(".vc-phs"); if (phs.children.length > 1) e.target.parentElement.remove(); else e.target.previousElementSibling.value = ""; }
+    else if (e.target.matches("[data-addph]")) e.target.previousElementSibling.insertAdjacentHTML("beforeend", phRow());
+    else if (e.target.matches("[data-rmc]")) { if ($$(".vc-ed", $("#v-contacts")).length > 1) e.target.closest(".vc-ed").remove(); else $$("input", e.target.closest(".vc-ed")).forEach((i) => { i.value = ""; }); }
+  });
+  $("#v-addc").addEventListener("click", () => { addContact(); $$(".vc-ed [data-c=name]").pop()?.focus(); });
+  const readContacts = () => $$(".vc-ed", $("#v-contacts")).map((b) => ({ name: $("[data-c=name]", b).value, role: $("[data-c=role]", b).value, phones: $$("[data-c=phone]", b).map((i) => i.value) }));
+  $("#v-pick").addEventListener("click", async () => {
+    const got = await contactImportSheet({ title: "담당자 가져오기" }); if (!got?.length) return;
+    const cur = readContacts().filter((c) => c.name.trim() || c.phones.some((x) => x.trim()));
+    $("#v-contacts").innerHTML = ""; [...cur, ...got.map((c) => ({ name: c.name, role: c.role, phones: c.phones }))].forEach((c) => addContact(c));
+    if (!$("#v-name").value && got[0]?.org) $("#v-name").value = got[0].org;
+    toast(`담당자 ${got.length}명 추가 — 저장을 눌러 주세요`);
+  });
   $("#v-trades").addEventListener("click", (e) => { const b = e.target.closest("[data-t]"); if (b) b.classList.toggle("on"); });
   $("#vform").addEventListener("submit", async (e) => {
     e.preventDefault(); const name = $("#v-name").value.trim(); if (!name) return toast("업체명을 입력하세요");
-    Object.assign(v, { name, person: $("#v-person").value.trim(), phones: $$("#v-phones input").map((i) => M.normPhone(i.value)).filter(Boolean),
-      trades: $$("#v-trades .chip.on").map((b) => b.dataset.t), memo: $("#v-memo").value.trim() });
+    Object.assign(v, { name, trades: $$("#v-trades .chip.on").map((b) => b.dataset.t), memo: $("#v-memo").value.trim() }); M.setContacts(v, readContacts());
     await saveVendor(v); toast("저장했어요"); back();
   });
   $("#v-del")?.addEventListener("click", async () => {
@@ -1424,7 +1493,7 @@ ROUTES["vendor-edit"] = async (qq) => {
 async function quickVendor(trade) {
   const name = await prompt2("새 업체 이름", "", { ok: "다음", placeholder: "예: ○○설비" }); if (!name) return null;
   const phone = await prompt2("전화번호 (없으면 비워 두기)", "", { type: "tel", ok: "등록", placeholder: "010-0000-0000" });
-  const v = { id: M.uid("v"), name, person: "", phones: phone ? [M.normPhone(phone)] : [], trades: trade ? [trade] : [], memo: "", createdAt: new Date().toISOString() };
+  const v = M.setContacts({ id: M.uid("v"), name, trades: trade ? [trade] : [], memo: "", createdAt: new Date().toISOString() }, phone ? [{ name: "", role: "", phones: [phone] }] : []);
   await saveVendor(v); toast(`‘${name}’ 등록${trade ? ` · ${trade} 담당` : ""}`); return v;
 }
 
@@ -1434,7 +1503,7 @@ async function exportSheet(list, title) {
   const k = await choose(`${title} 내보내기 · ${list.length}건`, [{ label: "엑셀(.xlsx)", value: "xlsx", icon: "📊" }, { label: "CSV", value: "csv", icon: "🧾" }, { label: "요청서 PDF(인쇄)", value: "pdf", icon: "📄", sub: "업체별로 묶어서 인쇄" }]);
   if (!k) return;
   const { toXlsx, toCsv } = await import("./exporter.js");
-  const ctx = { vendorName: vName, photos: photoCount };
+  const ctx = { vendorName: vName, photos: photoCount, vendorOf: (d) => V(d.vendorId), vendors: S.vendors };
   const fn = `${P().name}_${title}_${M.todayStr()}`.replace(/[\\/:*?"<>|\s]+/g, "_");
   if (k === "xlsx") { busy(true, "엑셀 만드는 중…"); const b = await toXlsx(list, ctx); busy(false); S.lastExport = { name: fn + ".xlsx", size: b.size }; return shareOrDownload(b, fn + ".xlsx"); }
   if (k === "csv") { const b = toCsv(list, ctx); S.lastExport = { name: fn + ".csv", size: b.size }; return shareOrDownload(b, fn + ".csv"); }
@@ -1939,10 +2008,10 @@ async function runImport(addDongs) {
   busy(true, "적용 중…");
   // 되돌리기용 스냅샷: 새로 추가된 하자 id, 바뀌기 전 하자, 새 업체, 바뀌기 전 동 구조
   const byId = new Map(S.defects.map((d) => [d.id, d]));
-  const undo = { at: new Date().toISOString(), file: imp.file, projectId: p.id, added: [], prev: [], newVendorIds: res.newVendors.map((v) => v.id), prevDongs: structuredClone(p.dongs) };
+  const undo = { at: new Date().toISOString(), file: imp.file, projectId: p.id, added: [], prev: [], newVendorIds: res.newVendors.map((v) => v.id), prevVendors: (res.updatedVendors || []).map((v) => V(v.id)).filter(Boolean).map((v) => structuredClone(v)), prevDongs: structuredClone(p.dongs) };
   for (const d of res.toPut) { const o = byId.get(d.id); if (o) undo.prev.push(o); else undo.added.push(d.id); }
   await db.setMeta("importUndo", undo);
-  await db.putMany("defects", res.toPut); for (const v of res.newVendors) await saveVendor(v);
+  await db.putMany("defects", res.toPut); for (const v of res.newVendors) await saveVendor(v); for (const v of res.updatedVendors || []) await saveVendor(v);
   Object.assign(p, { dongs: pcopy.dongs, dongCommons: pcopy.dongCommons, commons: pcopy.commons, ...(pcopy.unitTypes ? { unitTypes: pcopy.unitTypes } : {}) }); await saveProject(p);
   const maps = await db.getMeta("importMaps", {}); maps[imp.sig] = { map: imp.map, defCat: imp.defCat, at: new Date().toISOString() }; await db.setMeta("importMaps", maps);
   hist.push({ at: undo.at, file: imp.file, projectId: p.id, sig: imp.sig, ...st }); await db.setMeta("imports", hist.slice(-20));
@@ -1978,6 +2047,7 @@ async function undoImport(undo) {
   await db.putMany("defects", undo.prev);
   S.defects = await db.getAll("defects");
   const usedV = new Set(S.defects.map((d) => d.vendorId).filter(Boolean));
+  for (const v of undo.prevVendors || []) await saveVendor(v);
   for (const id of undo.newVendorIds) if (!usedV.has(id)) { await db.del("vendors", id); S.vendors = S.vendors.filter((v) => v.id !== id); }
   const p = S.projects.find((x) => x.id === undo.projectId); if (p) { p.dongs = undo.prevDongs; await saveProject(p); }
   const hist = await db.getMeta("imports", []); if (hist.at(-1)?.at === undo.at) { hist.pop(); await db.setMeta("imports", hist); }
@@ -2129,8 +2199,8 @@ function renderSyncStatus(box) {
   const stt = Sync.status(); const at = Sync.state.lastSync;
   box.innerHTML = `<div class="sync-row"><span class="sync-chip big" data-k="${stt.key}">${esc(stt.label)}</span></div>
     <dl class="kv"><dt>계정</dt><dd id="sync-email">${Sync.signedIn() ? esc(Sync.state.email || "-") : "로그인 안 됨"}</dd>
-    ${Sync.attached() ? `<dt>팀 현장</dt><dd id="sync-ws">${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""}</dd><dt>대기 중</dt><dd id="sync-pending">${Sync.state.pending}건</dd>
-    <dt>마지막 동기화</dt><dd>${at ? fmtDT(new Date(at).toISOString()) : "-"}</dd>` : `<dt>지금 데이터</dt><dd>이 기기 전용(동기화 안 함)</dd>`}${stt.detail && stt.key === "error" ? `<dt>오류</dt><dd class="err">${esc(stt.detail)}</dd>` : ""}</dl>`;
+    ${Sync.attached() ? `<dt>팀 현장</dt><dd id="sync-ws">${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""}</dd><dt>대기 중</dt><dd id="sync-pending">${Number(Sync.state.pending).toLocaleString("ko-KR")}건${Sync.state.pending ? `<small class="help" id="sync-pending-by"> (${esc(Sync.pendingText())})</small>` : ""}</dd>
+    <dt>마지막 동기화</dt><dd>${at ? fmtDT(new Date(at).toISOString()) : "-"}</dd>` : `<dt>지금 데이터</dt><dd>이 기기 전용(동기화 안 함)</dd>`}${stt.detail && stt.key === "error" ? `<dt>오류</dt><dd class="err">${esc(stt.detail)}</dd>` : ""}${stt.key === "busy" && (stt.quota || stt.why !== undefined) ? `<dt>상태</dt><dd id="sync-why" class="help">${esc(stt.quota ? stt.detail : stt.why === "quota" ? "무료 한도 초과로 서버가 기다리게 하고 있어요" : stt.why === "network" ? "인터넷이 느리거나 끊겨서 오래 걸리고 있어요 — 와이파이에서 앱을 켜 두세요" : stt.why === "offline" ? "오프라인이에요" : "원인 확인 중… (잠시 뒤 다시 보기)")}</dd>` : ""}</dl>`;
 }
 /** 이 기기 전용 데이터가 있으면 팀 현장에 합칠지 묻는다. null=취소 */
 async function askMergeLocal(wsName) {

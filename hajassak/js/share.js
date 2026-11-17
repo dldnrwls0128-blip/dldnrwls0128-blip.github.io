@@ -63,7 +63,19 @@ export async function copyText(text) {
   } catch { return false; }
 }
 export const contactPickerSupported = () => "contacts" in navigator && "select" in (navigator.contacts || {});
-export async function pickContacts() {
-  const res = await navigator.contacts.select(["name", "tel"], { multiple: true });
-  return res.map((c) => ({ name: (c.name || [])[0] || "", phones: c.tel || [] }));
+/** 연락처 선택(Contact Picker API) 쓸 수 있는지와 안 되는 이유(1.1.1: 조용히 실패하지 않게) */
+export function contactPickerInfo() {
+  if (contactPickerSupported()) return { ok: true, why: "" };
+  const ua = navigator.userAgent || "";
+  if (!window.isSecureContext) return { ok: false, why: "보안 연결(https)이 아니라서" };
+  if (window.top !== window.self) return { ok: false, why: "다른 화면 안에서 열려 있어서" };
+  if (/SamsungBrowser/i.test(ua)) return { ok: false, why: "삼성 인터넷은 연락처 고르기를 지원하지 않아요(크롬으로 설치한 앱에서는 돼요)" };
+  if (/iPhone|iPad|iPod/i.test(ua)) return { ok: false, why: "아이폰 사파리는 연락처 고르기를 지원하지 않아요" };
+  if (!/Android/i.test(ua)) return { ok: false, why: "PC 브라우저는 연락처 고르기를 지원하지 않아요" };
+  return { ok: false, why: "이 브라우저는 연락처 고르기를 지원하지 않아요(안드로이드 크롬 최신 버전 필요)" };
+}
+/** 연락처 고르기 — 반드시 버튼 누른 직후 바로 부를 것(사용자 동작 필요). 실패 이유는 그대로 던짐 */
+export async function pickContacts({ multiple = true } = {}) {
+  const res = await navigator.contacts.select(["name", "tel"], { multiple }); // 다른 await 없이 바로(사용자 동작이 살아 있을 때)
+  return (res || []).map((c) => ({ name: (c.name || [])[0] || "", role: "", phones: (c.tel || []).filter(Boolean) }));
 }
