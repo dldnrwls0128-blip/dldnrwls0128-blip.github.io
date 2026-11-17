@@ -385,7 +385,7 @@ ROUTES.grid = async (qq) => {
   const lines = M.linesOf(dong);
   const common = list.filter((d) => !d.ho);
   view().innerHTML = `
-    <div class="chips scroll">${p.dongs.map((d) => `<button type="button" class="chip ${d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div>
+    <div class="chips wrap dong-chips">${p.dongs.map((d) => `<button type="button" class="chip ${d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div>
     <div class="list-hd"><b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span></div>
     ${heatLegendHtml(th)}
     <div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => { const us = new Set(M.unitsOf(dong, String(f))); return `<div class="hf">${f}F</div>` + lines.map((l) => String(f * 100 + l)).map((ho) => {
