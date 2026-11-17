@@ -331,3 +331,4 @@ body.has-selbar #view{padding-bottom:132px}
 .rv-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:4px;margin:6px 0}
 .rv-it{display:flex;align-items:center;gap:4px}.rv-it input[type=text]{flex:1;min-width:0;min-height:30px;padding:2px 6px;font-size:13px}
 .rv-quick{display:flex;flex-wrap:wrap;gap:4px}
+#lp h4.sub{font-size:12px;font-weight:600;color:var(--sub);margin:6px 0 3px}

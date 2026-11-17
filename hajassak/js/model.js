@@ -397,14 +397,77 @@ export function parseMapping(text) {
   return m;
 }
 /** rooms.json의 실 이름 정리: 기본 체크 여부(라인·동 번호·기호 등은 끔) */
-export function roomCandidates(rooms, { evac = true } = {}) {
+export function roomCandidates(rooms, { evac = true, kind = "" } = {}) {
   const by = new Map();
   for (const r of rooms || []) {
     let name = String(r.name || "").trim(); if (!name) continue;
+    if (kind === "parking") { name = cleanSpot(name); if (!name) continue; }
+    else name = name.replace(/\+$/, "").trim();
     if (evac && name === "하향식피난구") name = "대피공간";
     if (!by.has(name)) by.set(name, { name, x: r.x, y: r.y, n: 0, conf: r.confidence ?? 1 });
     by.get(name).n++;
   }
-  const noise = (n) => /^\d+라인$/.test(n) || /^\d{2,4}동/.test(n) || /^[A-Z]{1,4}$/.test(n) || /^(TPS|AV\/PD|DA|PIT|ELEV)$/i.test(n) || n.length < 2;
+  const noise = (n) => /^\d+라인$/.test(n) || (kind !== "parking" && /^\d{2,4}동/.test(n)) || (/^[A-Z]{1,4}$/.test(n) && n !== "MDF") || /^(TPS|AV\/PD|DA|PIT|ELEV)$/i.test(n) || n.length < 2;
   return [...by.values()].map((c) => ({ ...c, on: !noise(c.name) && c.conf >= 0.5 }));
 }
+
+/* ---------- 1.0.9 단지 공용 세부 위치(도면 기반) ---------- */
+/** 지하주차장 도면 라벨 정리: 동 번호 → ‘301동 연결통로’, 지상 시설·표 글자 등은 버림 */
+export function cleanSpot(raw) {
+  let n = String(raw || "").replace(/\s+/g, " ").replace(/\+$/, "").trim();
+  if (!n || /\(1F\)$|^\(.*\)$/.test(n)) return "";
+  const m = n.match(/^(\d{3,4})동$/); if (m) return `${m[1]}동 연결통로`;
+  if (/경로당|어린이집|수영장|사우나|도서관|독서실|맘스테이션|경비실|용역원실|회의실|근린생활|카페|놀이터|돌봄|휴게쉼터|잔디|골프|운동시설|주민공동|스터디|멀티룸|소장실|숙직|탕비|사무실|클라스|플라워|입주민/.test(n)) return "";
+  if (/^(빗물|하차|조|업|회|차|장치|관리|하부OPNE|하부OPEN|\(급기\)|\(배기\)|\(남\)|\(여\))$/.test(n)) return "";
+  if (/^(조업|업조)$/.test(n)) return "조업공간";
+  if (n === "MDF") return "MDF실";
+  if (/^전기자동차/.test(n)) return "전기차 충전구역";
+  return n.slice(0, 20);
+}
+/** 도면 → 단지 공용 장소 추측(세대·동 도면, 배치도는 없음) */
+export function guessPlace(pl, p) {
+  if (!pl || pl.utype || pl.dongs?.length) return "";
+  const name = String(pl.name || pl.file || "").replace(/\.\w+$/, "");
+  if (/배치도/.test(name)) return "";
+  const cs = [...(p?.commons || [])].sort((a, b) => b.length - a.length);
+  const hit = cs.find((c) => c.length >= 2 && name.replace(/\s/g, "").includes(c.replace(/\s/g, ""))); if (hit) return hit;
+  if (pl.kind === "parking" || /주차/.test(name)) return "지하주차장";
+  if (/주민공동|어린이집|돌봄|맘스테이션|경로당|관리사무소|도서관|커뮤니티|경비실|문주/.test(name)) return "부대복리시설";
+  if (pl.kind === "amenity" || pl.kind === "") return name.split(/[_]/)[0].replace(/-\d+$/, "").slice(0, 15);
+  return "";
+}
+export const placeOf = (pl, p) => (pl?.place != null && pl.place !== "" ? pl.place : guessPlace(pl, p));
+/** 층 표기 펼치기: ‘B2,1’ → [B2,1], ‘B2-B1’ → [B2,B1] (범위가 길면 끝 두 개만) */
+export function expandFloors(spec) {
+  const toN = (f) => (/^B\d+$/i.test(f) ? -Number(f.slice(1)) : Number(f)); const toF = (n) => (n < 0 ? `B${-n}` : String(n));
+  const out = [];
+  for (const t of String(spec || "").split(/[,\s]+/).filter(Boolean)) {
+    const m = t.match(/^(B?\d+)\s*[-~]\s*(B?\d+)$/i);
+    if (!m) { const f = normFloor(t) || t.toUpperCase(); out.push(f); continue; }
+    let a = toN(m[1].toUpperCase()), b = toN(m[2].toUpperCase()); if (a > b) [a, b] = [b, a];
+    if (b - a > 9) { out.push(toF(a), toF(b)); continue; }
+    for (let n = a; n <= b; n++) if (n !== 0) out.push(toF(n));
+  }
+  return [...new Set(out)];
+}
+/** 단지 공용 장소의 도면들 */
+export const placePlans = (p, plans, place) => (place ? plans.filter((pl) => pl.projectId === p.id && placeOf(pl, p) === place) : []);
+/** 장소의 층(도면 층 표기에서) — 지하 깊은 층부터 */
+export function placeFloors(p, plans, place) {
+  const fs = new Set(); for (const pl of placePlans(p, plans, place)) expandFloors(pl.floors).forEach((f) => fs.add(f));
+  const n = (f) => (/^B\d+$/.test(f) ? -Number(f.slice(1)) : Number(f) || 999);
+  return [...fs].sort((a, b) => n(a) - n(b));
+}
+/** 장소의 세부 위치: 층을 골랐으면 그 층 도면만. [{plan, spots:[{name,x,y}]}] */
+export function placeSpots(p, plans, place, floor = "") {
+  const out = [];
+  for (const pl of placePlans(p, plans, place)) {
+    if (floor && pl.floors && !expandFloors(pl.floors).includes(floor)) continue;
+    const seen = new Set(); const spots = [];
+    for (const r of pl.rooms || []) { if (!r.name || seen.has(r.name)) continue; seen.add(r.name); spots.push(r); }
+    if (spots.length) out.push({ plan: pl, spots: spots.sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true })) });
+  }
+  return out;
+}
+/** 도면이 있는 장소(현장 단지 공용 목록에 없어도 첫 화면에 보이게) */
+export const placesWithPlans = (p, plans) => [...new Set(plans.filter((pl) => pl.projectId === p.id && pl.rooms?.length).map((pl) => placeOf(pl, p)).filter(Boolean))];

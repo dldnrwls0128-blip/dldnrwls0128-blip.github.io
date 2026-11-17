@@ -607,11 +607,13 @@ function onLongPress(root, sel, onLong) {
 /** 이 위치에 맞는 도면: 세대(호)면 평형 평면도, 동·층이면 그 동 도면, 단지 공용이면 동 지정 없는 도면. 실 이름이 들어 있는 도면을 먼저 */
 function matchPlans(dr) {
   const p = P(); const ut = M.unitTypeOf(p, dr.dong, dr.ho); const fl = dr.floor || M.floorOfHo(dr.ho);
+  const placeHas = !dr.dong && dr.common && M.placePlans(p, S.plans, dr.common).length > 0;
   const ok = (pl) => {
     if (pl.projectId !== p.id) return false;
     if (pl.utype) return !!dr.ho && (!ut || M.normType(pl.utype) === ut);
     if (pl.dongs?.length ? !pl.dongs.includes(dr.dong) : false) return false;
     if (!dr.dong && !dr.common) return false;
+    if (!dr.dong && placeHas && M.placeOf(pl, p) !== dr.common) return false;
     return !fl || !String(pl.floors || "").trim() || M.planMatches({ ...pl, dongs: [] }, dr.dong, fl);
   };
   const want = [dr.room, dr.common].filter(Boolean);
@@ -726,7 +728,10 @@ function renderForm() {
  * '기타 위치 직접 입력'은 저장하지 않는 1회용 위치 */
 function locationPicker(dr, onDone) {
   const p = P(); if (!Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS];
-  const sel = { dong: dr.dong, floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part, locEtc: dr.locEtc || "" };
+  const sel = { dong: dr.dong, floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part, locEtc: dr.locEtc || "", pin: dr.pin || null };
+  /** 단지 공용 장소(지하주차장 등)에 도면 세부 위치가 있으면 층 → 세부 위치로 */
+  const place = () => (!sel.dong && sel.common && M.placeSpots(p, S.plans, sel.common).length ? sel.common : "");
+  const dropSpotPin = () => { if (sel.pin?.spot) sel.pin = null; };
   const STEPS = ["dong", "floor", "ho", "room", "part"];
   let step = 0; const stepLayers = [];
   const s = openSheet({ title: "위치 선택", full: true, cls: "lp-sheet", html: `<div id="lp"></div>`, footer: `<div class="lp-sum" id="lp-sum"></div><button type="button" class="btn btn-primary btn-lg" id="lp-ok">확인</button>`,
@@ -753,16 +758,17 @@ function locationPicker(dr, onDone) {
     s.setBackVisible(step > 0);
     const box = $("#lp", s.el); const d = dongObj();
     const crumbs = [sel.dong, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.common, sel.room, sel.part, sel.locEtc && `(${sel.locEtc})`].filter(Boolean);
-    const K = STEPS[step]; const has = K === "dong" ? !!sel.dong : K === "floor" ? !!(sel.floor || sel.common) : !!sel[K];
+    const K = STEPS[step]; const has = K === "dong" ? !!sel.dong : K === "floor" ? !!(sel.floor || (sel.dong && sel.common)) : !!sel[K];
     const skipLabel = K === "part" ? (has ? "완료 ✓" : "건너뛰고 완료 ✓") : has ? "다음 ›" : { dong: "동 건너뛰기 ›", floor: "층 건너뛰기 ›", ho: "호 건너뛰기 ›", room: "실 건너뛰기 ›" }[K];
     let h = `<div class="lp-top"><ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}" data-go="${i}">${t}</li>`).join("")}</ol><button type="button" class="btn btn-sm lp-skip" data-skip="1">${skipLabel}</button></div>`;
     if (STEPS[step] === "dong") {
       h += `<h4>동</h4><div class="tiles">${p.dongs.map((x) => tile(x.name, x.name, x.name === sel.dong, "", !!x.userAdded)).join("")}${addTile("동", "_add")}</div>
-        <h4>단지 공용 <small class="help">동과 상관없는 곳 — 누르면 바로 선택</small></h4><div class="tiles cm">${p.commons.map((c) => tile("c:" + c, c, !sel.dong && c === sel.common, "common", isUserItem("commons", c))).join("")}${addTile("단지 공용", "_addc")}</div>
+        <h4>단지 공용 <small class="help">동과 상관없는 곳 — 누르면 바로 선택</small></h4><div class="tiles cm">${[...new Set([...p.commons, ...M.placesWithPlans(p, S.plans)])].map((c) => tile("c:" + c, c + (M.placeSpots(p, S.plans, c).length ? " ›" : ""), !sel.dong && c === sel.common, "common", isUserItem("commons", c) && p.commons.includes(c))).join("")}${addTile("단지 공용", "_addc")}</div>
         <p class="help">동 안의 공용부(계단실·EV홀·피트실·옥상 등)는 동을 고르면 나와요.</p>`;
     } else if (STEPS[step] === "floor") {
-      const fl = d ? M.floorsOf(d) : []; const ex = new Set(d?.extraFloors || []);
-      h += `<h4>${esc(sel.dong || sel.common)} · 층</h4><div class="tiles small">${[...fl].reverse().map((f) => tile(f, M.floorLabel(f), f === sel.floor, "", ex.has(f))).join("")}${addTile("층")}</div>`;
+      const pf = !d && place() ? M.placeFloors(p, S.plans, sel.common) : null;
+      const fl = d ? M.floorsOf(d) : pf || []; const ex = new Set(d?.extraFloors || []);
+      h += `<h4>${esc(sel.dong || sel.common)} · 층${pf ? ' <small class="help">도면 기준 — 모르면 건너뛰기</small>' : ""}</h4><div class="tiles small">${(pf ? fl : [...fl].reverse()).map((f) => tile(f, M.floorLabel(f), f === sel.floor, "", ex.has(f))).join("")}${d ? addTile("층") : ""}</div>`;
       h += dongCommonHtml();
     } else if (STEPS[step] === "ho") {
       const us = d ? M.unitsOf(d, sel.floor) : []; const ex = new Set(d?.extraUnits || []);
@@ -771,8 +777,15 @@ function locationPicker(dr, onDone) {
 `;
       h += dongCommonHtml();
     } else if (STEPS[step] === "room") {
+      const pg = place() ? M.placeSpots(p, S.plans, sel.common, sel.floor) : [];
+      if (pg.length) {
+        h += `<h4>${esc(sel.common)}${sel.floor ? " " + esc(M.floorLabel(sel.floor)) : ""} · 세부 위치 <small class="help">도면에서 — 누르면 도면 핀도 그 자리에</small></h4>` +
+          pg.map((g) => `${pg.length > 1 ? `<h4 class="sub">${esc(g.plan.name)}</h4>` : ""}<div class="tiles cm">${g.spots.map((r) => tile(r.name, r.name, r.name === sel.room, "spot").replace("<button ", `<button data-pl="${esc(g.plan.id)}" data-x="${r.x ?? ""}" data-y="${r.y ?? ""}" `)).join("")}</div>`).join("") +
+          `<div class="tiles cm">${addTile("실")}</div>`;
+      } else {
       const rf = M.roomsFor(p, sel.dong, sel.ho);
       h += `<h4>실${rf.type ? ` <small class="help">${esc(rf.type)} 평형</small>` : ""}</h4><div class="tiles">${rf.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r) && !(p.roomsByType?.[rf.type] || []).includes(r))).join("")}${addTile("실")}</div>`;
+      }
     } else {
       h += `<h4>부위</h4><div class="tiles">${p.parts.map((r) => tile(r, r, r === sel.part, "", isUserItem("parts", r))).join("")}${addTile("부위")}</div>`;
     }
@@ -791,12 +804,18 @@ function locationPicker(dr, onDone) {
         sel.common = c; return setStep(3);
       }
       if (k === "dong") {
-        if (v.startsWith("c:")) { sel.common = v.slice(2); sel.dong = ""; sel.floor = ""; sel.ho = ""; return setStep(3); }
+        dropSpotPin();
+        if (v.startsWith("c:")) { const c = v.slice(2); if (sel.common !== c || M.placeSpots(p, S.plans, c).length) sel.room = ""; sel.common = c; sel.dong = ""; sel.floor = ""; sel.ho = ""; return setStep(place() && M.placeFloors(p, S.plans, c).length ? 1 : 3); }
         sel.floor = ""; sel.ho = ""; sel.dong = v; sel.common = ""; return setStep(1); // 동을 (다시) 누르면 층·호·공용부를 새로 고름
       }
       if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(sel.common ? 3 : nextAfterFloor(dongObj(), v)); }
       if (k === "ho") { sel.ho = v; sel.common = ""; return setStep(3); }
-      if (k === "room") { sel.room = v; return setStep(4); }
+      if (k === "room") {
+        sel.room = v;
+        if (b.dataset.pl && b.dataset.x !== "" && (!sel.pin || sel.pin.spot)) sel.pin = { planId: b.dataset.pl, x: Number(b.dataset.x), y: Number(b.dataset.y), spot: 1 };
+        else dropSpotPin();
+        return setStep(4);
+      }
       sel.part = v; draw();
     }));
     $("[data-skip]", box)?.addEventListener("click", () => {
@@ -1514,7 +1533,7 @@ ROUTES.project = async () => {
       ${[["dongCommons", "🏢", "동 공용부(계단실·EV홀 등)", M.dongCommonsOf(p)], ["commons", "🅿", "단지 공용", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["categories", "🗂", "구분", M.catsOf(p)], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
         .map(([k, ico, t, arr]) => `<button type="button" class="sitem" data-list="${k}"><span class="si-ico">${ico}</span><span><b>${t}</b><small>${esc(arr.slice(0, 6).join(", "))}${arr.length > 6 ? " …" : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <h3 class="sec">도면 <small>동·층별 평면도 이미지 → 하자 위치를 도면에 찍기</small></h3>
-    <div class="slist">${plans.map((pl) => `<button type="button" class="sitem" data-plan="${pl.id}"><span class="si-ico">🗺</span><span><b>${esc(pl.name)}</b><small>${esc(pl.utype ? `평형 ${pl.utype} 세대` : pl.dongs?.length ? pl.dongs.join(", ") : "전체 동")} · ${esc(pl.floors || "전체 층")}${pl.rooms?.length ? ` · 실 ${pl.rooms.length}` : ""}</small></span><span class="chev">›</span></button>`).join("") || '<p class="help">등록된 도면이 없어요</p>'}</div>
+    <div class="slist">${plans.map((pl) => `<button type="button" class="sitem" data-plan="${pl.id}"><span class="si-ico">🗺</span><span><b>${esc(pl.name)}</b><small>${esc(pl.utype ? `평형 ${pl.utype} 세대` : pl.dongs?.length ? pl.dongs.join(", ") : M.placeOf(pl, p) ? `단지 공용 · ${M.placeOf(pl, p)}` : "전체 동")} · ${esc(pl.floors || "전체 층")}${pl.rooms?.length ? ` · 실 ${pl.rooms.length}` : ""}</small></span><span class="chev">›</span></button>`).join("") || '<p class="help">등록된 도면이 없어요</p>'}</div>
     <div class="row wrap"><button type="button" class="btn" id="btn-addplan">＋ 도면 이미지 추가</button><button type="button" class="btn" id="btn-bulkplan">🗂 도면 여러 장 가져오기</button><button type="button" class="btn" id="btn-planrooms">🚪 도면에서 실 목록 자동 채우기</button></div>
     <p class="help">여러 장: 이미지 여러 개 또는 .zip(매핑표 file·dongs·floors·name TSV/CSV, rooms.json 함께 넣어도 돼요). 표가 없으면 파일 이름(301동_기준층, 지하주차장_B1, 84A_세대평면)으로 추측해요.</p>
     <button type="button" class="btn btn-danger btn-block" id="btn-delproj">이 현장 삭제</button>`;
@@ -1602,8 +1621,10 @@ function planReview(rows, { mapped, hasRooms }) {
       busy(true, `도면 압축·저장 ${k + 1}/${pick.length}…`);
       try {
         const c = await compressImage(r.blob, { max: 2400, quality: 0.8 });
-        const rooms = r.rooms?.rooms?.length ? M.roomCandidates(r.rooms.rooms, { evac: false }).map(({ name, x, y }) => ({ name, x, y })) : r.dup?.rooms || [];
-        const pl = { ...(r.dup || {}), id: r.dup?.id || M.uid("pl"), projectId: p.id, name: r.name.slice(0, 40), dongs: r.dongs, floors: r.floors, utype: r.utype, file: r.file, kind: r.rooms?.kind || r.dup?.kind || "", rooms, blob: c.blob, w: c.w, h: c.h };
+        const kind = r.rooms?.kind || r.dup?.kind || "";
+        const rooms = r.rooms?.rooms?.length ? M.roomCandidates(r.rooms.rooms, { evac: false, kind }).filter((x) => x.on).map(({ name, x, y }) => ({ name, x, y })) : r.dup?.rooms || [];
+        const pl = { ...(r.dup || {}), id: r.dup?.id || M.uid("pl"), projectId: p.id, name: r.name.slice(0, 40), dongs: r.dongs, floors: r.floors, utype: r.utype, file: r.file, kind, rooms, blob: c.blob, w: c.w, h: c.h };
+        pl.place = M.guessPlace(pl, p);
         await db.put("plans", pl); const j = S.plans.findIndex((x) => x.id === pl.id); if (j >= 0) S.plans[j] = pl; else S.plans.push(pl);
         saved.push({ pl, raw: r.rooms });
       } catch (e) { fail++; }
@@ -1623,18 +1644,19 @@ async function planRoomsFromFile() {
 function planRoomsFrom(rooms) {
   const p = P(); const mine = S.plans.filter((x) => x.projectId === p.id);
   const items = Object.entries(rooms).map(([file, raw]) => ({ pl: mine.find((x) => x.file === file || x.name === file.replace(/\.\w+$/, "")), raw })).filter((x) => x.pl && x.raw?.rooms?.length);
+  for (const it of items) { if (!it.pl.kind && it.raw.kind) it.pl.kind = it.raw.kind; if (!it.pl.place) it.pl.place = M.guessPlace(it.pl, p); }
   if (!items.length) return toast("rooms.json의 파일 이름과 맞는 도면이 없어요 — 먼저 ‘도면 여러 장 가져오기’로 올리세요", { ms: 4000 });
   roomsReview(items);
 }
 /** 실 목록 검토: 도면마다 체크·이름 고치기 → 평형별 실 / 동 공용부 / 단지 공용에 추가, 좌표는 도면에 저장 */
 function roomsReview(items) {
   const p = P();
-  const target = (pl) => (pl.utype ? { k: "type", label: `${pl.utype} 평형 실 목록` } : pl.dongs?.length ? { k: "dongCommons", label: "동 공용부 목록" } : { k: "commons", label: "단지 공용 목록" });
+  const target = (pl) => { const pc = M.placeOf(pl, p); return pl.utype ? { k: "type", label: `${pl.utype} 평형 실 목록` } : pl.dongs?.length ? { k: "dongCommons", label: "동 공용부 목록" } : pc ? { k: "place", label: `단지 공용 ‘${pc}’ 세부 위치`, place: pc } : { k: "commons", label: "단지 공용 목록" }; };
   const QUICK = (pl) => (pl.utype ? ["발코니", "발코니2", "대피공간"] : ["계단실", "복도", "전실", "발코니"]);
-  const groups = items.map(({ pl, raw }) => ({ pl, t: target(pl), cands: M.roomCandidates(raw.rooms, { evac: false }).map((c) => ({ ...c, on: c.on && target(pl).k !== "commons" })) }));
+  const groups = items.map(({ pl, raw }) => ({ pl, t: target(pl), cands: M.roomCandidates(raw.rooms, { evac: false, kind: raw.kind || pl.kind }).map((c) => ({ ...c, on: c.on && target(pl).k !== "commons" })) }));
   const s = openSheet({ title: "도면에서 실 목록 채우기", full: true,
     html: `<label class="check"><input type="checkbox" id="rv-evac" checked> ‘하향식피난구’를 ‘대피공간’으로 바꾸기</label>
-      <p class="help">체크한 이름만 추가돼요. 이름은 바로 고칠 수 있어요. 단지 배치도 등 단지 공용은 기본으로 꺼 뒀어요(필요한 것만 체크).</p>
+      <p class="help">체크한 이름만 추가돼요. 이름은 바로 고칠 수 있어요. 지하주차장·부대시설 도면의 실은 그 단지 공용 장소의 ‘세부 위치’가 돼요(하자 등록에서 지하주차장 → 층 → 세부 위치). 단지 배치도처럼 장소가 없는 도면은 기본으로 꺼 뒀어요.</p>
       ${groups.map((g, gi) => `<details class="rv-plan" data-g="${gi}" ${gi < 4 ? "open" : ""}><summary>${esc(g.pl.name)} <small>→ ${esc(g.t.label)} · <span class="rv-n"></span></small></summary>
         <div class="rv-list">${g.cands.map((c, ci) => `<label class="rv-it"><input type="checkbox" data-ci="${ci}" ${c.on ? "checked" : ""}><input type="text" class="inp" data-cn="${ci}" value="${esc(c.name === "하향식피난구" ? "대피공간" : c.name)}" data-orig="${esc(c.name)}"></label>`).join("")}</div>
         <div class="rv-quick">${QUICK(g.pl).map((x) => `<button type="button" class="btn btn-sm" data-qa="${esc(x)}">＋ ${esc(x)}</button>`).join("")}<button type="button" class="btn btn-sm" data-all="1">전체 선택/해제</button></div></details>`).join("")}`,
@@ -1649,7 +1671,7 @@ function roomsReview(items) {
   $$("[data-all]", s.el).forEach((b) => b.addEventListener("click", () => { const cs = $$(".rv-list input[type=checkbox]", b.closest(".rv-plan")); const on = !cs.every((c) => c.checked); cs.forEach((c) => { c.checked = on; }); count(); }));
   $("[data-a=no]", s.el).addEventListener("click", () => s.close());
   $("[data-a=ok]", s.el).addEventListener("click", async () => {
-    const tally = { type: 0, dongCommons: 0, commons: 0 }; const uniq = (a) => [...new Set(a.filter(Boolean))];
+    const tally = { type: 0, dongCommons: 0, commons: 0, place: 0 }; const uniq = (a) => [...new Set(a.filter(Boolean))];
     if (!Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS];
     busy(true, "실 목록 저장 중…");
     for (const [gi, g] of groups.entries()) {
@@ -1657,13 +1679,14 @@ function roomsReview(items) {
       const picked = $$(".rv-it", box).map((it) => ({ on: $("input[type=checkbox]", it).checked, name: $("input[type=text]", it).value.trim().slice(0, 20), ci: $("input[type=checkbox]", it).dataset.ci })).filter((x) => x.on && x.name);
       const names = uniq(picked.map((x) => x.name));
       if (g.t.k === "type") { p.roomsByType = p.roomsByType || {}; const before = p.roomsByType[g.pl.utype] || []; p.roomsByType[g.pl.utype] = uniq([...before, ...names]); tally.type += p.roomsByType[g.pl.utype].length - before.length; }
+      else if (g.t.k === "place") { g.pl.place = g.t.place; if (!p.commons.includes(g.t.place)) p.commons.push(g.t.place); tally.place += names.length; }
       else { const arr = g.t.k === "dongCommons" ? p.dongCommons : p.commons; const add = names.filter((x) => !arr.includes(x)); arr.push(...add); tally[g.t.k] += add.length; }
       // 좌표: 체크한 실(이름 고친 것 포함)을 도면에 저장 → 하자 등록 때 그 실 고르면 도면 핀을 그 자리에
       g.pl.rooms = uniq(picked.map((x) => x.name)).map((name) => { const x = picked.find((y) => y.name === name); const c = /^q/.test(x.ci) ? null : g.cands[Number(x.ci)]; return c ? { name, x: c.x, y: c.y } : { name }; });
       await db.put("plans", g.pl);
     }
     await saveProject(p); busy(false); await s.close();
-    toast(`실 목록 추가: 평형별 ${tally.type} · 동 공용부 ${tally.dongCommons} · 단지 공용 ${tally.commons}`, { ms: 4000 }); rerender();
+    toast(`실 목록 추가: 평형별 ${tally.type} · 동 공용부 ${tally.dongCommons} · 단지 공용 세부 위치 ${tally.place}${tally.commons ? ` · 단지 공용 ${tally.commons}` : ""}`, { ms: 4000 }); rerender();
   });
 }
 function planEdit(pl, isNew = false) {
@@ -1673,13 +1696,15 @@ function planEdit(pl, isNew = false) {
       <label class="fld"><span>이름</span><input class="inp" id="pe-name" value="${esc(pl.name)}" placeholder="예: 84A 기준층"></label>
       <div class="fld"><span>적용 동 <small>(아무것도 안 고르면 전체 동)</small></span><div class="chips wrap" id="pe-dongs">${p.dongs.map((d) => `<button type="button" class="chip ${pl.dongs?.includes(d.name) ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div></div>
       <label class="fld"><span>적용 층 <small>(예: 3-25, B2-B1 · 비우면 전체)</small></span><input class="inp" id="pe-floors" value="${esc(pl.floors || "")}" placeholder="3-25"></label>
+      <label class="fld"><span>단지 공용 장소 <small>(지하주차장·부대복리시설 등 — 이 도면의 실이 그 장소의 세부 위치가 돼요)</small></span><input class="inp" id="pe-place" value="${esc(M.placeOf(pl, p))}" placeholder="예: 지하주차장"></label>
       <label class="fld"><span>세대 평형 <small>(세대 평면도일 때: 예 84A · 비우면 동·층 도면)</small></span><input class="inp" id="pe-utype" value="${esc(pl.utype || "")}" placeholder="84A"></label>`,
     footer: `${isNew ? "" : '<button type="button" class="btn btn-danger" data-a="del">삭제</button>'}<button type="button" class="btn btn-primary" data-a="save">저장</button>` });
   const u = URL.createObjectURL(pl.blob); $("#pe-img", s.el).src = u; s.onClose = () => URL.revokeObjectURL(u);
   $("#pe-dongs", s.el).addEventListener("click", (e) => { const b = e.target.closest("[data-d]"); if (b) b.classList.toggle("on"); });
   $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.a === "del") { await db.del("plans", pl.id); S.plans = S.plans.filter((x) => x.id !== pl.id); }
-    else { Object.assign(pl, { name: $("#pe-name", s.el).value.trim() || "평면도", dongs: $$("#pe-dongs .chip.on", s.el).map((x) => x.dataset.d), floors: $("#pe-floors", s.el).value.trim(), utype: M.normType($("#pe-utype", s.el).value) });
+    else { Object.assign(pl, { name: $("#pe-name", s.el).value.trim() || "평면도", dongs: $$("#pe-dongs .chip.on", s.el).map((x) => x.dataset.d), floors: $("#pe-floors", s.el).value.trim(), utype: M.normType($("#pe-utype", s.el).value), place: $("#pe-place", s.el).value.trim().slice(0, 15) });
+      if (pl.place && !p.commons.includes(pl.place)) { p.commons.push(pl.place); await saveProject(p); }
       await db.put("plans", pl); const i = S.plans.findIndex((x) => x.id === pl.id); if (i >= 0) S.plans[i] = pl; else S.plans.push(pl); }
     await s.close(); rerender();
   }));
