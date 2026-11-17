@@ -33,11 +33,15 @@ const sevBadge = (d) => (d.severity === "긴급" ? '<span class="sev">긴급</sp
 const fmtDT = (iso) => { const d = new Date(iso); return `${M.todayStr(d)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const shortDate = (s) => (s ? s.slice(5).replace("-", "/") : "");
 
-function setHeader(title, { backBtn = navDepth() > 1, action = "" } = {}) {
+/** 화면별 ‘?’ → 사용법의 해당 부분 */
+const HELP_OF = { new: "add", edit: "add", unit: "add", item: "status", list: "grid", grid: "grid", dash: "grid", vendors: "vendors", vendor: "send", "vendor-edit": "vendors", settings: "settings", project: "plans", import: "excel", imported: "excel", restore: "excel", sync: "team", wizard: "start", lists: "plans" };
+function setHeader(title, { backBtn = navDepth() > 1, action = "", help } = {}) {
   $("#header-title").textContent = title;
   $("#btn-back").hidden = !backBtn;
-  $("#hdr-action").innerHTML = action;
+  const path = (location.hash.split("?")[0] || "").slice(2); const hs = help ?? HELP_OF[path];
+  $("#hdr-action").innerHTML = action + (hs ? `<button type="button" class="hdr-help" data-help="${hs}" aria-label="이 화면 사용법" title="사용법">?</button>` : "");
 }
+document.addEventListener("click", (e) => { const b = e.target.closest?.("[data-help]"); if (b) { e.preventDefault(); go(`#/help?s=${b.dataset.help}`); } });
 function setTab(tab) { $$(".tab-item").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab)); $(".tab-bar").hidden = !tab; }
 
 /* ---------- 데이터 ---------- */
@@ -102,8 +106,8 @@ async function route() {
   const path = (location.hash.split("?")[0] || "#/home").slice(2) || "home";
   document.body.classList.remove("printing");
   view().oninput = null;
-  if (!LS.get("onboarded", false) && path !== "onboard" && path !== "privacy") return replace("#/onboard");
-  if (!P() && !["onboard", "wizard", "settings", "privacy", "about", "restore", "pro", "sync"].includes(path)) {
+  if (!LS.get("onboarded", false) && !["onboard", "privacy", "help"].includes(path)) return replace("#/onboard");
+  if (!P() && !["onboard", "wizard", "settings", "privacy", "about", "restore", "pro", "sync", "help"].includes(path)) {
     setTab("home"); setHeader(APP_NAME, { backBtn: false });
     view().innerHTML = noProject(); bindNoProject(); return;
   }
@@ -111,8 +115,9 @@ async function route() {
   if (selKey !== S.selRoute && !["item", "edit"].includes(path)) { S.select.clear(); S.selAnchor = null; S.selRoute = selKey; }
   document.body.classList.remove("has-selbar");
   const fn = ROUTES[path] || ROUTES.home;
-  try { await fn(q()); } catch (e) { console.error(e); view().innerHTML = `<div class="card"><p>화면 오류: ${esc(e.message)}</p></div>`; }
-  window.scrollTo(0, 0);
+  let keep = false;
+  try { keep = (await fn(q())) === "keep-scroll"; } catch (e) { console.error(e); view().innerHTML = `<div class="card"><p>화면 오류: ${esc(e.message)}</p></div>`; }
+  if (!keep) window.scrollTo(0, 0);
 }
 function noProject() {
   return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>첫 현장을 만들어 주세요</h2>
@@ -1514,6 +1519,13 @@ async function exportSheet(list, title) {
 }
 
 /* ---------- 설정 ---------- */
+ROUTES.help = async (qq) => {
+  setTab(null); setHeader("사용법", { backBtn: true, help: "" });
+  const { renderHelp } = await import("./help.js");
+  renderHelp(view(), { s: qq.s || "", onboard: "#/onboard?again=1" });
+  $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
+  if (qq.s) return "keep-scroll";
+};
 ROUTES.settings = async () => {
   setTab("settings"); setHeader("설정", { backBtn: navDepth() > 1, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
   const p = P(); let est = "";
@@ -1538,7 +1550,7 @@ ROUTES.settings = async () => {
     <h3 class="sec">일반</h3><div class="slist">
       ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}
       ${item("#/pro", "⭐", Pro.isPro() ? "하자싹 프로 (사용 중)" : "하자싹 프로", Pro.isPro() ? "모든 기능 사용 중" : "현장 무제한 · 요청서 워터마크 제거")}
-      ${item("#/onboard?again=1", "📘", "사용법 다시 보기", "")}
+      ${item("#/help", "📘", "사용법 보기", "등록·도면·보내기·팀 공유·자주 묻는 질문", 'id="si-help"')}
       ${item("#/about", "ℹ️", "앱 정보", `버전 ${APP_VERSION}`)}
       ${item("#/privacy", "🔒", "개인정보처리방침", Sync.attached() ? "동기화 중: 데이터가 Google Firebase에 저장돼요" : "동기화를 켜기 전에는 기기에만 저장")}
       ${item("", "🗑", "모든 데이터 삭제", Sync.attached() ? "현장·하자·사진·업체 · 팀 현장 전체(모든 팀원 기기·클라우드)에서도 삭제" : "이 기기의 현장·하자·사진·업체", 'data-a="wipe"')}</div>`;
