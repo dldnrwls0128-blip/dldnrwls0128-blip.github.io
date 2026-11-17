@@ -195,3 +195,23 @@ body.sheet-open{overflow:hidden}
   .wm{position:fixed;top:40%;left:0;right:0;text-align:center;font-size:56pt;color:#0001;transform:rotate(-24deg);pointer-events:none}
   @page{size:A4;margin:12mm}
 }
+/* 직접 추가한 항목 표시(✎ 누르거나 길게 눌러 편집) · 입력 시트 오류 · 기타 위치 */
+.tile.ua,.chip.ua{position:relative;-webkit-touch-callout:none;user-select:none}
+.ua-ed{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;margin-left:4px;border-radius:999px;background:rgba(127,127,127,.18);font-size:13px;font-weight:400;vertical-align:middle}
+.tile.ua .ua-ed{position:absolute;top:2px;right:2px;margin:0}
+.tile.on .ua-ed,.chip.on .ua-ed{background:rgba(255,255,255,.25)}
+.fs-err{color:var(--bad,#d33);font-size:14px;min-height:1.2em;margin:4px 0 0}
+.btn-etc{margin-top:6px;border-style:dashed;color:var(--sub)}
+.imp-res .hrow b small,.tbl tr.sub small{font-weight:400;color:var(--sub)}
+/* 업체에 보내기: 건별 선택 */
+.sel-bar{display:flex;align-items:baseline;gap:4px;margin:0 0 6px}.sel-bar b{font-size:17px;color:var(--brand)}
+.sel-loc{gap:8px;margin:6px 0}.sel-loc .inp{flex:1;min-width:0}
+.srows{display:flex;flex-direction:column;gap:6px;margin:8px 0 12px;max-height:46vh;overflow:auto;overscroll-behavior:contain}
+.srow{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:12px;background:var(--card);opacity:.7}
+.srow.on{border-color:var(--brand);opacity:1;box-shadow:inset 3px 0 0 var(--brand)}
+.srow-chk{display:flex;align-items:center;justify-content:center;min-width:48px;cursor:pointer}.srow-chk input{width:22px;height:22px;accent-color:var(--brand)}
+.srow-body{flex:1;min-width:0;min-height:56px;text-align:left;background:none;border:0;padding:8px 4px;color:var(--ink);cursor:pointer;display:flex;flex-direction:column;gap:2px}
+.srow-body small{color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srow-ph{min-width:52px;border:0;border-left:1px solid var(--line);background:none;color:var(--sub);font-size:13px;cursor:pointer;filter:grayscale(1);opacity:.55}
+.srow-ph.on{filter:none;opacity:1;color:var(--ink)}.srow-ph.none{cursor:default}
+.send-grid .disabled{opacity:.45}

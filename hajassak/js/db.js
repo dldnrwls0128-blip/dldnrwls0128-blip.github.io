@@ -53,6 +53,14 @@ export async function putMany(store, values) {
     await done(tx);
   }
 }
+export async function delMany(store, keys) {
+  const db = await openDb();
+  for (let i = 0; i < keys.length; i += 2000) {
+    const tx = db.transaction(store, "readwrite"); const os = tx.objectStore(store);
+    for (const k of keys.slice(i, i + 2000)) os.delete(k);
+    await done(tx);
+  }
+}
 export async function clear(store) { const db = await openDb(); const tx = db.transaction(store, "readwrite"); tx.objectStore(store).clear(); await done(tx); }
 export async function byIndex(store, index, key) { const db = await openDb(); return rq(db.transaction(store).objectStore(store).index(index).getAll(key)); }
 export async function delByIndex(store, index, key) {

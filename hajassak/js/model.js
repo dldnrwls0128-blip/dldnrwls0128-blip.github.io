@@ -33,6 +33,13 @@ export const DEFAULT_ROOMS = ["현관", "거실", "주방", "침실1", "침실2"
 export const DEFAULT_PARTS = ["바닥", "벽", "천장", "문", "창", "가구", "기구", "기타"];
 export const DEFAULT_COMMONS = ["지하주차장", "주출입구", "코어(계단·EV홀)", "옥상", "외벽", "커뮤니티", "관리동", "단지 외부"];
 export const CATEGORIES = ["시공불량", "사전점검", "입주자하자", "AS"];
+/** 현장별 구분 목록(직접 추가 포함). 예전 현장은 기본 4개 */
+export const catsOf = (p) => (Array.isArray(p?.categories) && p.categories.length ? p.categories : CATEGORIES);
+/** 기본 제공 목록(직접 추가 항목 판별용) */
+export const defaultsOf = (k) => ({ commons: DEFAULT_COMMONS, types: DEFAULT_TYPES, rooms: DEFAULT_ROOMS, parts: DEFAULT_PARTS, categories: CATEGORIES, trades: DEFAULT_TRADES.map((t) => t.name) }[k] || []);
+/** 목록 중복 검사용 키(공백·대소문자 무시) */
+export const sameKey = (s) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
+export const hasSame = (arr, v, except = null) => arr.some((x) => x !== except && sameKey(x) === sameKey(v));
 export const CATEGORY_HINT = { 시공불량: "공사 중", 사전점검: "입주 전", 입주자하자: "입주 후", AS: "사후" };
 export const SEVERITIES = ["긴급", "보통", "경미"];
 export const STATUSES = ["접수", "업체전달", "조치중", "조치완료", "확인완료", "재접수"];
@@ -51,12 +58,29 @@ export function floorsOf(dong) {
   for (let b = dong.basement || 0; b >= 1; b--) out.push(`B${b}`);
   for (let f = 1; f <= (dong.floors || 0); f++) out.push(String(f));
   if (dong.roof) out.push("옥상");
-  return out;
+  for (const x of dong.extraFloors || []) if (!out.includes(x)) out.push(x); // 위치 선택기에서 직접 추가한 층
+  return out.sort((a, b) => floorRank(a) - floorRank(b));
+}
+/** 층 정렬 순위: B9…B1 < 1…99 < 옥상 */
+export const floorRank = (f) => (/^B(\d+)$/.test(f) ? -Number(f.slice(1)) : f === "옥상" ? 1000 : Number(f) || 0);
+/** 층 입력 정규화: "지하3"·"b3"·"B3층" → "B3", "27층" → "27", "옥상"/"RF"/"지붕" → "옥상". 잘못된 값이면 "" */
+export function normFloor(v) {
+  const s = String(v ?? "").trim().replace(/\s+/g, "").replace(/층$/, "").toUpperCase();
+  if (!s) return "";
+  if (/^(옥상|RF|ROOF|지붕)$/.test(s)) return "옥상";
+  let m = s.match(/^(?:B|지하|-)(\d{1,2})$/); if (m) return Number(m[1]) >= 1 && Number(m[1]) <= 9 ? `B${Number(m[1])}` : "";
+  m = s.match(/^(?:지상)?(\d{1,2})$/); if (m) return Number(m[1]) >= 1 && Number(m[1]) <= 99 ? String(Number(m[1])) : "";
+  return "";
 }
 export const floorLabel = (f) => (!f ? "" : /^B\d/.test(f) || f === "옥상" ? f : `${f}층`);
 /** 층별 호수: 1~N호 라인, 호 = 층*100+라인 (startFloor 미만은 세대 없음: 필로티 등).
  *  dong.units(엑셀 데이터에서 찾은 실제 세대 목록)가 있으면 그 세대만 */
 export function unitsOf(dong, floor) {
+  const base = baseUnitsOf(dong, floor);
+  const ex = (dong.extraUnits || []).filter((h) => floorOfHo(h) === String(floor) && !base.includes(h));
+  return ex.length ? [...base, ...ex].sort((a, b) => Number(a) - Number(b)) : base;
+}
+function baseUnitsOf(dong, floor) {
   const f = Number(floor);
   if (!Number.isFinite(f) || f < (dong.unitStart || 1) || f > (dong.floors || 0)) return [];
   if (Array.isArray(dong.units) && dong.units.length) return dong.units.filter((h) => Math.floor(Number(h) / 100) === f).sort((a, b) => a - b);
@@ -113,7 +137,7 @@ export function newProject(name = "새 현장") {
     id: uid("p"), name, createdAt: new Date().toISOString(),
     dongs: [], commons: [...DEFAULT_COMMONS],
     trades: DEFAULT_TRADES.map((t) => ({ name: t.name, subs: [...t.subs] })),
-    types: [...DEFAULT_TYPES], rooms: [...DEFAULT_ROOMS], parts: [...DEFAULT_PARTS],
+    types: [...DEFAULT_TYPES], rooms: [...DEFAULT_ROOMS], parts: [...DEFAULT_PARTS], categories: [...CATEGORIES],
     dueDays: 7,
   };
 }
@@ -155,7 +179,7 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.status === "_open" ? !isOpen(d) : f.status && d.status !== f.status) return false;
     if (f.overdue && !isOverdue(d, today)) return false;
     if (text) {
-      const hay = `${d.dong} ${d.ho} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
+      const hay = `${d.dong} ${d.ho} ${d.common || ""} ${d.locEtc || ""} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
       if (!hay.includes(text)) return false;
     }
     return true;
@@ -182,7 +206,7 @@ export const sortDefects = (a, b) =>
   (a.dong || "").localeCompare(b.dong || "", "ko", { numeric: true }) ||
   (Number(a.ho) || 0) - (Number(b.ho) || 0) || (a.trade || "").localeCompare(b.trade || "", "ko") || (a.createdAt < b.createdAt ? -1 : 1);
 
-export const locText = (d) => [d.dong, d.ho ? `${d.ho}호` : floorLabel(d.floor), d.common, d.room, d.part].filter(Boolean).join(" ");
+export const locText = (d) => [d.dong, d.ho ? `${d.ho}호` : floorLabel(d.floor), d.common, d.room, d.part, d.locEtc].filter(Boolean).join(" ");
 export const tradeText = (d) => [d.trade, d.subTrade].filter(Boolean).join("/");
 
 /** 업체 전달 문구(카톡·문자) */
@@ -198,7 +222,7 @@ export function shareMessage({ project, vendor, items, appName = "하자싹" }) 
   for (const [loc, arr] of byLoc) {
     lines.push("", `■ ${loc}`);
     for (const d of arr) {
-      const where = [d.room, d.part].filter(Boolean).join(" ");
+      const where = [d.room, d.part, d.locEtc].filter(Boolean).join(" ");
       lines.push(`- ${where ? where + " · " : ""}${tradeText(d)} ${d.type ? "[" + d.type + "]" : ""} ${d.content || ""}`.replace(/\s+/g, " ").trim() +
         (d.due ? ` (기한 ${d.due.slice(5).replace("-", "/")})` : "") + (d.severity === "긴급" ? " ⚠긴급" : ""));
     }

@@ -7,7 +7,7 @@ import { shareKakao, copyText, contactPickerSupported, pickContacts, canShareFil
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
 
-export const APP_VERSION = "1.0.0";
+export const APP_VERSION = "1.0.2";
 export const APP_NAME = "하자싹";
 const LS = {
   get(k, d) { try { return JSON.parse(localStorage.getItem("hs:" + k)) ?? d; } catch { return d; } },
@@ -270,7 +270,7 @@ function filterSheet() {
       ${sel("dong", p.dongs.map((d) => [d.name, d.name]), "동")}
       <label class="fld"><span>호</span><input class="inp" data-k="ho" inputmode="numeric" value="${esc(f.ho || "")}" placeholder="예: 1203"></label>
       ${sel("status", [["_open", "미조치 전체"], ...M.STATUSES.map((x) => [x, x])], "상태")}
-      ${sel("category", M.CATEGORIES.map((x) => [x, x]), "구분")}
+      ${sel("category", [...new Set([...M.catsOf(p), ...PD().map((d) => d.category).filter(Boolean)])].map((x) => [x, x]), "구분")}
       ${sel("trade", usedTrades.map((x) => [x, x]), "공종")}
       ${sel("vendorId", [["_none", "업체 미지정"], ...S.vendors.map((v) => [v.id, v.name])], "업체")}
       ${sel("type", usedTypes.map((x) => [x, x]), "유형")}
@@ -351,6 +351,7 @@ ROUTES.dash = async () => {
   const bar = (v, max, cls = "") => `<span class="bar ${cls}"><i style="width:${Math.round((v / Math.max(1, max)) * 100)}%"></i></span>`;
   const types = M.countBy(open, "type").slice(0, 8); const tmax = Math.max(1, ...types.map((t) => t[1]));
   const dongs = M.countBy(open, "dong").slice(0, 12); const dmax = Math.max(1, ...dongs.map((t) => t[1]));
+  const cats = M.countBy(list, "category"); const copen = new Map(M.countBy(open, "category")); const cmax = Math.max(1, ...cats.map((t) => t[1]));
   view().innerHTML = `
     <div class="kpis"><div class="kpi"><b>${n(list.length)}</b><span>전체</span></div><div class="kpi"><b>${n(open.length)}</b><span>미조치</span></div>
       <div class="kpi warn"><b>${n(od.length)}</b><span>기한초과</span></div><div class="kpi ok"><b>${list.length ? Math.round((done / list.length) * 100) : 0}%</b><span>조치율</span></div></div>
@@ -359,10 +360,12 @@ ROUTES.dash = async () => {
     <section class="card"><h3>업체별 <small>미조치 · 기한초과 · 조치율</small></h3>
       <table class="tbl"><tbody>${vlist.map(([k, m]) => `<tr data-v="${k}"><td>${esc(k === "_none" ? "업체 미지정" : V(k)?.name || "?")}</td><td class="r">${m.open}</td><td class="r ${m.od ? "od" : ""}">${m.od}</td><td class="w">${bar(m.done, m.all, "ok")}<small>${Math.round((m.done / m.all) * 100)}%</small></td></tr>`).join("") || '<tr><td class="help">데이터 없음</td></tr>'}</tbody></table></section>
     <section class="card"><h3>미조치 경과일</h3>${aging.map(([l, v]) => `<div class="hrow"><span>${l}</span>${bar(v, amax, v && l.includes("초과") ? "bad" : "")}<b>${v}</b></div>`).join("")}</section>
+    <section class="card"><h3>구분별 <small>전체 · 미조치</small></h3>${cats.map(([t, v]) => `<div class="hrow" data-cat="${esc(t)}"><span>${esc(t || "-")}</span>${bar(v, cmax)}<b>${v}<small> · ${copen.get(t) || 0}</small></b></div>`).join("") || '<p class="help">없음</p>'}</section>
     <section class="card"><h3>유형별(미조치)</h3>${types.map(([t, v]) => `<div class="hrow"><span>${esc(t || "-")}</span>${bar(v, tmax)}<b>${v}</b></div>`).join("") || '<p class="help">없음</p>'}</section>
     <section class="card"><h3>동별(미조치)</h3>${dongs.map(([t, v]) => `<div class="hrow" data-dg="${esc(t)}"><span>${esc(t || "-")}</span>${bar(v, dmax)}<b>${v}</b></div>`).join("") || '<p class="help">없음</p>'}</section>`;
   $$("[data-st]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = { status: b.dataset.st }; LS.set("filter", S.filter); go("#/list"); }));
   $$("[data-v]", view()).forEach((r) => r.addEventListener("click", () => { if (r.dataset.v === "_none") { S.filter = { vendorId: "_none", status: "_open" }; LS.set("filter", S.filter); go("#/list"); } else go(`#/vendor?id=${r.dataset.v}`); }));
+  $$("[data-cat]", view()).forEach((r) => r.addEventListener("click", () => { if (!r.dataset.cat) return; S.filter = { category: r.dataset.cat }; LS.set("filter", S.filter); go("#/list"); }));
   $$("[data-dg]", view()).forEach((r) => r.addEventListener("click", () => go(`#/grid?dong=${encodeURIComponent(r.dataset.dg)}`)));
 };
 
@@ -370,7 +373,7 @@ ROUTES.dash = async () => {
 function startDraft(loc = {}, base = null) {
   const p = P();
   S.draft = base ? { ...structuredClone({ ...base, history: undefined }), _editId: base.id, photos: [] } : {
-    dong: "", floor: "", ho: "", common: "", room: "", part: "", trade: "", subTrade: "", type: "", category: LS.get("lastCat", "시공불량"),
+    dong: "", floor: "", ho: "", common: "", room: "", part: "", locEtc: "", trade: "", subTrade: "", type: "", category: LS.get("lastCat", "시공불량"),
     severity: "보통", content: "", vendorId: "", vendorAuto: true, due: M.addDays(p.dueDays ?? 7), pin: null, photos: [], ...loc,
   };
 }
@@ -380,8 +383,80 @@ ROUTES.edit = async (qq) => {
   if (!S.draft || S.draft._editId !== d.id) startDraft({}, d);
   renderForm();
 };
-function chipRow(name, opts, cur, { allowAdd = false } = {}) {
-  return `<div class="chips wrap" data-chips="${name}">${opts.map((o) => `<button type="button" class="chip ${o === cur ? "on" : ""}" data-v="${esc(o)}">${esc(o)}</button>`).join("")}${allowAdd ? `<button type="button" class="chip add" data-add="${name}">＋ 직접입력</button>` : ""}</div>`;
+function chipRow(name, opts, cur, { allowAdd = false, ua = null } = {}) {
+  return `<div class="chips wrap" data-chips="${name}">${opts.map((o) => { const u = ua?.(o); return `<button type="button" class="chip ${o === cur ? "on" : ""} ${u ? "ua" : ""}" data-v="${esc(o)}"${u ? ' data-ua="1"' : ""}>${esc(o)}${u ? '<span class="ua-ed" data-ed="1" title="이름 변경·삭제">✎</span>' : ""}</button>`; }).join("")}${allowAdd ? `<button type="button" class="chip add" data-add="${name}">＋ 직접 추가</button>` : ""}</div>`;
+}
+/* ---------- 직접 추가·편집 공용 (위치 선택기·등록 폼) ---------- */
+/** 작은 입력 시트(레이어 → 뒤로가기로 닫힘). validate(vals) → 오류 문구("" = 통과). 결과 Promise<vals|null> */
+function formSheet({ title, fields, ok = "추가", hint = "", validate = () => "" }) {
+  return new Promise((resolve) => {
+    let val = null;
+    const s = openSheet({ title, cls: "dialog add-sheet",
+      html: `${hint ? `<p class="help">${esc(hint)}</p>` : ""}${fields.map((x, i) => `<label class="fld"><span>${esc(x.label)}</span><input class="inp" data-fk="${x.k}" type="${x.type || "text"}" ${x.inputmode ? `inputmode="${x.inputmode}"` : ""} value="${esc(x.value ?? "")}" placeholder="${esc(x.placeholder || "")}" ${i === 0 ? 'enterkeyhint="done"' : ""}></label>`).join("")}<p class="fs-err" role="alert"></p>`,
+      footer: `<button type="button" class="btn" data-a="no">취소</button><button type="button" class="btn btn-primary" data-a="yes">${esc(ok)}</button>` });
+    const ins = $$("input", s.el); setTimeout(() => ins[0]?.focus(), 50);
+    s.onClose = () => resolve(val);
+    const yes = () => {
+      const v = Object.fromEntries(ins.map((i) => [i.dataset.fk, i.value.trim()]));
+      const err = validate(v); if (err) { const e = $(".fs-err", s.el); e.textContent = err; return; }
+      val = v; s.close();
+    };
+    ins.forEach((i) => { i.addEventListener("keydown", (e) => { if (e.key === "Enter") yes(); }); i.addEventListener("input", () => { $(".fs-err", s.el).textContent = ""; }); });
+    $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", () => (b.dataset.a === "yes" ? yes() : s.close())));
+  });
+}
+/** 하자 필드 ↔ 현장 목록 키 */
+const LIST_FIELD = { commons: "common", rooms: "room", parts: "part", types: "type", categories: "category", trades: "trade" };
+const LIST_NAME = { commons: "공용부", rooms: "실", parts: "부위", types: "유형", categories: "구분", trades: "공종", subTrade: "세부공종" };
+const listArr = (p, k) => { if (k === "categories" && !Array.isArray(p.categories)) p.categories = [...M.catsOf(p)]; return k === "trades" ? p.trades.map((t) => t.name) : p[k]; };
+const isUserItem = (k, v) => !M.defaultsOf(k).includes(v);
+/** 목록(공용부·실·부위·유형·구분·공종)에 새 항목 추가 → 이름 또는 null */
+async function addListItem(k) {
+  const p = P(); const arr = listArr(p, k); const nm = LIST_NAME[k];
+  const r = await formSheet({ title: `${nm} 직접 추가`, ok: "추가하고 선택", hint: "현장 설정에 저장돼서 다음부터 바로 고를 수 있어요.",
+    fields: [{ k: "v", label: `${nm} 이름`, placeholder: { commons: "예: 경비실", rooms: "예: 알파룸", parts: "예: 걸레받이", types: "예: 결로", categories: "예: 준공검사", trades: "예: 방음" }[k] }],
+    validate: ({ v }) => (!v ? "이름을 입력하세요" : v.length > 20 ? "20자 이내로 입력하세요" : M.hasSame(arr, v) ? `이미 있는 ${nm}이에요: ${arr.find((x) => M.sameKey(x) === M.sameKey(v))}` : "") });
+  if (!r) return null;
+  if (k === "trades") p.trades.push({ name: r.v, subs: [] }); else p[k].push(r.v);
+  await saveProject(p); toast(`${nm} ‘${r.v}’ 추가했어요`); return r.v;
+}
+/** 직접 추가한 항목 이름 변경·삭제. 이름 변경은 기존 하자에도 반영, 삭제는 사용 중이 아닐 때만. → "ren"|"del"|null */
+async function editUserItem({ kind, name, used, rename, remove }) {
+  const act = await choose(name, [{ label: "이름 변경", value: "ren", icon: "✎", sub: used ? `하자 ${used}건의 이름도 함께 바뀌어요` : "" },
+    used ? { label: "삭제할 수 없어요", value: "used", icon: "🔒", sub: `하자 ${used}건에서 사용 중` } : { label: "삭제", value: "del", icon: "🗑", sub: "사용 중인 하자가 없어요" }]);
+  if (act === "used") { toast(`하자 ${used}건에서 쓰고 있어 삭제할 수 없어요`); return null; }
+  if (act === "del") { if (!(await ask(`${kind} ‘${name}’을(를) 목록에서 삭제할까요?`, { ok: "삭제", danger: true }))) return null; await remove(); toast("삭제했어요"); return "del"; }
+  if (act === "ren") { const ok = await rename(); return ok ? "ren" : null; }
+  return null;
+}
+/** 목록 항목(공용부·실·부위·유형·구분·공종) 편집 */
+async function editListItem(k, name) {
+  const p = P(); const fld = LIST_FIELD[k]; const nm = LIST_NAME[k];
+  const users = () => PD().filter((d) => d[fld] === name);
+  return editUserItem({ kind: nm, name, used: users().length,
+    remove: async () => { if (k === "trades") p.trades = p.trades.filter((t) => t.name !== name); else p[k] = p[k].filter((x) => x !== name); await saveProject(p); },
+    rename: async () => {
+      const arr = listArr(p, k);
+      const r = await formSheet({ title: `${nm} 이름 변경`, ok: "변경", fields: [{ k: "v", label: "새 이름", value: name }],
+        validate: ({ v }) => (!v ? "이름을 입력하세요" : v.length > 20 ? "20자 이내로 입력하세요" : M.hasSame(arr, v, name) ? `이미 있는 ${nm}이에요` : "") });
+      if (!r || r.v === name) return false;
+      if (k === "trades") { const t = p.trades.find((x) => x.name === name); if (t) t.name = r.v; for (const v of S.vendors) if ((v.trades || []).includes(name)) { v.trades = v.trades.map((x) => (x === name ? r.v : x)); await saveVendor(v); } }
+      else p[k] = p[k].map((x) => (x === name ? r.v : x));
+      await saveProject(p);
+      for (const d of users()) { d[fld] = r.v; await saveDefect(d, { local: false }); }
+      if (S.draft?.[fld] === name) S.draft[fld] = r.v;
+      if (k === "categories" && LS.get("lastCat") === name) LS.set("lastCat", r.v);
+      toast("이름을 바꿨어요"); return true;
+    } });
+}
+/** 길게 누르기(0.55초) → onLong(el). 이후 click은 무시 */
+function onLongPress(root, sel, onLong) {
+  let t = 0, fired = false, sx = 0, sy = 0;
+  root.addEventListener("pointerdown", (e) => { const el = e.target.closest(sel); if (!el) return; fired = false; sx = e.clientX; sy = e.clientY; clearTimeout(t); t = setTimeout(() => { fired = true; onLong(el); }, 550); });
+  root.addEventListener("pointermove", (e) => { if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 12) clearTimeout(t); });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((ev) => root.addEventListener(ev, () => clearTimeout(t)));
+  root.addEventListener("contextmenu", (e) => { if (e.target.closest(sel)) e.preventDefault(); });
+  root.addEventListener("click", (e) => { if (fired && e.target.closest(sel)) { e.stopImmediatePropagation(); e.preventDefault(); fired = false; } }, true);
 }
 function matchPlans(dr) { const p = P(); return S.plans.filter((pl) => pl.projectId === p.id && dr.dong && M.planMatches(pl, dr.dong, dr.floor || M.floorOfHo(dr.ho))); }
 function renderForm() {
@@ -397,10 +472,10 @@ function renderForm() {
     <label class="fld"><span>위치 <em>*</em></span>
       <button type="button" class="inp loc-btn ${loc ? "" : "ph"}" id="btn-loc">${esc(loc || "동·층·호·실 선택")}<span>›</span></button></label>
     ${plans.length ? `<button type="button" class="btn btn-sm" id="btn-pin">🗺 도면에 위치 표시${dr.pin ? " ✓" : ""}</button>` : ""}
-    <div class="fld"><span>구분</span>${chipRow("category", M.CATEGORIES, dr.category)}</div>
-    <div class="fld"><span>공종 <em>*</em></span>${chipRow("trade", p.trades.map((t) => t.name), dr.trade, { allowAdd: true })}</div>
+    <div class="fld"><span>구분</span>${chipRow("category", M.catsOf(p), dr.category, { allowAdd: true, ua: (o) => isUserItem("categories", o) })}</div>
+    <div class="fld"><span>공종 <em>*</em></span>${chipRow("trade", p.trades.map((t) => t.name), dr.trade, { allowAdd: true, ua: (o) => isUserItem("trades", o) })}</div>
     ${trade?.subs?.length ? `<div class="fld"><span>세부공종</span>${chipRow("subTrade", trade.subs, dr.subTrade, { allowAdd: true })}</div>` : ""}
-    <div class="fld"><span>유형</span>${chipRow("type", p.types, dr.type, { allowAdd: true })}</div>
+    <div class="fld"><span>유형</span>${chipRow("type", p.types, dr.type, { allowAdd: true, ua: (o) => isUserItem("types", o) })}</div>
     <div class="fld"><span>중요도</span>${chipRow("severity", M.SEVERITIES, dr.severity)}</div>
     <label class="fld"><span>내용 <em>*</em></span><div class="ta-wrap"><textarea class="inp" id="f-content" rows="3" placeholder="예: 거실 창호 하부 실리콘 미시공">${esc(dr.content)}</textarea>
       ${speechSupported() ? `<button type="button" class="mic" id="btn-mic" aria-label="음성으로 입력">🎤</button>` : ""}</div></label>
@@ -419,17 +494,23 @@ function renderForm() {
     const b = e.target.closest("button"); if (!b) return; sync();
     const k = row.dataset.chips;
     let v = b.dataset.v;
+    const LK = { trade: "trades", type: "types", category: "categories" }[k];
+    if (LK && b.dataset.ua && e.target.closest("[data-ed]")) { await editListItem(LK, v); return renderForm(); }
     if (b.dataset.add) {
-      v = await prompt2(`${{ trade: "공종", subTrade: "세부공종", type: "유형" }[k]} 직접입력`, "", { ok: "추가" }); if (!v) return;
-      if (k === "trade" && !p.trades.some((t) => t.name === v)) { p.trades.push({ name: v, subs: [] }); await saveProject(p); }
-      if (k === "type" && !p.types.includes(v)) { p.types.push(v); await saveProject(p); }
-      if (k === "subTrade" && trade && !trade.subs.includes(v)) { trade.subs.push(v); await saveProject(p); }
+      if (LK) { v = await addListItem(LK); if (!v) return; }
+      else if (k === "subTrade" && trade) {
+        const r = await formSheet({ title: "세부공종 직접 추가", ok: "추가하고 선택", fields: [{ k: "v", label: `${trade.name} 세부공종`, placeholder: "예: 걸레받이" }],
+          validate: ({ v }) => (!v ? "이름을 입력하세요" : M.hasSame(trade.subs, v) ? "이미 있는 세부공종이에요" : "") });
+        if (!r) return; v = r.v; trade.subs.push(v); await saveProject(p);
+      } else return;
+      if (dr[k] === v) dr[k] = ""; // 아래 토글에서 다시 선택되도록
     }
     if (k === "trade" && dr.trade !== v) { dr.subTrade = ""; dr.vendorAuto = true; }
     dr[k] = dr[k] === v && k !== "category" && k !== "severity" ? "" : v;
     if (k === "category") LS.set("lastCat", v);
     renderForm();
   }));
+  onLongPress($("#dform"), "[data-chips] .chip[data-ua]", async (b) => { sync(); const LK = { trade: "trades", type: "types", category: "categories" }[b.closest("[data-chips]").dataset.chips]; if (LK) { await editListItem(LK, b.dataset.v); renderForm(); } });
   $("#btn-loc").addEventListener("click", () => { sync(); locationPicker(dr, () => renderForm()); });
   $("#btn-pin")?.addEventListener("click", () => { sync(); pinSheet(plans, dr, () => renderForm()); });
   $("#btn-mic")?.addEventListener("click", () => {
@@ -457,11 +538,11 @@ function renderForm() {
   $("#btn-cancel")?.addEventListener("click", () => { S.draft = null; back(); });
   const save = async (next) => {
     sync();
-    const err = !dr.dong && !dr.common ? "위치를 선택하세요" : !dr.trade ? "공종을 선택하세요" : !dr.content.trim() && !dr.type ? "내용 또는 유형을 입력하세요" : "";
+    const err = !dr.dong && !dr.common && !dr.locEtc?.trim() ? "위치를 선택하세요" : !dr.trade ? "공종을 선택하세요" : !dr.content.trim() && !dr.type ? "내용 또는 유형을 입력하세요" : "";
     if (err) { $("#form-err").textContent = err; toast(err); return; }
     busy(true, "저장 중…");
     const now = new Date().toISOString();
-    const fields = ["dong", "floor", "ho", "common", "room", "part", "trade", "subTrade", "type", "category", "severity", "content", "vendorId", "due", "pin"];
+    const fields = ["dong", "floor", "ho", "common", "room", "part", "locEtc", "trade", "subTrade", "type", "category", "severity", "content", "vendorId", "due", "pin"];
     let d;
     if (editing) { d = S.defects.find((x) => x.id === dr._editId); for (const k of fields) d[k] = dr[k]; d.history = [...(d.history || []), { at: now, status: d.status, note: "내용 수정" }]; }
     else { d = { id: M.uid("h"), projectId: p.id, createdAt: now, status: "접수", memo: "", origin: "local", history: [{ at: now, status: "접수", note: "등록" }] }; for (const k of fields) d[k] = dr[k]; d.content = d.content.trim(); }
@@ -471,7 +552,7 @@ function renderForm() {
       const m = S.pidx.get(d.id) || { before: 0, after: 0 }; m.before++; S.pidx.set(d.id, m); URL.revokeObjectURL(ph.url);
     }
     busy(false);
-    const keep = { dong: d.dong, floor: d.floor, ho: d.ho, common: d.common, room: d.room };
+    const keep = { dong: d.dong, floor: d.floor, ho: d.ho, common: d.common, room: d.room, locEtc: d.locEtc || "" };
     S.draft = null;
     if (editing) { toast("수정했어요"); back(); return; }
     if (next) { startDraft(keep); toast(`저장했어요 · ${M.locText(d)} 계속 등록`); renderForm(); window.scrollTo(0, 0); }
@@ -481,10 +562,12 @@ function renderForm() {
   $("#btn-save-next")?.addEventListener("click", () => save(true));
 }
 
-/* 위치 선택기: 동/공용부 → 층 → 호 → 실 → 부위 (단계마다 뒤로가기 한 칸) */
+/* 위치 선택기: 동/공용부 → 층 → 호 → 실 → 부위 (단계마다 뒤로가기 한 칸).
+ * 단계마다 '＋ 직접 추가'(현장 설정에 저장 → 선택 → 다음 단계), 직접 추가한 항목은 ✎/길게 눌러 이름 변경·삭제(미사용 시),
+ * '기타 위치 직접 입력'은 저장하지 않는 1회용 위치 */
 function locationPicker(dr, onDone) {
   const p = P();
-  const sel = { dong: dr.dong, floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part };
+  const sel = { dong: dr.dong, floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part, locEtc: dr.locEtc || "" };
   const STEPS = ["dong", "floor", "ho", "room", "part"];
   let step = 0; const stepLayers = [];
   const s = openSheet({ title: "위치 선택", full: true, html: `<div id="lp"></div>`, footer: `<div class="lp-sum" id="lp-sum"></div><button type="button" class="btn btn-primary btn-lg" id="lp-ok">확인</button>`,
@@ -494,39 +577,47 @@ function locationPicker(dr, onDone) {
     if (push && i > step) { const from = step; stepLayers.push(pushLayer(() => { step = from; draw(); })); }
     step = i; draw();
   };
-  const tile = (v, label, on, cls = "") => `<button type="button" class="tile ${on ? "on" : ""} ${cls}" data-v="${esc(v)}">${esc(label)}</button>`;
+  const tile = (v, label, on, cls = "", ua = false) => `<button type="button" class="tile ${on ? "on" : ""} ${cls} ${ua ? "ua" : ""}" data-v="${esc(v)}"${ua ? ' data-ua="1"' : ""}>${esc(label)}${ua ? '<span class="ua-ed" data-ed="1" title="이름 변경·삭제">✎</span>' : ""}</button>`;
+  const addTile = (what, key = "_add") => tile(key, "＋ 직접 추가", false, "add").replace("<button ", `<button aria-label="${esc(what)} 직접 추가" `);
+  const isNumFloor = (f) => /^\d+$/.test(String(f || ""));
+  const nextAfterFloor = (d, f) => (d && (M.unitsOf(d, f).length || isNumFloor(f)) ? 2 : 3);
+  const used = (pred) => PD().filter(pred).length;
+  const sortDongs = () => p.dongs.sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true }));
   function draw() {
     s.setBackVisible(step > 0);
     const box = $("#lp", s.el); const d = dongObj();
-    const crumbs = [sel.dong || sel.common, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.room, sel.part].filter(Boolean);
+    const crumbs = [sel.dong || sel.common, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.room, sel.part, sel.locEtc && `(${sel.locEtc})`].filter(Boolean);
     let h = `<ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}">${t}</li>`).join("")}</ol>`;
     if (STEPS[step] === "dong") {
-      h += `<h4>동</h4><div class="tiles">${p.dongs.map((x) => tile(x.name, x.name, x.name === sel.dong)).join("") || '<p class="help">동이 없어요. 설정에서 추가하세요.</p>'}</div>
-        <h4>공용부</h4><div class="tiles">${p.commons.map((c) => tile("c:" + c, c, c === sel.common, "common")).join("")}</div>`;
+      h += `<h4>동</h4><div class="tiles">${p.dongs.map((x) => tile(x.name, x.name, x.name === sel.dong, "", !!x.userAdded)).join("")}${addTile("동", "_add")}</div>
+        <h4>공용부</h4><div class="tiles">${p.commons.map((c) => tile("c:" + c, c, c === sel.common, "common", isUserItem("commons", c))).join("")}${addTile("공용부", "_addc")}</div>`;
     } else if (STEPS[step] === "floor") {
-      const fl = d ? M.floorsOf(d) : [];
-      h += `<h4>${esc(sel.dong || sel.common)} · 층</h4><div class="tiles small">${[...fl].reverse().map((f) => tile(f, M.floorLabel(f), f === sel.floor)).join("")}</div>
+      const fl = d ? M.floorsOf(d) : []; const ex = new Set(d?.extraFloors || []);
+      h += `<h4>${esc(sel.dong || sel.common)} · 층</h4><div class="tiles small">${[...fl].reverse().map((f) => tile(f, M.floorLabel(f), f === sel.floor, "", ex.has(f))).join("")}${addTile("층")}</div>
         <button type="button" class="btn btn-block" data-skip="1">층 지정 안 함 (동 전체)</button>`;
     } else if (STEPS[step] === "ho") {
-      const us = d ? M.unitsOf(d, sel.floor) : [];
-      h += `<h4>${esc(sel.dong)} ${esc(M.floorLabel(sel.floor))} · 호</h4><div class="tiles">${us.map((u) => tile(u, u + "호", u === sel.ho)).join("")}</div>
+      const us = d ? M.unitsOf(d, sel.floor) : []; const ex = new Set(d?.extraUnits || []);
+      h += `<h4>${esc(sel.dong)} ${esc(M.floorLabel(sel.floor))} · 호</h4><div class="tiles">${us.map((u) => tile(u, u + "호", u === sel.ho, "", ex.has(u))).join("")}${addTile("호")}</div>
+        ${us.length ? "" : '<p class="help">이 층에 등록된 세대가 없어요. 필요하면 ＋ 직접 추가로 호수를 넣으세요.</p>'}
         <button type="button" class="btn btn-block" data-skip="1">세대 외 (복도·계단·EV홀 등)</button>`;
     } else if (STEPS[step] === "room") {
-      h += `<h4>실</h4><div class="tiles">${p.rooms.map((r) => tile(r, r, r === sel.room)).join("")}${tile("_add", "＋ 직접입력", false, "add")}</div><button type="button" class="btn btn-block" data-skip="1">건너뛰기</button>`;
+      h += `<h4>실</h4><div class="tiles">${p.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r))).join("")}${addTile("실")}</div><button type="button" class="btn btn-block" data-skip="1">건너뛰기</button>`;
     } else {
-      h += `<h4>부위</h4><div class="tiles">${p.parts.map((r) => tile(r, r, r === sel.part)).join("")}${tile("_add", "＋ 직접입력", false, "add")}</div>`;
+      h += `<h4>부위</h4><div class="tiles">${p.parts.map((r) => tile(r, r, r === sel.part, "", isUserItem("parts", r))).join("")}${addTile("부위")}</div>`;
     }
+    h += `<button type="button" class="btn btn-block btn-etc" id="lp-etc">✎ ${sel.locEtc ? `기타 위치: ${esc(sel.locEtc)} (수정)` : "기타 위치 직접 입력 (저장 안 함)"}</button>`;
     box.innerHTML = h;
     $("#lp-sum", s.el).textContent = crumbs.length ? "선택: " + crumbs.join(" · ") : "동 또는 공용부를 먼저 고르세요";
-    const ok = $("#lp-ok", s.el); ok.disabled = !(sel.dong || sel.common);
-    $$(".tile", box).forEach((b) => b.addEventListener("click", async () => {
+    const ok = $("#lp-ok", s.el); ok.disabled = !(sel.dong || sel.common || sel.locEtc);
+    $$(".tile", box).forEach((b) => b.addEventListener("click", async (e) => {
       let v = b.dataset.v; const k = STEPS[step];
-      if (v === "_add") { v = await prompt2(k === "room" ? "실 이름" : "부위", "", { ok: "선택" }); if (!v) return; const arr = k === "room" ? p.rooms : p.parts; if (!arr.includes(v)) { arr.push(v); await saveProject(p); } }
+      if (b.dataset.ua && e.target.closest("[data-ed]")) return editTile(b);
+      if (v === "_add" || v === "_addc") { v = await addHere(k, v === "_addc"); if (v == null) return; }
       if (k === "dong") {
         if (v.startsWith("c:")) { sel.common = v.slice(2); sel.dong = ""; sel.floor = ""; sel.ho = ""; return setStep(3); }
         if (sel.dong !== v) { sel.floor = ""; sel.ho = ""; } sel.dong = v; sel.common = ""; return setStep(1);
       }
-      if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(d && M.unitsOf(d, v).length ? 2 : 3); }
+      if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(nextAfterFloor(dongObj(), v)); }
       if (k === "ho") { sel.ho = v; return setStep(3); }
       if (k === "room") { sel.room = v; return setStep(4); }
       sel.part = v; draw();
@@ -537,9 +628,117 @@ function locationPicker(dr, onDone) {
       if (k === "ho") { sel.ho = ""; return setStep(3); }
       if (k === "room") { sel.room = ""; return setStep(4); }
     });
+    $("#lp-etc", box).addEventListener("click", async () => {
+      const r = await formSheet({ title: "기타 위치 직접 입력", ok: "적용", hint: "이번 하자에만 쓰이고 목록에는 저장되지 않아요. 비우면 지워져요.",
+        fields: [{ k: "v", label: "위치 설명", value: sel.locEtc, placeholder: "예: 101동 뒤 화단 배수구 옆" }], validate: ({ v }) => (v.length > 40 ? "40자 이내로 입력하세요" : "") });
+      if (!r) return; sel.locEtc = r.v; draw();
+    });
   }
+  /** 현재 단계에 새 항목 추가 → 저장 후 선택할 값(동 이름, "c:공용부", 층, 호, 실, 부위) 또는 null */
+  async function addHere(k, common = false) {
+    const d = dongObj();
+    if (k === "dong" && common) { const v = await addListItem("commons"); return v ? "c:" + v : null; }
+    if (k === "dong") {
+      const ref = p.dongs[p.dongs.length - 1] || {};
+      const norm = (x) => (/^\d+$/.test(x) ? x + "동" : x);
+      const r = await formSheet({ title: "동 직접 추가", ok: "추가하고 선택", hint: "층·라인은 나중에 설정 › 현장 › 동에서 고칠 수 있어요.",
+        fields: [{ k: "name", label: "동 이름 *", placeholder: "예: 113 또는 관리동" }, { k: "alias", label: "줄임말 (빠른 검색, 선택)", placeholder: "예: 13" },
+          { k: "floors", label: "지상 층수", type: "number", inputmode: "numeric", value: ref.floors || 15 }, { k: "lines", label: "층당 호수(라인)", type: "number", inputmode: "numeric", value: ref.lines ?? 4 },
+          { k: "basement", label: "지하 층수", type: "number", inputmode: "numeric", value: ref.basement ?? 2 }],
+        validate: (v) => {
+          const name = norm(v.name); if (!name) return "동 이름을 입력하세요"; if (name.length > 15) return "15자 이내로 입력하세요";
+          if (M.hasSame(p.dongs.map((x) => x.name), name)) return `이미 있는 동이에요: ${name}`;
+          if (v.alias && p.dongs.some((x) => x.alias === v.alias)) return `줄임말 ‘${v.alias}’은(는) ${p.dongs.find((x) => x.alias === v.alias).name}이 쓰고 있어요`;
+          const fl = Number(v.floors), ln = Number(v.lines), bs = Number(v.basement);
+          if (!(fl >= 1 && fl <= 99)) return "지상 층수는 1~99"; if (!(ln >= 0 && ln <= 20)) return "라인은 0~20"; if (!(bs >= 0 && bs <= 9)) return "지하 층수는 0~9";
+          return "";
+        } });
+      if (!r) return null;
+      const name = norm(r.name); const alias = r.alias || M.aliasOf(M.dongNum(name));
+      p.dongs.push({ id: M.uid("d"), name, alias: p.dongs.some((x) => x.alias && x.alias === alias) ? "" : alias, floors: Number(r.floors), lines: Number(r.lines), basement: Number(r.basement), unitStart: 1, roof: true, skipLines: "", userAdded: true });
+      sortDongs(); await saveProject(p); toast(`${name} 추가했어요`); return name;
+    }
+    if (k === "floor") {
+      if (!d) return null; const fl = M.floorsOf(d);
+      const r = await formSheet({ title: `${d.name} 층 직접 추가`, ok: "추가하고 선택", hint: "지하는 B3·지하3, 옥상은 옥상/RF로 입력하세요.",
+        fields: [{ k: "v", label: "층", placeholder: "예: 27, B3, 옥상" }],
+        validate: ({ v }) => { const f = M.normFloor(v); return !v ? "층을 입력하세요" : !f ? "B1~B9, 1~99, 옥상 중 하나로 입력하세요" : fl.includes(f) ? `${M.floorLabel(f)}은(는) 이미 있어요` : ""; } });
+      if (!r) return null; const f = M.normFloor(r.v);
+      d.extraFloors = [...(d.extraFloors || []), f]; await saveProject(p); toast(`${d.name} ${M.floorLabel(f)} 추가했어요`); return f;
+    }
+    if (k === "ho") {
+      if (!d) return null; const us = M.unitsOf(d, sel.floor); const fnum = isNumFloor(sel.floor) ? Number(sel.floor) : 0;
+      const toHo = (v) => { const t = String(v).replace(/호$/, "").trim(); if (!/^\d{1,4}$/.test(t)) return ""; const n0 = Number(t); const h = n0 < 100 && fnum ? fnum * 100 + n0 : n0; return h >= 101 && h <= 9920 && h % 100 >= 1 && h % 100 <= 20 ? String(h) : ""; };
+      const r = await formSheet({ title: `${d.name} ${M.floorLabel(sel.floor)} 호 직접 추가`, ok: "추가하고 선택", hint: fnum ? `라인 번호만 넣어도 돼요 (예: 5 → ${fnum * 100 + 5}호)` : "",
+        fields: [{ k: "v", label: "호수", inputmode: "numeric", placeholder: fnum ? `예: ${fnum * 100 + 5} 또는 5` : "예: 1205" }],
+        validate: ({ v }) => { const h = toHo(v); if (!v) return "호수를 입력하세요"; if (!h) return "호수는 101~9920 형식(층+라인 01~20)으로 입력하세요"; if (fnum && M.floorOfHo(h) !== String(fnum)) return `${h}호는 ${M.floorOfHo(h)}층 세대예요. ${fnum}층 호수를 입력하세요`; if (us.includes(h)) return `${h}호는 이미 있어요`; return ""; } });
+      if (!r) return null; const h = toHo(r.v);
+      d.extraUnits = [...(d.extraUnits || []), h]; await saveProject(p); toast(`${d.name} ${h}호 추가했어요`); return h;
+    }
+    if (k === "room") return addListItem("rooms");
+    if (k === "part") return addListItem("parts");
+    return null;
+  }
+  /** 직접 추가한 타일 편집(✎ 또는 길게 누르기) */
+  async function editTile(b) {
+    const k = STEPS[step]; const v = b.dataset.v; const d = dongObj();
+    if (k === "dong" && v.startsWith("c:")) {
+      const c = v.slice(2); const before = [...p.commons]; const r = await editListItem("commons", c);
+      if (r === "del" && sel.common === c) sel.common = "";
+      if (r === "ren" && sel.common === c) sel.common = p.commons.find((x) => !before.includes(x)) || "";
+      return draw();
+    }
+    if (k === "dong") {
+      const dg = p.dongs.find((x) => x.name === v); if (!dg) return;
+      await editUserItem({ kind: "동", name: v, used: used((x) => x.dong === v),
+        remove: async () => { p.dongs = p.dongs.filter((x) => x !== dg); await saveProject(p); if (sel.dong === v) { sel.dong = ""; sel.floor = ""; sel.ho = ""; } },
+        rename: async () => {
+          const r = await formSheet({ title: "동 이름 변경", ok: "변경", fields: [{ k: "v", label: "새 이름", value: v }],
+            validate: ({ v: x }) => { const nmx = /^\d+$/.test(x) ? x + "동" : x; return !x ? "이름을 입력하세요" : M.hasSame(p.dongs.map((y) => y.name), nmx, v) ? "이미 있는 동이에요" : ""; } });
+          if (!r) return false; const nmx = /^\d+$/.test(r.v) ? r.v + "동" : r.v; if (nmx === v) return false;
+          dg.name = nmx; sortDongs(); await saveProject(p);
+          for (const x of PD().filter((y) => y.dong === v)) { x.dong = nmx; await saveDefect(x, { local: false }); }
+          if (sel.dong === v) sel.dong = nmx; toast("이름을 바꿨어요"); return true;
+        } });
+      return draw();
+    }
+    if (k === "floor" && d) {
+      await editUserItem({ kind: `${d.name} 층`, name: M.floorLabel(v), used: used((x) => x.dong === d.name && (x.floor === v || (x.ho && M.floorOfHo(x.ho) === v))),
+        remove: async () => { d.extraFloors = (d.extraFloors || []).filter((x) => x !== v); d.extraUnits = (d.extraUnits || []).filter((h) => M.floorOfHo(h) !== v); await saveProject(p); if (sel.floor === v) { sel.floor = ""; sel.ho = ""; } },
+        rename: async () => {
+          const r = await formSheet({ title: "층 변경", ok: "변경", fields: [{ k: "v", label: "층", value: v }],
+            validate: ({ v: x }) => { const f = M.normFloor(x); return !f ? "B1~B9, 1~99, 옥상 중 하나로 입력하세요" : f !== v && M.floorsOf(d).includes(f) ? "이미 있는 층이에요" : ""; } });
+          if (!r) return false; const f = M.normFloor(r.v); if (f === v) return false;
+          d.extraFloors = d.extraFloors.map((x) => (x === v ? f : x)); await saveProject(p);
+          for (const x of PD().filter((y) => y.dong === d.name && y.floor === v && !y.ho)) { x.floor = f; await saveDefect(x, { local: false }); }
+          if (sel.floor === v) sel.floor = f; toast("층을 바꿨어요"); return true;
+        } });
+      return draw();
+    }
+    if (k === "ho" && d) {
+      await editUserItem({ kind: `${d.name} 호`, name: v + "호", used: used((x) => x.dong === d.name && x.ho === v),
+        remove: async () => { d.extraUnits = (d.extraUnits || []).filter((x) => x !== v); await saveProject(p); if (sel.ho === v) sel.ho = ""; },
+        rename: async () => {
+          const r = await formSheet({ title: "호수 변경", ok: "변경", fields: [{ k: "v", label: "호수", value: v, inputmode: "numeric" }],
+            validate: ({ v: x }) => (!/^\d{3,4}$/.test(x) || M.floorOfHo(x) !== M.floorOfHo(v) ? `${M.floorLabel(M.floorOfHo(v))} 호수(3~4자리)로 입력하세요` : x !== v && M.unitsOf(d, sel.floor).includes(x) ? "이미 있는 호수예요" : "") });
+          if (!r || r.v === v) return false;
+          d.extraUnits = d.extraUnits.map((x) => (x === v ? r.v : x)); await saveProject(p);
+          for (const x of PD().filter((y) => y.dong === d.name && y.ho === v)) { x.ho = r.v; await saveDefect(x, { local: false }); }
+          if (sel.ho === v) sel.ho = r.v; toast("호수를 바꿨어요"); return true;
+        } });
+      return draw();
+    }
+    if (k === "room" || k === "part") {
+      const LK = k === "room" ? "rooms" : "parts"; const before = [...p[LK]];
+      const r = await editListItem(LK, v);
+      if (r === "del" && sel[k] === v) sel[k] = "";
+      if (r === "ren" && sel[k] === v) sel[k] = p[LK].find((x) => !before.includes(x)) || "";
+      return draw();
+    }
+  }
+  onLongPress(s.el, ".tile[data-ua]", (b) => editTile(b));
   $("#lp-ok", s.el).addEventListener("click", async () => {
-    if (!(sel.dong || sel.common)) return;
+    if (!(sel.dong || sel.common || sel.locEtc)) return;
     Object.assign(dr, sel); if (sel.ho && !sel.floor) dr.floor = M.floorOfHo(sel.ho);
     await s.close(); onDone();
   });
@@ -652,7 +851,9 @@ async function markSent(items, via) {
   rerender();
   toast(`${targets.length}건 ‘업체전달’로 표시`, { action: "되돌리기", onAction: async () => { for (const [d, st] of prev) { setStatus(d, st, "전달 취소"); await saveDefect(d); } rerender(); } });
 }
-async function sendSheet({ items, vendor = null }) {
+/** 업체에 보내기: 건마다 체크해서 고른 건만 카톡·문자·복사·PDF로 보내고, 고른 건만 ‘업체전달’ 표시(되돌리기 가능).
+ *  preselect: 처음 체크할 id 목록(없으면 미전달 → 없으면 미조치 → 전체) */
+async function sendSheet({ items, vendor = null, preselect = null }) {
   if (!items.length) return toast("보낼 하자가 없어요");
   const byV = new Map(); for (const d of items) byV.set(d.vendorId || "", (byV.get(d.vendorId || "") || 0) + 1);
   if (!vendor && byV.size === 1 && [...byV.keys()][0]) vendor = V([...byV.keys()][0]);
@@ -662,41 +863,101 @@ async function sendSheet({ items, vendor = null }) {
     if (v !== "_all") { items = items.filter((d) => (d.vendorId || "_none") === v); vendor = v === "_none" ? null : V(v); }
   }
   const openItems = items.filter((d) => d.status !== "확인완료");
-  const list = openItems.length ? openItems : items;
-  const text = M.shareMessage({ project: P(), vendor, items: list, appName: APP_NAME });
+  const list = (openItems.length ? openItems : items).sort(M.sortDefects);
+  const unsent = (d) => d.status === "접수" || d.status === "재접수"; const today = M.todayStr();
+  const pre = preselect ? list.filter((d) => preselect.includes(d.id)) : [];
+  const chosen = new Set((pre.length ? pre : list.filter(unsent).length ? list.filter(unsent) : list.filter(M.isOpen).length ? list.filter(M.isOpen) : list).map((d) => d.id));
+  const phOn = new Set(list.filter((d) => photoCount(d).before).map((d) => d.id));
+  const sel = () => list.filter((d) => chosen.has(d.id));
+  const dongs = [...new Set(list.map((d) => d.dong || d.common).filter(Boolean))];
   const phones = vendor?.phones || [];
-  const s = openSheet({ title: `${vendor?.name || "업체"}에게 보내기 · ${list.length}건`, full: true,
-    html: `<label class="fld"><span>보낼 내용 (수정 가능)</span><textarea class="inp mono" id="msg" rows="10">${esc(text)}</textarea></label>
-      <label class="check"><input type="checkbox" id="withph" ${list.length <= 10 ? "checked" : ""}> 조치 전 사진 첨부 (카톡 공유 시, 최대 10장)</label>
+  const vname = vendor?.name || "업체";
+  const msgOf = () => M.shareMessage({ project: P(), vendor, items: sel(), appName: APP_NAME });
+  let dirty = false;
+  const row = (d) => { const pc = photoCount(d).before; return `<div class="srow ${chosen.has(d.id) ? "on" : ""}" data-id="${d.id}">
+      <label class="srow-chk"><input type="checkbox" data-sel="${d.id}" ${chosen.has(d.id) ? "checked" : ""} aria-label="${esc(M.locText(d))} 선택"></label>
+      <button type="button" class="srow-body" data-open="${d.id}"><b>${esc(M.locText(d) || "위치 미지정")}</b><small>${esc([M.tradeText(d), d.type].filter(Boolean).join(" · "))} ${esc((d.content || "").slice(0, 40))}</small>
+        <small>${pill(d.status)}${d.due ? ` 기한 ${esc(d.due.slice(5).replace("-", "/"))}` : ""}${M.isOverdue(d, today) ? ' <span class="od">기한초과</span>' : ""}</small></button>
+      ${pc ? `<button type="button" class="srow-ph ${phOn.has(d.id) ? "on" : ""}" data-ph="${d.id}" aria-pressed="${phOn.has(d.id)}" title="사진 첨부 켜기/끄기">📷${pc}</button>` : '<span class="srow-ph none" aria-hidden="true"></span>'}</div>`; };
+  const s = openSheet({ title: `${vname}에게 보내기 · 선택 ${chosen.size}건`, full: true,
+    html: `<div class="sel-bar"><b id="selcnt">선택 ${chosen.size}건</b><small class="help"> / ${list.length}건</small></div>
+      <div class="chips scroll" id="sel-q"><button type="button" class="chip" data-q="all">전체선택</button><button type="button" class="chip" data-q="none">전체해제</button>
+        <button type="button" class="chip" data-q="unsent">미전달만 ${list.filter(unsent).length}</button><button type="button" class="chip" data-q="od">기한초과 ${list.filter((d) => M.isOverdue(d, today)).length}</button></div>
+      ${dongs.length > 1 || list.length > 3 ? `<div class="row sel-loc"><select class="inp" id="sel-dong" aria-label="동만 선택"><option value="">동 선택…</option>${dongs.map((x) => `<option>${esc(x)}</option>`).join("")}</select><select class="inp" id="sel-ho" aria-label="호만 선택" disabled><option value="">호 선택…</option></select></div>` : ""}
+      <div class="srows" id="srows">${list.map(row).join("")}</div>
+      <label class="fld"><span>미리보기 · 보낼 내용 (수정 가능)</span><textarea class="inp mono" id="msg" rows="9">${esc(msgOf())}</textarea></label>
+      <button type="button" class="btn btn-sm" id="msg-regen" hidden>↻ 선택한 건으로 내용 다시 만들기</button>
+      <label class="check"><input type="checkbox" id="withph" ${phOn.size ? "checked" : ""}> 조치 전 사진 첨부 (카톡 공유 시, 최대 10장 · 건마다 📷로 켜고 끄기)</label>
       <div class="send-grid">
         <button type="button" class="btn btn-kakao btn-lg" data-s="kakao">카카오톡으로 보내기</button>
         ${phones.map((ph) => `<a class="btn btn-lg" data-s="sms" href="#" data-ph="${esc(ph)}">💬 문자 ${esc(ph)}</a><a class="btn btn-lg" href="${M.telHref(ph)}" data-s="tel">📞 전화 ${esc(ph)}</a>`).join("")}
         <button type="button" class="btn btn-lg" data-s="copy">📋 내용 복사</button>
         <button type="button" class="btn btn-lg" data-s="pdf">📄 요청서 PDF(인쇄)</button></div>
       <p class="help">카카오톡은 앱이 특정 친구를 대신 고를 수 없어요. 공유창에서 <b>카카오톡 → 대화방</b>을 고르면 내용이 채워진 채로 열려요.${phones.length ? "" : " 업체에 전화번호를 등록하면 문자·전화 버튼이 생겨요."}</p>
-      <label class="check"><input type="checkbox" id="mark" checked> 보낸 뒤 ‘접수’ 건을 ‘업체전달’로 표시</label>` });
-  const msg = () => $("#msg", s.el).value;
-  const after = async (via) => { const mark = $("#mark", s.el).checked; await s.close(); if (mark) await markSent(list, via); };
-  $$("[data-s]", s.el).forEach((b) => b.addEventListener("click", async (e) => {
+      <label class="check"><input type="checkbox" id="mark" checked> 보낸 뒤 선택한 건 중 ‘접수’ 건을 ‘업체전달’로 표시</label>` });
+  const el = s.el; const ta = $("#msg", el);
+  const refresh = () => {
+    const c = chosen.size; $("#selcnt", el).textContent = `선택 ${c}건`; s.setTitle(`${vname}에게 보내기 · 선택 ${c}건`);
+    $$(".srow", el).forEach((r) => { const on = chosen.has(r.dataset.id); r.classList.toggle("on", on); $("input", r).checked = on; });
+    if (!dirty) ta.value = msgOf(); $("#msg-regen", el).hidden = !dirty;
+    $$("[data-s]", el).forEach((b) => b.classList.toggle("disabled", !c && b.dataset.s !== "tel"));
+  };
+  const selectOnly = (pred, label) => { chosen.clear(); for (const d of list) if (pred(d)) chosen.add(d.id); refresh(); if (label) toast(`${label} ${chosen.size}건 선택`); };
+  ta.addEventListener("input", () => { dirty = true; $("#msg-regen", el).hidden = false; });
+  $("#msg-regen", el).addEventListener("click", () => { dirty = false; refresh(); });
+  $("#srows", el).addEventListener("change", (e) => { const i = e.target.closest("[data-sel]"); if (!i) return; if (i.checked) chosen.add(i.dataset.sel); else chosen.delete(i.dataset.sel); refresh(); });
+  $("#srows", el).addEventListener("click", (e) => {
+    const ph = e.target.closest("[data-ph]");
+    if (ph && ph.classList.contains("srow-ph")) { const id = ph.dataset.ph; if (phOn.has(id)) phOn.delete(id); else phOn.add(id); ph.classList.toggle("on", phOn.has(id)); ph.setAttribute("aria-pressed", phOn.has(id)); return; }
+    const o = e.target.closest("[data-open]"); if (o) peekDefect(list.find((d) => d.id === o.dataset.open));
+  });
+  $("#sel-q", el).addEventListener("click", (e) => {
+    const q2 = e.target.closest("[data-q]")?.dataset.q; if (!q2) return;
+    if (q2 === "all") selectOnly(() => true); else if (q2 === "none") selectOnly(() => false);
+    else if (q2 === "unsent") selectOnly(unsent, "미전달"); else if (q2 === "od") selectOnly((d) => M.isOverdue(d, today), "기한초과");
+  });
+  const sd = $("#sel-dong", el), sh = $("#sel-ho", el);
+  sd?.addEventListener("change", () => {
+    const dg = sd.value; const hos = [...new Set(list.filter((d) => (d.dong || d.common) === dg && d.ho).map((d) => d.ho))].sort((a, b) => a - b);
+    sh.innerHTML = `<option value="">${dg ? "호 전체" : "호 선택…"}</option>${hos.map((h) => `<option value="${h}">${h}호</option>`).join("")}`; sh.disabled = !dg || !hos.length;
+    if (dg) selectOnly((d) => (d.dong || d.common) === dg, dg);
+  });
+  sh?.addEventListener("change", () => { const dg = sd.value; selectOnly((d) => (d.dong || d.common) === dg && (!sh.value || d.ho === sh.value), `${dg}${sh.value ? " " + sh.value + "호" : ""}`); });
+  const after = async (via) => { const mark = $("#mark", el).checked; const items2 = sel(); await s.close(); if (mark) await markSent(items2, via); };
+  $$("[data-s]", el).forEach((b) => b.addEventListener("click", async (e) => {
     const k = b.dataset.s;
+    if (k === "tel") return; // 기본 동작(tel:)
+    if (!chosen.size) { e.preventDefault(); return toast("보낼 하자를 하나 이상 선택하세요"); }
     if (k === "kakao") {
       let files = [];
-      if ($("#withph", s.el).checked) {
+      if ($("#withph", el).checked) {
         busy(true, "사진 준비 중…");
-        for (const d of list) { for (const ph of (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 2)) if (files.length < 10) files.push(new File([ph.blob], `${M.locText(d).replace(/\s+/g, "_")}_${files.length + 1}.jpg`, { type: "image/jpeg" })); }
+        for (const d of sel()) { if (!phOn.has(d.id)) continue; for (const ph of (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 2)) if (files.length < 10) files.push(new File([ph.blob], `${M.locText(d).replace(/\s+/g, "_")}_${files.length + 1}.jpg`, { type: "image/jpeg" })); }
         busy(false);
       }
-      const r = await shareKakao({ text: msg(), files });
+      const r = await shareKakao({ text: ta.value, files });
       if (r === "cancel") return;
       if (r === "copied") toast("공유를 지원하지 않아 내용을 복사했어요. 카톡에 붙여넣기 하세요");
       if (r === "fail") return toast("공유할 수 없어요");
       return after("카톡");
     }
-    if (k === "sms") { e.preventDefault(); const href = M.smsHref(b.dataset.ph, msg()); S.lastSms = href; location.href = href; return after("문자"); }
-    if (k === "tel") return; // 기본 동작(tel:)
-    if (k === "copy") { (await copyText(msg())) ? toast("복사했어요") : toast("복사 실패"); return after("복사"); }
-    if (k === "pdf") { await s.close(); return printRequest({ vendor, items: list }); }
+    if (k === "sms") { e.preventDefault(); const href = M.smsHref(b.dataset.ph, ta.value); S.lastSms = href; location.href = href; return after("문자"); }
+    if (k === "copy") { (await copyText(ta.value)) ? toast("복사했어요") : toast("복사 실패"); return after("복사"); }
+    if (k === "pdf") { const items2 = sel(); await s.close(); return printRequest({ vendor, items: items2 }); }
   }));
+  refresh();
+}
+/** 보내기 화면에서 한 건 미리 보기(시트 위에 겹쳐 열림 → 닫아도 선택 유지) */
+async function peekDefect(d) {
+  if (!d) return;
+  const photos = (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after"); const urls = photos.map((x) => URL.createObjectURL(x.thumb || x.blob));
+  const s = openSheet({ title: M.locText(d) || "하자", full: true,
+    html: `<div class="row">${pill(d.status)}${sevBadge(d)}<span class="tbadge">${esc(d.category || "")}</span></div>
+      <p><b>${esc(M.tradeText(d))}</b>${d.type ? ` · ${esc(d.type)}` : ""}</p><p>${esc(d.content || "")}</p>
+      ${d.due ? `<p class="help">조치기한 ${esc(d.due)}${M.isOverdue(d) ? ' <span class="od">기한초과</span>' : ""}</p>` : ""}${d.memo ? `<p class="help">메모: ${esc(d.memo)}</p>` : ""}
+      <div class="photos">${urls.map((u, i) => `<div class="ph"><img src="${u}" alt="조치 전 사진 ${i + 1}"></div>`).join("") || '<p class="help">사진 없음</p>'}</div>`,
+    footer: `<button type="button" class="btn btn-primary btn-lg" data-close>보내기 화면으로</button>` });
+  s.onClose = () => urls.forEach((u) => URL.revokeObjectURL(u));
 }
 
 /* 요청서 인쇄 → PDF 저장 */
@@ -755,15 +1016,16 @@ ROUTES.vendor = async (qq) => {
     <section class="card"><div class="vinfo"><div><b>${esc(v.person || "담당자 미입력")}</b><small>${esc((v.trades || []).join(", ") || "공종 미지정")}</small>${v.memo ? `<small>${esc(v.memo)}</small>` : ""}</div></div>
       <div class="contact-row">${ph.map((p) => `<a class="btn" href="${M.telHref(p)}">📞 ${esc(p)}</a>`).join("") || '<span class="help">전화번호가 없어요 · 수정에서 추가</span>'}</div></section>
     <div class="chips scroll">${[["unsent", "미전달"], ["open", "미조치"], ["od", "기한초과"], ["done", "조치완료(확인 대기)"], ["all", "전체"]].map(([k, l]) => `<button type="button" class="chip ${k === mode ? "on" : ""}" data-m="${k}">${l} ${sets[k].length}</button>`).join("")}</div>
-    <div class="send-bar"><button type="button" class="btn btn-kakao btn-lg" id="btn-send">카톡으로 보내기 (${list.length})</button>
+    <div class="send-bar"><button type="button" class="btn btn-kakao btn-lg" id="btn-send">보내기 · 건별 선택 (${list.filter((d) => d.status !== "확인완료").length})</button>
       ${ph[0] ? `<button type="button" class="btn btn-lg" id="btn-sms">💬 문자</button>` : ""}<button type="button" class="btn btn-lg" id="btn-pdf">📄 요청서</button></div>
     ${mode === "done" && list.length ? `<button type="button" class="btn btn-block" id="btn-confirm-all">조치완료 ${list.length}건 모두 확인완료</button>` : ""}
     <div>${list.map((d) => defectCard(d)).join("") || '<div class="card empty-card"><p>해당하는 하자가 없어요.</p></div>'}</div>`;
   bindCards();
   $("#btn-vedit").addEventListener("click", () => go(`#/vendor-edit?id=${v.id}`));
   $$("[data-m]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("vmode", b.dataset.m); rerender(); }));
-  $("#btn-send").addEventListener("click", () => sendSheet({ items: list, vendor: v }));
-  $("#btn-sms")?.addEventListener("click", () => sendSheet({ items: list, vendor: v }));
+  const sendAll = () => { const pool = [...new Set([...all.filter((d) => d.status !== "확인완료"), ...list])]; if (!pool.length) return toast("보낼 하자가 없어요"); sendSheet({ items: pool, vendor: v, preselect: ["unsent", "od", "done"].includes(mode) ? list.filter((d) => d.status !== "확인완료").map((d) => d.id) : null }); };
+  $("#btn-send").addEventListener("click", sendAll);
+  $("#btn-sms")?.addEventListener("click", sendAll);
   $("#btn-pdf").addEventListener("click", () => (list.length ? printRequest({ vendor: v, items: list }) : toast("요청서에 넣을 하자가 없어요")));
   $("#btn-confirm-all")?.addEventListener("click", async () => { if (!(await ask(`${list.length}건을 확인완료로 바꿀까요?`))) return; for (const d of list) { setStatus(d, "확인완료", "일괄 확인"); await saveDefect(d); } rerender(); });
 };
@@ -900,7 +1162,7 @@ ROUTES.project = async () => {
     <div class="slist">${p.dongs.map((d) => `<button type="button" class="sitem" data-dong="${d.id}"><span class="si-ico">🏢</span><span><b>${esc(d.name)}${d.alias ? ` <small class="tag">줄임 ${esc(d.alias)}</small>` : ""}</b><small>지하${d.basement || 0} · ${d.floors}층 · ${d.lines}호 라인 · 세대 ${d.unitStart || 1}층부터${d.units?.length ? ` · 실제 세대 ${d.units.length}개(데이터 기준)` : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <div class="row"><button type="button" class="btn" id="btn-adddong">＋ 동 추가</button><button type="button" class="btn" id="btn-bulkdong">＋ 여러 동 한 번에</button></div>
     <h3 class="sec">목록 편집</h3><div class="slist">
-      ${[["commons", "🅿", "공용부", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
+      ${[["commons", "🅿", "공용부", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["categories", "🗂", "구분", M.catsOf(p)], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
         .map(([k, ico, t, arr]) => `<button type="button" class="sitem" data-list="${k}"><span class="si-ico">${ico}</span><span><b>${t}</b><small>${esc(arr.slice(0, 6).join(", "))}${arr.length > 6 ? " …" : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <h3 class="sec">도면 <small>동·층별 평면도 이미지 → 하자 위치를 도면에 찍기</small></h3>
     <div class="slist">${plans.map((pl) => `<button type="button" class="sitem" data-plan="${pl.id}"><span class="si-ico">🗺</span><span><b>${esc(pl.name)}</b><small>${esc(pl.dongs?.length ? pl.dongs.join(", ") : "전체 동")} · ${esc(pl.floors || "전체 층")}</small></span><span class="chev">›</span></button>`).join("") || '<p class="help">등록된 도면이 없어요</p>'}</div>
@@ -979,7 +1241,8 @@ ROUTES.dong = async (qq) => {
 };
 ROUTES.lists = async (qq) => {
   const p = P(); const k = qq.k;
-  const title = { commons: "공용부", trades: "공종", types: "하자 유형", rooms: "실", parts: "부위" }[k] || "목록";
+  const title = { commons: "공용부", trades: "공종", types: "하자 유형", categories: "구분", rooms: "실", parts: "부위" }[k] || "목록";
+  if (k === "categories" && !Array.isArray(p.categories)) p.categories = [...M.catsOf(p)];
   setTab(null); setHeader(title, { backBtn: true });
   const arr = k === "trades" ? p.trades.map((t) => t.name) : p[k];
   view().innerHTML = `<p class="help">항목을 누르면 이름 변경·삭제${k === "trades" ? "·세부공종 편집" : ""}을 할 수 있어요. ↑↓로 순서를 바꿔요.</p>
@@ -988,10 +1251,10 @@ ROUTES.lists = async (qq) => {
     <div class="row"><button type="button" class="btn btn-primary" id="l-add">＋ 추가</button><button type="button" class="btn" id="l-reset">기본값으로</button></div>`;
   const src = () => (k === "trades" ? p.trades : p[k]);
   const save = async () => { await saveProject(p); rerender(); };
-  $("#l-add").addEventListener("click", async () => { const v = await prompt2(`${title} 추가`); if (!v) return; if (k === "trades") p.trades.push({ name: v, subs: [] }); else if (!p[k].includes(v)) p[k].push(v); save(); });
+  $("#l-add").addEventListener("click", async () => { if (LIST_NAME[k]) { if (await addListItem(k)) rerender(); return; } const v = await prompt2(`${title} 추가`); if (!v) return; if (!p[k].includes(v)) p[k].push(v); save(); });
   $("#l-reset").addEventListener("click", async () => {
     if (!(await ask(`${title} 목록을 기본값으로 되돌릴까요? 직접 추가한 항목이 사라져요.`))) return;
-    const D = { commons: M.DEFAULT_COMMONS, types: M.DEFAULT_TYPES, rooms: M.DEFAULT_ROOMS, parts: M.DEFAULT_PARTS };
+    const D = { commons: M.DEFAULT_COMMONS, types: M.DEFAULT_TYPES, rooms: M.DEFAULT_ROOMS, parts: M.DEFAULT_PARTS, categories: M.CATEGORIES };
     if (k === "trades") p.trades = M.DEFAULT_TRADES.map((t) => ({ name: t.name, subs: [...t.subs] })); else p[k] = [...D[k]]; save();
   });
   $$("[data-up],[data-dn]", view()).forEach((b) => b.addEventListener("click", () => {
@@ -1000,8 +1263,9 @@ ROUTES.lists = async (qq) => {
   }));
   $$("[data-i]", view()).forEach((b) => b.addEventListener("click", async () => {
     const i = +b.dataset.i; const a = src(); const name = k === "trades" ? a[i].name : a[i];
-    const act = await choose(name, [{ label: "이름 변경", value: "ren" }, ...(k === "trades" ? [{ label: "세부공종 편집", value: "subs", sub: a[i].subs.join(", ") }] : []), { label: "삭제", value: "del" }]);
-    if (act === "ren") { const v = await prompt2("새 이름", name); if (!v) return; if (k === "trades") a[i].name = v; else a[i] = v; }
+    if (k !== "trades" && LIST_NAME[k]) { if (await editListItem(k, name)) rerender(); return; }
+    const act = await choose(name, [{ label: "이름 변경·삭제", value: "ed" }, ...(k === "trades" ? [{ label: "세부공종 편집", value: "subs", sub: a[i].subs.join(", ") }] : [])]);
+    if (act === "ed") { if (await editListItem(k, name)) rerender(); return; }
     else if (act === "subs") { const v = await prompt2("세부공종 (쉼표로 구분)", a[i].subs.join(", ")); if (v === null) return; a[i].subs = v.split(/\s*,\s*/).filter(Boolean); }
     else if (act === "del") a.splice(i, 1); else return;
     save();
@@ -1081,9 +1345,10 @@ ROUTES.import = async () => {
       <label class="fld"><span>머리글 행</span><select class="inp" id="hdr-row">${imp.rows.slice(0, 15).map((r, i) => `<option value="${i}" ${i === imp.headerRow ? "selected" : ""}>${i + 1}행: ${esc(r.filter(Boolean).slice(0, 4).join(" | "))}</option>`).join("")}</select></label></div>
     <h3 class="sec">열 맞추기 <small>* 필수</small></h3>
     <div class="maps">${FIELDS.map((f) => `<label class="map"><span>${f.label}${f.req ? " *" : ""}</span>${opt(f.key)}<small class="help">${esc(sample.map((r) => (imp.map[f.key] != null && imp.map[f.key] !== "" ? r[imp.map[f.key]] : "")).filter(Boolean).slice(0, 2).join(" / "))}</small></label>`).join("")}</div>
-    <label class="fld"><span>구분 열이 없을 때 기본 구분</span><select class="inp" id="def-cat">${M.CATEGORIES.map((c) => `<option ${c === (imp.defCat || "입주자하자") ? "selected" : ""}>${c}</option>`).join("")}</select></label>
+    <label class="fld"><span>구분 열이 없을 때 기본 구분</span><select class="inp" id="def-cat">${M.catsOf(P()).map((c) => `<option ${c === (imp.defCat || "입주자하자") ? "selected" : ""}>${c}</option>`).join("")}</select></label>
     <label class="check"><input type="checkbox" id="add-dongs" checked> 현장에 없는 동은 자동으로 추가</label>
-    <div class="form-act"><button type="button" class="btn btn-lg" id="imp-cancel">다른 파일</button><button type="button" class="btn btn-primary btn-lg" id="imp-go">미리보기</button></div>`;
+    <div class="form-act"><button type="button" class="btn btn-lg" id="imp-cancel">다른 파일</button><button type="button" class="btn btn-primary btn-lg" id="imp-go">적용하기</button></div>
+    <p class="help">적용하면 바로 반영되고, 결과 화면에서 <b>되돌리기</b>로 이번 가져오기를 취소할 수 있어요.</p>`;
   $("#hdr-row").addEventListener("change", async (e) => { const { guessMapping } = await import("./importer.js"); imp.headerRow = +e.target.value; imp.map = guessMapping(imp.rows[imp.headerRow] || []); rerender(); });
   $$("[data-map]", view()).forEach((s2) => s2.addEventListener("change", () => { imp.map[s2.dataset.map] = s2.value === "" ? "" : Number(s2.value); rerender(); }));
   $("#def-cat").addEventListener("change", (e) => { imp.defCat = e.target.value; });
@@ -1109,19 +1374,61 @@ async function runImport(addDongs) {
   const recs = I.rowsToRecords(imp.rows, imp.headerRow, imp.map, { project: p, defaultCategory: imp.defCat || "입주자하자" });
   const pcopy = structuredClone(p);
   const res = I.mergeRecords({ project: pcopy, existing: S.defects, records: recs, vendors: S.vendors, addMissingDongs: addDongs });
-  busy(false);
   const st = res.stats;
-  const ok = await ask(`가져올 행 ${n(st.total)}개\n· 새 하자 ${n(st.added)}건\n· 갱신 ${n(st.updated)}건 (그중 내 수정 유지 ${n(st.kept)}건)\n· 변경 없음 ${n(st.same)}건\n· 새 업체 ${res.newVendors.length}개${res.newDongs.length ? `\n· 새 동 ${res.newDongs.length}개 (${res.newDongs.slice(0, 4).join(", ")}${res.newDongs.length > 4 ? "…" : ""})` : ""}${res.fitted?.length ? `\n· 동 구조를 데이터에 맞춤(없는 층·세대 제거):\n${res.fitted.slice(0, 12).map((x) => `   ${x.name} ${x.unitStart}~${x.floors}층(${x.floorCount}개 층) · ${x.units}세대${x.dropped?.length ? ` · 제외 호수 ${x.dropped.slice(0, 3).join(",")}` : ""}`).join("\n")}${res.fitted.length > 12 ? "\n   …" : ""}` : ""}`, { ok: "가져오기", title: "가져오기 미리보기" });
-  if (!ok) return;
-  busy(true, "저장 중…");
+  if (!recs.length) { busy(false); return toast("가져올 행이 없어요. 머리글 행과 열 맞추기를 확인하세요"); }
+  // 같은 양식의 이전 가져오기보다 행이 크게 줄었을 때만 확인(오래된/부분 파일 실수 방지)
+  const hist = await db.getMeta("imports", []);
+  const prevSame = [...hist].reverse().find((h) => h.projectId === p.id && h.sig === imp.sig);
+  if (prevSame && prevSame.total >= 50 && st.total < prevSame.total * 0.5) {
+    busy(false);
+    if (!(await ask(`이전에 같은 양식으로 ${n(prevSame.total)}행을 가져왔는데 이번 파일은 ${n(st.total)}행이에요.\n오래된 파일이거나 일부만 있는 파일일 수 있어요. 그래도 적용할까요?\n(이미 있는 하자는 지워지지 않아요)`, { ok: "적용하기", title: "파일 확인" }))) return;
+  }
+  busy(true, "적용 중…");
+  // 되돌리기용 스냅샷: 새로 추가된 하자 id, 바뀌기 전 하자, 새 업체, 바뀌기 전 동 구조
+  const byId = new Map(S.defects.map((d) => [d.id, d]));
+  const undo = { at: new Date().toISOString(), file: imp.file, projectId: p.id, added: [], prev: [], newVendorIds: res.newVendors.map((v) => v.id), prevDongs: structuredClone(p.dongs) };
+  for (const d of res.toPut) { const o = byId.get(d.id); if (o) undo.prev.push(o); else undo.added.push(d.id); }
+  await db.setMeta("importUndo", undo);
   await db.putMany("defects", res.toPut); for (const v of res.newVendors) await saveVendor(v);
   Object.assign(p, { dongs: pcopy.dongs }); await saveProject(p);
   const maps = await db.getMeta("importMaps", {}); maps[imp.sig] = { map: imp.map, defCat: imp.defCat, at: new Date().toISOString() }; await db.setMeta("importMaps", maps);
-  const hist = await db.getMeta("imports", []); hist.push({ at: new Date().toISOString(), file: imp.file, projectId: p.id, ...st }); await db.setMeta("imports", hist.slice(-20));
+  hist.push({ at: undo.at, file: imp.file, projectId: p.id, sig: imp.sig, ...st }); await db.setMeta("imports", hist.slice(-20));
   S.defects = await db.getAll("defects"); busy(false); S.imp = null; requestPersist();
-  S.lastImport = st;
-  toast(`가져오기 완료 · 새 ${n(st.added)}건, 갱신 ${n(st.updated)}건`);
-  S.filter = { status: "_open" }; LS.set("filter", S.filter); replace("#/list");
+  S.lastImport = { ...st, at: undo.at, file: imp.file, projectId: p.id, newVendors: res.newVendors.length, newDongs: res.newDongs, fitted: res.fitted || [] };
+  toast(`적용했어요 · 새 ${n(st.added)}건, 변경 ${n(st.updated)}건`);
+  replace("#/imported");
+}
+/* 가져오기 결과(적용 후) + 되돌리기 */
+ROUTES.imported = async () => {
+  setTab(null); setHeader("가져오기 결과", { backBtn: true });
+  const r = S.lastImport; const undo = await db.getMeta("importUndo", null);
+  if (!r) { view().innerHTML = `<div class="card"><p class="help">최근 가져오기 결과가 없어요.</p></div>`; return; }
+  const canUndo = undo && undo.at === r.at && undo.projectId === P()?.id;
+  const row = (l, v, cls = "") => `<div class="hrow ${cls}"><span>${l}</span><b>${v}</b></div>`;
+  view().innerHTML = `<section class="card imp-res"><h3>✅ 적용 완료 <small>${esc(r.file)}</small></h3>
+      ${row("가져온 행", n(r.total) + "개")}${row("새 하자 (추가)", n(r.added) + "건")}${row("변경", `${n(r.updated)}건${r.kept ? ` <small>(내 수정 유지 ${n(r.kept)})</small>` : ""}`)}${row("변경 없음", n(r.same) + "건")}
+      ${row("새 업체", r.newVendors + "개")}${r.newDongs.length ? row("새 동", `${r.newDongs.length}개 <small>${esc(r.newDongs.slice(0, 6).join(", "))}${r.newDongs.length > 6 ? "…" : ""}</small>`) : ""}</section>
+    ${r.fitted.length ? `<section class="card"><h3>동별 층·세대 <small>데이터에 맞춰 없는 층·세대 제거</small></h3>
+      <table class="tbl"><tbody>${r.fitted.map((x) => `<tr><td>${esc(x.name)}</td><td>${x.unitStart}~${x.floors}층 · ${x.floorCount}개 층</td><td class="r">${n(x.units)}세대</td></tr>${x.dropped?.length ? `<tr class="sub"><td></td><td colspan="2"><small>제외 호수: ${esc(x.dropped.slice(0, 8).join(", "))}${x.dropped.length > 8 ? ` 외 ${x.dropped.length - 8}` : ""}</small></td></tr>` : ""}`).join("")}</tbody></table></section>` : ""}
+    <button type="button" class="btn btn-primary btn-lg btn-block" id="ir-list">미조치 하자 목록 보기</button>
+    ${canUndo ? `<button type="button" class="btn btn-block" id="ir-undo">↩ 되돌리기 (이번 가져오기 취소)</button>` : '<p class="help">되돌리기는 가장 최근 가져오기 한 번만 할 수 있어요.</p>'}`;
+  $("#ir-list").addEventListener("click", () => { S.filter = { status: "_open" }; LS.set("filter", S.filter); replace("#/list"); });
+  $("#ir-undo")?.addEventListener("click", async () => {
+    if (!(await ask(`이번 가져오기를 취소할까요?\n· 추가된 하자 ${n(undo.added.length)}건 삭제\n· 변경된 하자 ${n(undo.prev.length)}건 이전 상태로\n· 새 업체 ${undo.newVendorIds.length}개 삭제, 동 구조 복원\n가져온 뒤 이 하자들에 직접 남긴 수정·사진도 함께 사라져요.`, { ok: "되돌리기", danger: true, title: "되돌리기" }))) return;
+    await undoImport(undo); S.lastImport = null; toast("가져오기를 되돌렸어요"); replace("#/list");
+  });
+};
+async function undoImport(undo) {
+  busy(true, "되돌리는 중…");
+  for (const id of undo.added) if (S.pidx.get(id)) { await db.delByIndex("photos", "by_defect", id); S.pidx.delete(id); }
+  await db.delMany("defects", undo.added);
+  await db.putMany("defects", undo.prev);
+  S.defects = await db.getAll("defects");
+  const usedV = new Set(S.defects.map((d) => d.vendorId).filter(Boolean));
+  for (const id of undo.newVendorIds) if (!usedV.has(id)) { await db.del("vendors", id); S.vendors = S.vendors.filter((v) => v.id !== id); }
+  const p = S.projects.find((x) => x.id === undo.projectId); if (p) { p.dongs = undo.prevDongs; await saveProject(p); }
+  const hist = await db.getMeta("imports", []); if (hist.at(-1)?.at === undo.at) { hist.pop(); await db.setMeta("imports", hist); }
+  await db.setMeta("importUndo", null); busy(false);
 }
 
 /* ---------- 프로 / 정보 / 개인정보 ---------- */

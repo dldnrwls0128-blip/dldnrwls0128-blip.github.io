@@ -1,5 +1,5 @@
 /* 하자싹 서비스 워커 — 앱 셸 캐시(오프라인). 사용자 데이터는 IndexedDB에만 있고 캐시하지 않음 */
-const CACHE = "hajassak-v1.0.1";
+const CACHE = "hajassak-v1.0.2";
 const PRECACHE = ["./", "./index.html", "./manifest.webmanifest", "./css/app.css",
   "./js/app.js", "./js/ui.js", "./js/db.js", "./js/model.js", "./js/photo.js", "./js/share.js", "./js/pro.js", "./js/speech.js",
   "./js/backup.js", "./js/importer.js", "./js/import-worker.js", "./js/exporter.js", "./js/sample.js",
