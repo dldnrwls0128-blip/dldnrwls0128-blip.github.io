@@ -408,3 +408,8 @@ b.ui{display:inline-block;padding:0 6px;border-radius:6px;background:rgba(15,118
 .fsec .loc-btn span{font-size:20px;opacity:.6}.fsec #btn-pin{margin-top:8px}
 .sitem[data-a=wipe] b{color:var(--bad)}
 .team-cap{margin:10px 0;padding:10px 12px;border-radius:12px;background:var(--chip);display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}.team-cap .rate-bar{flex-basis:100%}.team-cap small{flex-basis:100%;line-height:1.45}
+/* 1.2.2 요청서 이미지 */
+.btn-req{margin-top:8px}
+.req-prev{display:flex;flex-direction:column;gap:12px;margin:8px 0 14px;max-height:62vh;overflow:auto;padding:8px;background:var(--chip);border-radius:14px}
+.req-prev figure{margin:0;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.req-prev img{width:100%;height:auto;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,.18);background:#fff}

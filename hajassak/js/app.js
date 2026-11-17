@@ -197,7 +197,7 @@ const selItems = () => S.defects.filter((d) => S.select.has(d.id));
 function selBarHtml({ all = false } = {}) {
   return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자"><span id="selcount"></span>
     ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
-    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
+    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
 }
 /** 체크 상태를 화면(카드·그룹 전체칸·그룹 보내기 버튼·하단 바)에 반영 */
 function syncChecks() {
@@ -223,6 +223,7 @@ function bindSelBar(pool = []) {
     if (a === "clear") { S.select.clear(); return syncChecks(); }
     if (!sel.length) return toast("먼저 하자를 체크하세요");
     if (a === "send") return sendChecked(sel);
+    if (a === "req") return requestImageFor(sel);
     const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((x) => ({ label: x, value: x })));
     if (!st) return;
     for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
@@ -1025,7 +1026,7 @@ ROUTES.item = async (qq) => {
     <section class="card item-hd ${od ? "overdue" : ""}"><div class="row">${pill(d.status)}${sevBadge(d)}<span class="tbadge">${esc(d.category || "")}</span>${od ? '<span class="od">기한초과</span>' : ""}</div>
       <h2>${esc(M.tradeText(d))}${d.type ? ` · ${esc(d.type)}` : ""}</h2><p class="content">${esc(d.content || "")}</p>
       <dl class="kv"><dt>위치</dt><dd>${esc(M.locText(d))}</dd><dt>업체</dt><dd>${v ? `<a href="#/vendor?id=${v.id}">${esc(v.name)}</a>` : "미지정"}</dd>
-        <dt>조치기한</dt><dd>${esc(d.due || "-")}</dd><dt>등록</dt><dd>${fmtDT(d.createdAt)}${d.createdBy ? ` · <b class="who">${esc(d.createdBy)}</b>` : ""}${d.extId ? ` · 외부ID ${esc(d.extId)}` : ""}</dd>
+        <dt>조치기한</dt><dd>${esc(d.due || "-")}</dd>${d.reqAt ? `<dt>요청서</dt><dd id="req-at">${esc(d.reqNo || "")} · ${fmtDT(d.reqAt)} 발송</dd>` : ""}<dt>등록</dt><dd>${fmtDT(d.createdAt)}${d.createdBy ? ` · <b class="who">${esc(d.createdBy)}</b>` : ""}${d.extId ? ` · 외부ID ${esc(d.extId)}` : ""}</dd>
          ${d.updatedBy ? `<dt>최근 수정</dt><dd id="who-upd"><b class="who">${esc(d.updatedBy)}</b> · ${fmtDT(d.updatedByAt || d.updatedAt)}</dd>` : ""}</dl></section>
     <ol class="flow" aria-label="상태 바로 바꾸기">${["접수", "업체전달", "조치중", "조치완료", "확인완료", ...(["재접수", "조치완료", "확인완료"].includes(d.status) ? ["재접수"] : [])].map((s2, i) => `<li class="${s2 === d.status ? "on" : i < idx && d.status !== "재접수" ? "done" : ""}${s2 === "재접수" ? " re" : ""}"><button type="button" class="flow-b" data-flow="${s2}" ${s2 === d.status ? 'aria-current="step"' : ""} aria-label="상태를 ${s2}(으)로">${s2}</button></li>`).join("")}</ol>
     <div class="act-row">${nx ? `<button type="button" class="btn btn-primary btn-lg" data-st="${nx}">${nx === "업체전달" ? "업체에 보내기" : nx + " 처리"}</button>` : ""}
@@ -1033,6 +1034,7 @@ ROUTES.item = async (qq) => {
       <button type="button" class="btn btn-lg" id="btn-stany">상태 선택</button></div>
     ${v ? `<div class="contact-row">${(() => { const vp = M.vendorPhones(v); if (!vp.length) return ""; if (vp.length === 1) { const ph = vp[0].phone; return `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`; } return `<button type="button" class="btn" id="btn-dtel">📞 전화 ▾</button><button type="button" class="btn" id="btn-dsms">💬 문자 ▾</button>`; })()}
       <button type="button" class="btn btn-kakao" id="btn-kakao">카톡으로 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 보내기</button>`}
+    <button type="button" class="btn btn-block btn-req" id="btn-reqimg">🧾 요청서 만들기 <small>이미지 → 카톡</small></button>
     ${stepsHtml(d, photos)}
     <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
       <button type="button" class="ph-add" data-add="before">📷<span>추가</span></button></div></section>
@@ -1048,6 +1050,7 @@ ROUTES.item = async (qq) => {
   $$("[data-flow]", view()).forEach((b) => b.addEventListener("click", () => quickStatus(d, b.dataset.flow)));
   $("#btn-stany").addEventListener("click", async () => { const st = await choose("상태 선택", M.STATUSES.map((s2) => ({ label: s2, value: s2, sub: s2 === d.status ? "현재" : "" }))); if (st) changeStatus(d, st); });
   $("#btn-kakao").addEventListener("click", () => sendSheet({ items: [d], vendor: v }));
+  $("#btn-reqimg").addEventListener("click", () => requestImageFor([d], v || null));
   $("[data-sms]", view())?.addEventListener("click", () => setTimeout(() => markSent([d], "문자"), 300));
   $("#btn-dtel", view())?.addEventListener("click", async () => { const ph = await pickPhone(V(d.vendorId), "전화"); if (ph) location.href = M.telHref(ph); });
   $("#btn-dsms", view())?.addEventListener("click", async () => { const ph = await pickPhone(V(d.vendorId), "문자"); if (!ph) return; location.href = M.smsHref(ph, M.shareMessage({ project: P(), vendor: V(d.vendorId), items: [d] })); setTimeout(() => markSent([d], "문자"), 300); });
@@ -1283,6 +1286,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
         ${vps.map((x) => `<a class="btn btn-lg" data-s="sms" href="#" data-ph="${esc(x.phone)}">💬 문자 ${vps.length > 1 || x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a><a class="btn btn-lg" href="${M.telHref(x.phone)}" data-s="tel">📞 전화 ${vps.length > 1 || x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a>`).join("")}
         <button type="button" class="btn btn-lg" data-s="copy">📋 내용 복사</button>
         <button type="button" class="btn btn-lg" data-s="share">📤 다른 앱으로 공유</button>
+        <button type="button" class="btn btn-lg" data-s="img">🧾 요청서 이미지</button>
         <button type="button" class="btn btn-lg" data-s="pdf">📄 요청서 PDF(인쇄)</button></div>
       <p class="help">카카오톡은 앱이 특정 친구를 대신 고를 수 없어요. 카카오톡에서 <b>업체 대화방</b>을 고르면 돼요.${phones.length ? "" : " 업체에 전화번호를 등록하면 문자·전화 버튼이 생겨요."}</p>
       <label class="check"><input type="checkbox" id="mark" checked> 보낸 뒤 선택한 건 중 ‘접수’ 건을 ‘업체전달’로 표시</label>` });
@@ -1338,6 +1342,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
     if (k === "sms") { e.preventDefault(); const href = M.smsHref(b.dataset.ph, ta.value); S.lastSms = href; location.href = href; return after("문자"); }
     if (k === "copy") { (await copyText(ta.value)) ? toast("복사했어요") : toast("복사 실패"); return after("복사"); }
     if (k === "pdf") { const items2 = sel(); await s.close(); return printRequest({ vendor, items: items2 }); }
+    if (k === "img") { const items2 = sel(); await s.close(); return requestImageFor(items2, vendor); }
   }));
   refresh();
 }
@@ -1370,6 +1375,87 @@ async function printRequest({ vendor, items }) {
   S.lastPrintHtml = root.innerHTML.length;
   if (window.__noPrint) return; // 테스트용
   setTimeout(() => window.print(), 50);
+}
+
+/* ---------- 1.2.2 요청서 이미지: 만들기 → 미리보기 → 카톡 공유(이미지 첨부)·이미지 복사·저장·문자 (자동 발송 없음) ---------- */
+function nextDocNo() { const t = M.todayStr(); const c = LS.get("reqSeq", {}); const k = c.d === t ? (c.n || 0) + 1 : 1; LS.set("reqSeq", { d: t, n: k }); return { no: `HS-${t.replace(/-/g, "")}-${String(k).padStart(3, "0")}`, today: t }; }
+/** 체크/목록에서 업체가 여럿이면 업체부터 고름 */
+async function requestImageFor(items, vendor = null) {
+  items = items.filter(Boolean); if (!items.length) return toast("요청서에 넣을 하자를 고르세요");
+  if (!vendor) {
+    const byV = new Map(); for (const d of items) { const k = d.vendorId || ""; if (!byV.has(k)) byV.set(k, []); byV.get(k).push(d); }
+    let vid = [...byV.keys()][0];
+    if (byV.size > 1) {
+      vid = await choose(`요청서는 업체별로 만들어요 · ${byV.size}곳`, [...byV.entries()].sort((a, b) => b[1].length - a[1].length).map(([id, l]) => ({ icon: "🏢", label: id ? vLabel(id) : "업체 미지정", sub: `${l.length}건`, value: id || "_none" })));
+      if (vid === null) return; if (vid === "_none") vid = "";
+    }
+    items = byV.get(vid) || []; vendor = vid ? V(vid) : null;
+  }
+  return requestImageSheet({ vendor, items });
+}
+async function requestImageSheet({ vendor, items }) {
+  busy(true, "요청서 이미지 만드는 중…");
+  let pages = [], urls = [], jpgs = [], pngs = [], docNo = "", text = "";
+  try {
+    const R = await import("./reqimg.js");
+    const { no, today } = nextDocNo(); docNo = no;
+    const photos = new Map(); const single = items.length === 1;
+    for (const d of items) {
+      const ph = (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 4); const bl = [];
+      for (const x of ph) bl.push(single ? await photoOut(x, d) : x.thumb || x.blob);
+      photos.set(d.id, bl);
+    }
+    pages = await R.renderRequestImages({ project: P(), vendor, items, photos, issuer: S.issuer || (Sync.signedIn?.() ? Sync.actorName() : ""), today, docNo, watermark: !Pro.can("pdfNoWatermark") });
+    jpgs = await Promise.all(pages.map((pg) => R.toBlob(pg.canvas, "image/jpeg", 0.9)));
+    pngs = await Promise.all(pages.map((pg) => R.toBlob(pg.canvas, "image/png")));
+    urls = jpgs.map((b) => URL.createObjectURL(b));
+    text = R.requestText({ project: P(), vendor, items, docNo });
+  } catch (e) { busy(false); console.error(e); return toast("요청서 이미지를 만들지 못했어요: " + (e.message || e)); }
+  busy(false);
+  const files = jpgs.map((b, i) => new File([b], `하자조치요청서_${docNo}${jpgs.length > 1 ? "_" + (i + 1) : ""}.jpg`, { type: "image/jpeg" }));
+  window.__reqImg = { docNo, n: pages.length, sizes: pages.map((p) => [p.w, p.h]), jpg: jpgs.map((b) => b.size), text, items: items.map((d) => d.id) };
+  const mobile = isMobileDevice(); const canFiles = canShareFiles(files); const canClip = !!(window.ClipboardItem && navigator.clipboard?.write);
+  const vps = M.vendorPhones(vendor);
+  const btnShare = `<button type="button" class="btn btn-kakao btn-lg" data-r="share">카톡으로 공유 <small>이미지 첨부</small></button>`;
+  const btnCopy = canClip ? `<button type="button" class="btn ${mobile ? "" : "btn-kakao"} btn-lg" data-r="copy" data-i="0">🖼 이미지 복사${mobile ? "" : " <small>카톡 PC에 Ctrl+V</small>"}</button>` : "";
+  const s = openSheet({ title: `요청서 이미지 · ${vendor?.name || "업체 미지정"} ${items.length}건`, full: true, cls: "req-sheet",
+    html: `<p class="help small">문서번호 <b>${esc(docNo)}</b>${pages.length > 1 ? ` · ${pages.length}장(장당 6건)` : ""}. 내용을 고치려면 하자를 수정한 뒤 다시 만드세요.</p>
+      <div class="req-prev" id="req-prev">${urls.map((u, i) => `<figure><img src="${u}" alt="요청서 이미지 ${i + 1}">${pages.length > 1 && canClip ? `<button type="button" class="btn btn-sm" data-r="copy" data-i="${i}">${i + 1}장 복사</button>` : ""}</figure>`).join("")}</div>
+      <div class="send-grid">${mobile ? btnShare + btnCopy : btnCopy + btnShare}
+        <button type="button" class="btn btn-lg" data-r="save">💾 이미지 저장</button>
+        <button type="button" class="btn btn-lg" data-r="text">📋 문구 복사</button>
+        ${vps.map((x) => `<a class="btn btn-lg" data-r="sms" href="${esc(M.smsHref(x.phone, text))}">💬 문자 ${x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a>`).join("")}</div>
+      <p class="help small">${mobile ? "‘카톡으로 공유’ → 공유창에서 <b>카카오톡</b> → 업체 대화방을 고르면 이미지가 첨부돼요. 보내기는 카톡에서 직접 눌러요." : "PC: ‘이미지 복사’ 후 카카오톡 PC 업체 대화방에 <b>Ctrl+V</b>. 복사가 안 되면 ‘이미지 저장’ 후 끌어다 놓으세요."}${vps.length ? " 문자는 문구만 채워져요 — 이미지는 저장 후 문자에 직접 첨부하세요." : ""}${canFiles ? "" : " 이 브라우저는 이미지 공유가 안 돼서 ‘카톡으로 공유’를 누르면 저장 + 문구 복사로 대신해요."}</p>
+      <label class="check"><input type="checkbox" id="req-mark" checked> 보낸 뒤 ‘접수’ 건을 ‘업체전달’로 바꾸고 요청서 발송 시각 기록</label>` });
+  const el = s.el; const cleanup = () => urls.forEach((u) => URL.revokeObjectURL(u));
+  const done = async (via, note = "") => {
+    if (!$("#req-mark", el)?.checked) { if (note) toast(note, { ms: 6000 }); return; }
+    const at = new Date().toISOString();
+    for (const d of items) { d.reqAt = at; d.reqNo = docNo; try { await saveDefect(d); } catch (e) { console.warn(e); } }
+    await s.close(); cleanup(); await markSent(items, via, note || `요청서 ${docNo} 발송 기록`);
+  };
+  const save = () => files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 300));
+  $$("[data-r]", el).forEach((b) => b.addEventListener("click", async (e) => {
+    const k = b.dataset.r;
+    if (k === "share") {
+      if (canFiles) {
+        try { await navigator.share({ files, text, title: "하자 조치 요청서" }); window.__reqImg.shared = true; return done("요청서 이미지(카톡·공유)"); }
+        catch (er) { if (er?.name === "AbortError") return; }
+      }
+      save(); const ok = await copyText(text); window.__reqImg.fallback = true;
+      return toast(`이미지 공유가 안 되는 환경이라 이미지를 저장${ok ? "하고 문구를 복사" : ""}했어요. 카톡에서 사진으로 첨부해 주세요.`, { ms: 8000, action: "보냄으로 표시", onAction: () => done("요청서 이미지") });
+    }
+    if (k === "copy") {
+      const i = Number(b.dataset.i || 0);
+      try { await navigator.clipboard.write([new ClipboardItem({ "image/png": pngs[i] })]); window.__reqImg.copied = i + 1; }
+      catch (er) { console.warn(er); return toast("이미지 복사가 막혔어요 — ‘이미지 저장’ 후 첨부해 주세요"); }
+      return toast(`${pages.length > 1 ? `${i + 1}장 ` : ""}이미지를 복사했어요 — 카카오톡 대화방에 붙여넣기(Ctrl+V)`, { ms: 8000, action: "보냄으로 표시", onAction: () => done("요청서 이미지(복사)") });
+    }
+    if (k === "save") { save(); return toast("이미지를 저장했어요", { ms: 6000, action: "보냄으로 표시", onAction: () => done("요청서 이미지(저장)") }); }
+    if (k === "text") return toast((await copyText(text)) ? "문구를 복사했어요" : "복사 실패");
+    if (k === "sms") { e.preventDefault(); S.lastSms = b.getAttribute("href"); if (!window.__noNav) location.href = S.lastSms; return toast("문자 앱에서 이미지를 직접 첨부해 주세요", { ms: 7000, action: "보냄으로 표시", onAction: () => done("요청서 이미지(문자)") }); }
+  }));
+  return s;
 }
 
 /* ---------- 업체 ---------- */
@@ -1460,7 +1546,7 @@ ROUTES.vendor = async (qq) => {
       ${cs.map((c) => `<div class="vcontact"><b>${esc(c.name || "담당자")}${c.role ? ` <small class="tag">${esc(c.role)}</small>` : ""}</b><div class="contact-row">${c.phones.map((p) => `<a class="btn" href="${M.telHref(p)}">📞 ${esc(p)}</a>`).join("") || '<span class="help">번호 없음</span>'}</div></div>`).join("") || '<div class="contact-row"><span class="help">담당자·전화번호가 없어요 · 수정에서 추가</span></div>'}</section>
     <div class="chips scroll">${[["turn", "내 차례 대기"], ...(sets.later.length ? [["later", "앞 공정 대기"]] : []), ["unsent", "미전달"], ["open", "미조치"], ["od", "기한초과"], ["done", "조치완료(확인 대기)"], ["all", "전체"]].map(([k, l]) => `<button type="button" class="chip ${k === mode ? "on" : ""}" data-m="${k}">${l} ${sets[k].length}</button>`).join("")}</div>
     <div class="send-bar"><button type="button" class="btn btn-kakao btn-lg" id="btn-send">보내기 · 건별 선택 (${list.filter((d) => d.status !== "확인완료").length})</button>
-      ${ph[0] ? `<button type="button" class="btn btn-lg" id="btn-sms">💬 문자</button>` : ""}<button type="button" class="btn btn-lg" id="btn-pdf">📄 요청서</button></div>
+      ${ph[0] ? `<button type="button" class="btn btn-lg" id="btn-sms">💬 문자</button>` : ""}<button type="button" class="btn btn-lg" id="btn-reqimg">🧾 요청서 만들기</button><button type="button" class="btn btn-lg" id="btn-pdf">📄 PDF</button></div>
     ${mode === "done" && list.length ? `<button type="button" class="btn btn-block" id="btn-confirm-all">조치완료 ${list.length}건 모두 확인완료</button>` : ""}
     <div>${list.map((d) => defectCard(d, { sel: true })).join("") || '<div class="card empty-card"><p>해당하는 하자가 없어요.</p></div>'}</div>
     ${selBarHtml({ all: true })}`;
@@ -1471,6 +1557,7 @@ ROUTES.vendor = async (qq) => {
   $("#btn-send").addEventListener("click", sendAll);
   $("#btn-sms")?.addEventListener("click", sendAll);
   $("#btn-pdf").addEventListener("click", () => (list.length ? printRequest({ vendor: v, items: list }) : toast("요청서에 넣을 하자가 없어요")));
+  $("#btn-reqimg").addEventListener("click", () => { const picked = selItems().filter((d) => all.includes(d)); const pool = picked.length ? picked : list.filter((d) => d.status !== "확인완료"); return pool.length ? requestImageFor(pool, v) : toast("요청서에 넣을 하자가 없어요"); });
   $("#btn-confirm-all")?.addEventListener("click", async () => { if (!(await ask(`${list.length}건을 확인완료로 바꿀까요?`))) return; for (const d of list) { setStatus(d, "확인완료", "일괄 확인"); await saveDefect(d); } rerender(); });
 };
 ROUTES["vendor-edit"] = async (qq) => {
