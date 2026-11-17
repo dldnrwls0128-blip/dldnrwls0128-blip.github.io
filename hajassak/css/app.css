@@ -407,3 +407,4 @@ b.ui{display:inline-block;padding:0 6px;border-radius:6px;background:rgba(15,118
 .fsec .loc-btn{min-height:56px;font-size:16px;padding:12px 14px}.fsec .loc-btn.is-empty{border:1.5px dashed color-mix(in srgb,var(--brand) 55%,var(--line));background:color-mix(in srgb,var(--brand) 5%,var(--card));color:var(--brand);font-weight:700}
 .fsec .loc-btn span{font-size:20px;opacity:.6}.fsec #btn-pin{margin-top:8px}
 .sitem[data-a=wipe] b{color:var(--bad)}
+.team-cap{margin:10px 0;padding:10px 12px;border-radius:12px;background:var(--chip);display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}.team-cap .rate-bar{flex-basis:100%}.team-cap small{flex-basis:100%;line-height:1.45}

@@ -1569,7 +1569,7 @@ ROUTES.settings = async () => {
       ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}</div>
     <h3 class="sec">동기화·팀</h3><div class="slist">
-      ${item("#/sync", "👥", "동기화·팀 현장", Sync.attached() ? `${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""} · ${esc(Sync.status().label)}` : "꺼짐 · 팀원·PC·폰이 같은 현장을 실시간으로 공유", 'id="si-sync"')}</div>
+      ${item("#/sync", "👥", "동기화·팀 현장", Sync.attached() ? `${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""}${Sync.state.wsDoc ? ` · 팀원 ${Object.keys(Sync.state.wsDoc.members || {}).length}/${Sync.memberCap(Sync.state.wsDoc)} (${Sync.planOf(Sync.state.wsDoc) === "pro" ? "유료" : "무료"})` : ""} · ${esc(Sync.status().label)}` : `꺼짐 · 팀원·PC·폰이 같은 현장을 실시간으로 공유 (무료: 현장당 ${Sync.FREE_MEMBERS}명)`, 'id="si-sync"')}</div>
     <h3 class="sec">데이터</h3><div class="slist">
       ${p ? item("#/import", "📥", "엑셀·CSV 가져오기", "다른 시스템 하자 목록 → 열 매핑 후 가져오기") : ""}
       ${p ? item("", "📤", "전체 내보내기", "엑셀·CSV·요청서", 'data-a="export"') : ""}
@@ -2282,7 +2282,8 @@ ROUTES.sync = async () => {
     ${on ? card(`<h3>🏗 ${esc(ws.name)} <small>${ROLE_KO[ws.role] || ""}</small></h3>
       ${Sync.isOwner() && wd ? `<div class="invite"><span>초대코드</span><b class="code" id="inv-code">${esc(wd.inviteCode)}</b></div>
         <div class="btn-row"><button type="button" class="btn btn-kakao" data-a="inv-kakao">카톡으로 초대</button><button type="button" class="btn" data-a="inv-copy">초대 링크 복사</button><button type="button" class="btn btn-ghost" data-a="inv-new">코드 바꾸기</button></div>
-        <p class="help small">링크를 받은 사람이 구글로 로그인하면 <b>편집</b> 멤버로 들어와요. 무료판은 팀원 ${Pro.FREE_LIMITS.members}명까지(지금 ${mem.length}/${wd.maxMembers}명).</p>` : ""}
+        <p class="help small">링크를 받은 사람이 구글로 로그인하면 <b>편집</b> 멤버로 들어와요.</p>${mem.length >= Sync.memberCap(wd) ? `<p class="help warnbox" id="team-full">팀 인원이 꽉 찼어요(${mem.length}/${Sync.memberCap(wd)}명) — 더 초대해도 참여할 수 없어요. 누군가 나가거나 내보내면 자리가 생겨요.</p>` : ""}` : ""}
+      ${wd ? `<div class="team-cap" id="team-cap"><b>팀원 ${mem.length}/${Sync.memberCap(wd)} (${Sync.planOf(wd) === "pro" ? "유료" : "무료"})</b><div class="rate-bar"><i style="width:${Math.min(100, Math.round((mem.length / Sync.memberCap(wd)) * 100))}%"></i></div>${Sync.planOf(wd) === "pro" ? "" : `<small class="help">무료 버전은 현장당 ${Sync.FREE_MEMBERS}명까지(소유자 포함). ${Sync.FREE_MEMBERS + 1}명 이상은 <b>유료 버전</b>(준비 중) — 필요하면 문의해 주세요.</small>`}</div>` : ""}
       <h4 class="sec">멤버 ${mem.length}명</h4><div class="mlist" id="mlist">${mem.map(memberRow).join("") || '<p class="help">불러오는 중…</p>'}</div>
       <div class="btn-col">${Sync.isOwner() ? '<button type="button" class="btn" data-a="rename">팀 현장 이름 바꾸기</button>' : ""}
         <button type="button" class="btn" data-a="to-local">이 기기 전용 데이터로 전환</button>
@@ -2298,7 +2299,7 @@ ROUTES.sync = async () => {
       <li>팀 현장 데이터는 Google Firebase(서울 리전)에 저장되고, 그 팀 멤버만 볼 수 있어요. 보기 전용 멤버는 고칠 수 없어요.</li>
       <li>무료 한도(팀 전체 합산): 저장 1GB(사진 약 5천~1만 장), 하루 읽기 5만·쓰기 2만 번. 넘으면 다음 날까지 동기화가 멈추고, 앱은 계속 쓸 수 있어요.</li>
       <li>같은 건을 두 사람이 동시에 고치면 나중에 고친 쪽으로 맞춰져요. 상세 화면에 누가 언제 고쳤는지 나와요.</li>
-      <li>무료판: 팀 현장 ${Pro.FREE_LIMITS.workspaces}개 · 팀원 ${Pro.FREE_LIMITS.members}명까지. 프로: 무제한.</li></ul>`)}`;
+      <li>무료 버전: 팀 현장 ${Pro.FREE_LIMITS.workspaces}개 · 현장당 팀원 ${Sync.FREE_MEMBERS}명까지(소유자 포함). ${Sync.FREE_MEMBERS + 1}명 이상은 유료 버전(준비 중 · 문의).</li></ul>`)}`;
   renderSyncStatus($("#sync-status"));
   if (navigator.onLine !== false) Sync.preload();
   const wsCount = async () => { try { return (await Sync.myWorkspaces()).length; } catch { return list.length; } };
@@ -2329,7 +2330,7 @@ ROUTES.sync = async () => {
         const name = await prompt2("팀 현장 이름", P()?.name || "우리 현장"); if (name === null) return;
         const c = await Sync.localCounts(db.DB_NAME);
         if (!(await ask(`‘${name || "팀 현장"}’ 팀 현장을 만들고 지금 데이터(현장 ${c.projects}개 · 하자 ${c.defects}건 · 사진 ${c.photos}장 · 업체 ${c.vendors}곳)를 올릴까요?\n이 기기 전용 데이터는 그대로 남아요(복사).`, { ok: "만들기" }))) return;
-        busy(true, "팀 현장 만드는 중…"); await Sync.createWorkspace(name.trim() || "팀 현장", { workspaceCount: n0, isPro: Pro.isPro(), memberLimit: Pro.memberLimit() });
+        busy(true, "팀 현장 만드는 중…"); await Sync.createWorkspace(name.trim() || "팀 현장", { workspaceCount: n0, isPro: Pro.isPro() });
       }
       if (a === "inv-copy") { (await copyText(Sync.inviteLink(Sync.state.wsDoc.inviteCode))) ? toast("초대 링크를 복사했어요") : toast("복사 실패"); }
       if (a === "inv-kakao") {

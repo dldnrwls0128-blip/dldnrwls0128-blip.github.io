@@ -227,14 +227,18 @@ export async function myWorkspaces() {
 /** 팀 현장 만들기: 지금 이 기기 데이터(현장·하자·사진·업체…)를 새 팀 현장으로 복사해 올리고 그 현장으로 전환 */
 const SLOW_MSG = "서버가 응답하지 않아요(오늘 무료 사용 한도를 넘었거나 연결이 불안정해요). 이 기기 데이터는 그대로 있어요. 잠시 뒤 다시 눌러 주세요(무료 한도는 매일 오후 5시쯤 초기화)";
 function withTimeout(p, ms = 25000) { return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error(SLOW_MSG), { code: "slow" })), ms))]); }
-export async function createWorkspace(name, { workspaceCount = 0, isPro = false, memberLimit = 3 } = {}) {
+export const FREE_MEMBERS = 10;
+/** 팀 현장 정원: plan "pro"(관리자가 서버에서 설정)일 때만 maxMembers, 아니면 무료 10명 */
+export const memberCap = (wd) => (wd?.plan === "pro" ? Number(wd.maxMembers) || FREE_MEMBERS : FREE_MEMBERS);
+export const planOf = (wd) => (wd?.plan === "pro" ? "pro" : "free");
+export async function createWorkspace(name, { workspaceCount = 0, isPro = false } = {}) {
   need(); const F = st.F;
   if (!isPro && workspaceCount >= 1) throw Object.assign(new Error("무료판은 팀 현장 1개까지예요. 하자싹 프로에서 늘릴 수 있어요"), { pro: true });
   const id = F.doc(F.collection(st.fs, "workspaces")).id;
   for (let tries = 0; tries < 5; tries++) {
     const code = newCode(); const b = F.writeBatch(st.fs);
     b.set(wsRef(id), { name: name || "팀 현장", ownerUid: st.uid, members: { [st.uid]: "owner" }, memberInfo: { [st.uid]: { name: actorName(), email: st.email } },
-      inviteCode: code, maxMembers: memberLimit, createdAt: F.serverTimestamp() });
+      inviteCode: code, plan: "free", maxMembers: FREE_MEMBERS, createdAt: F.serverTimestamp() });
     b.set(F.doc(st.fs, "inviteCodes", code), { wsId: id, by: st.uid, at: F.serverTimestamp() });
     b.set(userRef(), { workspaces: { [id]: { name: name || "팀 현장", role: "owner" } }, current: id }, { merge: true });
     try { await withTimeout(b.commit()); break; } catch (e) { if (e.code !== "permission-denied" || tries === 4) throw e; } // 코드가 겹치면(이미 있음) 다시
@@ -257,7 +261,7 @@ export async function joinWorkspace(code, { workspaceCount = 0, isPro = false, m
   if (!role) {
     if (!isPro && workspaceCount >= 1) throw Object.assign(new Error("무료판은 팀 현장 1개까지예요. 하자싹 프로에서 늘릴 수 있어요"), { pro: true });
     try { await withTimeout(F.updateDoc(wsRef(wsId), { [`members.${st.uid}`]: "editor", [`memberInfo.${st.uid}`]: { name: actorName(), email: st.email }, lastJoin: { uid: st.uid, code, at: F.serverTimestamp() } })); }
-    catch (e) { if (e.code === "slow") throw e; if (e.code === "permission-denied") throw new Error("참여할 수 없어요. 초대코드가 바뀌었거나 팀 인원이 꽉 찼어요(무료판 3명)"); throw e; }
+    catch (e) { if (e.code === "slow") throw e; if (e.code === "permission-denied") throw Object.assign(new Error(`팀 인원이 꽉 차서 참여할 수 없어요. 무료 버전은 현장당 ${FREE_MEMBERS}명까지예요. ${FREE_MEMBERS + 1}명 이상은 유료 버전(준비 중) — 현장 소유자나 개발자에게 문의해 주세요. (초대코드가 바뀐 경우에도 이렇게 나와요)`), { full: true }); throw e; }
     w = await F.getDoc(wsRef(wsId)); role = w.data().members[st.uid]; name = w.data().name;
   }
   await F.setDoc(userRef(), { workspaces: { [wsId]: { name, role } }, current: wsId }, { merge: true });
