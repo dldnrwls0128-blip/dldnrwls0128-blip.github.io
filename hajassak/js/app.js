@@ -317,17 +317,18 @@ ROUTES.grid = async (qq) => {
   const list = PD().filter((d) => d.dong === dong.name);
   const by = new Map(); for (const d of list) { if (!d.ho) continue; const m = by.get(d.ho) || { open: 0, all: 0, od: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d)) m.od++; by.set(d.ho, m); }
   const max = Math.max(1, ...[...by.values()].map((m) => m.open));
-  const floors = []; for (let f = dong.floors; f >= (dong.unitStart || 1); f--) floors.push(f);
-  const lines = M.unitsOf(dong, String(dong.floors)).map((h) => Number(h) % 100);
+  const floors = []; for (let f = dong.floors; f >= (dong.unitStart || 1); f--) if (M.unitsOf(dong, String(f)).length) floors.push(f);
+  const lines = M.linesOf(dong);
   const common = list.filter((d) => !d.ho);
   view().innerHTML = `
     <div class="chips scroll">${p.dongs.map((d) => `<button type="button" class="chip ${d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div>
     <div class="list-hd"><b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span></div>
     <div class="legend"><span class="hm h0"></span>0 <span class="hm h1"></span>적음 <span class="hm h3"></span>많음 <span class="hm odl"></span>기한초과</div>
-    <div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => `<div class="hf">${f}F</div>` + M.unitsOf(dong, String(f)).map((ho) => {
+    <div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => { const us = new Set(M.unitsOf(dong, String(f))); return `<div class="hf">${f}F</div>` + lines.map((l) => String(f * 100 + l)).map((ho) => {
+      if (!us.has(ho)) return `<span class="hc hx" aria-hidden="true"></span>`;
       const m = by.get(ho) || { open: 0, all: 0, od: 0 }; const lv = m.open ? Math.min(3, Math.ceil((m.open / max) * 3)) : 0;
       return `<button type="button" class="hc h${lv} ${m.od ? "od" : ""} ${m.all && !m.open ? "done" : ""}" data-ho="${ho}" aria-label="${ho}호 미조치 ${m.open}건"><span>${ho}</span>${m.all ? `<b>${m.open}</b>` : ""}</button>`;
-    }).join("")).join("")}</div>
+    }).join(""); }).join("")}</div>
     <h3 class="sec">공용부·세대 외 <small>${common.filter(M.isOpen).length} / ${common.length}건</small></h3>
     ${common.slice(0, 30).map((d) => defectCard(d)).join("") || '<p class="help">없음</p>'}`;
   bindCards();
@@ -896,7 +897,7 @@ ROUTES.project = async () => {
     <label class="fld"><span>현장 이름</span><input class="inp" id="pj-name" value="${esc(p.name)}"></label>
     <label class="fld"><span>기본 조치기한 (등록일 + 일)</span><input class="inp" id="pj-due" type="number" min="0" max="90" value="${p.dueDays ?? 7}"></label>
     <h3 class="sec">동 <small>${p.dongs.length}개 · 줄임말은 빠른 검색용(예: 9동 → 109동)</small></h3>
-    <div class="slist">${p.dongs.map((d) => `<button type="button" class="sitem" data-dong="${d.id}"><span class="si-ico">🏢</span><span><b>${esc(d.name)}${d.alias ? ` <small class="tag">줄임 ${esc(d.alias)}</small>` : ""}</b><small>지하${d.basement || 0} · ${d.floors}층 · ${d.lines}호 라인 · 세대 ${d.unitStart || 1}층부터</small></span><span class="chev">›</span></button>`).join("")}</div>
+    <div class="slist">${p.dongs.map((d) => `<button type="button" class="sitem" data-dong="${d.id}"><span class="si-ico">🏢</span><span><b>${esc(d.name)}${d.alias ? ` <small class="tag">줄임 ${esc(d.alias)}</small>` : ""}</b><small>지하${d.basement || 0} · ${d.floors}층 · ${d.lines}호 라인 · 세대 ${d.unitStart || 1}층부터${d.units?.length ? ` · 실제 세대 ${d.units.length}개(데이터 기준)` : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <div class="row"><button type="button" class="btn" id="btn-adddong">＋ 동 추가</button><button type="button" class="btn" id="btn-bulkdong">＋ 여러 동 한 번에</button></div>
     <h3 class="sec">목록 편집</h3><div class="slist">
       ${[["commons", "🅿", "공용부", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
@@ -960,6 +961,7 @@ ROUTES.dong = async (qq) => {
   view().oninput = prev; prev();
   $("#dgform").addEventListener("submit", async (e) => {
     e.preventDefault(); read(); if (!d.name) return toast("동 이름을 입력하세요");
+    if (ex?.units && ["floors", "lines", "unitStart", "skipLines"].some((k) => String(ex[k] ?? "") !== String(d[k] ?? ""))) delete d.units; // 직접 고치면 수동 구조 사용
     if (/^\d+$/.test(d.name)) d.name += "동";
     if (!d.alias) d.alias = M.aliasOf(M.dongNum(d.name));
     const i = p.dongs.findIndex((x) => x.id === d.id);
@@ -1109,7 +1111,7 @@ async function runImport(addDongs) {
   const res = I.mergeRecords({ project: pcopy, existing: S.defects, records: recs, vendors: S.vendors, addMissingDongs: addDongs });
   busy(false);
   const st = res.stats;
-  const ok = await ask(`가져올 행 ${n(st.total)}개\n· 새 하자 ${n(st.added)}건\n· 갱신 ${n(st.updated)}건 (그중 내 수정 유지 ${n(st.kept)}건)\n· 변경 없음 ${n(st.same)}건\n· 새 업체 ${res.newVendors.length}개${res.newDongs.length ? `\n· 새 동 ${res.newDongs.length}개 (${res.newDongs.slice(0, 4).join(", ")}${res.newDongs.length > 4 ? "…" : ""})` : ""}`, { ok: "가져오기", title: "가져오기 미리보기" });
+  const ok = await ask(`가져올 행 ${n(st.total)}개\n· 새 하자 ${n(st.added)}건\n· 갱신 ${n(st.updated)}건 (그중 내 수정 유지 ${n(st.kept)}건)\n· 변경 없음 ${n(st.same)}건\n· 새 업체 ${res.newVendors.length}개${res.newDongs.length ? `\n· 새 동 ${res.newDongs.length}개 (${res.newDongs.slice(0, 4).join(", ")}${res.newDongs.length > 4 ? "…" : ""})` : ""}${res.fitted?.length ? `\n· 동 구조를 데이터에 맞춤(없는 층·세대 제거):\n${res.fitted.slice(0, 12).map((x) => `   ${x.name} ${x.unitStart}~${x.floors}층(${x.floorCount}개 층) · ${x.units}세대${x.dropped?.length ? ` · 제외 호수 ${x.dropped.slice(0, 3).join(",")}` : ""}`).join("\n")}${res.fitted.length > 12 ? "\n   …" : ""}` : ""}`, { ok: "가져오기", title: "가져오기 미리보기" });
   if (!ok) return;
   busy(true, "저장 중…");
   await db.putMany("defects", res.toPut); for (const v of res.newVendors) await saveVendor(v);

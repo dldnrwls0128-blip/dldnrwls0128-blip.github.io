@@ -90,6 +90,7 @@ textarea.inp{resize:vertical}
 .hc b{font-size:15px;color:var(--ink)}
 .h0,.hc.h0{background:var(--card)}.h1,.hc.h1{background:#fde7d3}.h2,.hc.h2{background:#fbbf8a}.h3,.hc.h3{background:#f97316}.hc.h3 b,.hc.h3{color:#fff}
 .hc.done{background:var(--ok-bg)}
+.hc.hx{visibility:hidden;cursor:default}
 .hc.od,.odl{outline:2px solid var(--bad);outline-offset:-2px}
 @media (prefers-color-scheme:dark){.h1,.hc.h1{background:#4a2a12}.h2,.hc.h2{background:#8a4310}.hc.h1 b,.hc.h2 b{color:#fff}}
 .stbar{display:flex;height:16px;border-radius:8px;overflow:hidden;background:var(--chip);margin:0 0 10px}

@@ -54,14 +54,48 @@ export function floorsOf(dong) {
   return out;
 }
 export const floorLabel = (f) => (!f ? "" : /^B\d/.test(f) || f === "옥상" ? f : `${f}층`);
-/** 층별 호수: 1~N호 라인, 호 = 층*100+라인 (startFloor 미만은 세대 없음: 필로티 등) */
+/** 층별 호수: 1~N호 라인, 호 = 층*100+라인 (startFloor 미만은 세대 없음: 필로티 등).
+ *  dong.units(엑셀 데이터에서 찾은 실제 세대 목록)가 있으면 그 세대만 */
 export function unitsOf(dong, floor) {
   const f = Number(floor);
   if (!Number.isFinite(f) || f < (dong.unitStart || 1) || f > (dong.floors || 0)) return [];
+  if (Array.isArray(dong.units) && dong.units.length) return dong.units.filter((h) => Math.floor(Number(h) / 100) === f).sort((a, b) => a - b);
   const skip = new Set(String(dong.skipLines || "").split(/[,\s]+/).filter(Boolean).map(Number));
   const out = [];
   for (let l = 1; l <= (dong.lines || 0); l++) if (!skip.has(l)) out.push(String(f * 100 + l));
   return out;
+}
+/** 호수 정규화: "0901"·"901호"·"309-901"·"309동 901호" → "901". 층 1~99, 라인 1~20 밖이면 "" (오인식 방지: 9010, 90101 등) */
+export function normHo(v) {
+  const s = String(v ?? "").trim(); if (!s) return "";
+  const groups = s.match(/\d+/g); if (!groups) return "";
+  let t = groups[groups.length - 1];
+  if (/^\d{6,}$/.test(t) && groups.length === 1) t = t.slice(-4); // 3090901 → 0901 (동+호 붙은 값). 5자리는 모호 → 버림
+  if (!/^\d{3,4}$/.test(t)) return "";
+  const n = Number(t), f = Math.floor(n / 100), l = n % 100;
+  return f >= 1 && f <= 99 && l >= 1 && l <= 20 ? String(n) : "";
+}
+/** 실제 호수 목록 → 동 구조(층 범위·라인·없는 라인·세대 목록) */
+export function deriveDong(hos) {
+  let us = [...new Set(hos.map(normHo).filter(Boolean))].map(Number).sort((a, b) => a - b);
+  if (!us.length) return null;
+  // 오입력 방지: 층이 3개 층 이상 끊긴 덩어리 중 세대가 가장 많은 덩어리만 사용 (예: 9010 → 90층 같은 유령 층 제외)
+  const cnt = new Map(); for (const h of us) { const f = Math.floor(h / 100); cnt.set(f, (cnt.get(f) || 0) + 1); }
+  const fs = [...cnt.keys()].sort((a, b) => a - b); const groups = [[fs[0]]];
+  for (let i = 1; i < fs.length; i++) { if (fs[i] - fs[i - 1] > 3) groups.push([]); groups.at(-1).push(fs[i]); }
+  const best = groups.reduce((a, g) => (g.reduce((s, f) => s + cnt.get(f), 0) > a.reduce((s, f) => s + cnt.get(f), 0) ? g : a));
+  const keep = new Set(best); const dropped = us.filter((h) => !keep.has(Math.floor(h / 100)));
+  us = us.filter((h) => keep.has(Math.floor(h / 100)));
+  const fl = us.map((h) => Math.floor(h / 100)), ln = us.map((h) => h % 100);
+  const lines = Math.max(...ln); const seen = new Set(ln);
+  const skip = []; for (let l = 1; l <= lines; l++) if (!seen.has(l)) skip.push(l);
+  return { floors: Math.max(...fl), unitStart: Math.min(...fl), lines, skipLines: skip.join(","), units: us.map(String), dropped: dropped.map(String) };
+}
+/** 동의 실제 세대 라인 번호(그리드 열) */
+export function linesOf(dong) {
+  if (Array.isArray(dong.units) && dong.units.length) return [...new Set(dong.units.map((h) => Number(h) % 100))].sort((a, b) => a - b);
+  const skip = new Set(String(dong.skipLines || "").split(/[,\s]+/).filter(Boolean).map(Number));
+  const out = []; for (let l = 1; l <= (dong.lines || 0); l++) if (!skip.has(l)) out.push(l); return out;
 }
 export const floorOfHo = (ho) => { const n = Number(ho); return Number.isFinite(n) && n >= 100 ? String(Math.floor(n / 100)) : ""; };
 export function makeDongs({ start = 101, count = 5, floors = 20, lines = 4, basement = 2, unitStart = 1, step = 1 }) {

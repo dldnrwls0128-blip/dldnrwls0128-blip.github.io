@@ -1,5 +1,5 @@
 /** 범용 엑셀/CSV 가져오기: 열 매핑(자동 추정 + 저장), 외부ID 기준 병합(내 수정 유지) */
-import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum } from "./model.js";
+import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong } from "./model.js";
 
 export const FIELDS = [
   { key: "extId", label: "외부 ID(순번·접수번호)", syn: ["순번", "번호", "접수번호", "id", "no", "하자번호", "관리번호"] },
@@ -82,7 +82,7 @@ export function rowsToRecords(rows, headerRow, map, { project, defaultCategory =
     if (!dongRaw && !content) continue;
     let dong = normDongName(dongRaw);
     const dd = findDong(project, dongNum(dong)); if (dd) dong = dd.name;
-    const ho = (g(r, "ho").match(/\d{3,4}/) || [""])[0];
+    const ho = normHo(g(r, "ho"));
     const created = toDate(g(r, "createdAt"));
     out.push({
       extId: g(r, "extId"), dong, ho, floor: g(r, "floor").replace(/층$/, "") || floorOfHo(ho),
@@ -98,7 +98,7 @@ export function rowsToRecords(rows, headerRow, map, { project, defaultCategory =
  * 병합: 외부ID(없으면 동+호+공종+내용)로 기존 건 찾기.
  * 기존 건에 내 수정(localEdited)이 있으면 상태·업체·기한·메모·사진은 유지하고 원본 필드만 갱신.
  */
-export function mergeRecords({ project, existing, records, vendors, addMissingDongs = true }) {
+export function mergeRecords({ project, existing, records, vendors, addMissingDongs = true, fitDongs = true }) {
   const key = (d) => (d.extId ? "x:" + d.extId : `k:${d.dong}|${d.ho}|${d.trade}|${d.content}`);
   const old = new Map(existing.filter((d) => d.projectId === project.id).map((d) => [key(d), d]));
   const vByName = new Map(vendors.map((v) => [norm(v.name), v]));
@@ -135,13 +135,34 @@ export function mergeRecords({ project, existing, records, vendors, addMissingDo
     const sorted = [...newDongs].sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
     for (const name of sorted) {
       const num = Number(dongNum(name));
-      const hos = records.filter((r) => r.dong === name && r.ho).map((r) => Number(r.ho));
-      const maxF = hos.length ? Math.max(...hos.map((h) => Math.floor(h / 100))) : 15;
-      const maxL = hos.length ? Math.max(...hos.map((h) => h % 100)) : 4;
-      project.dongs.push({ id: uid("d"), name, alias: Number.isFinite(num) ? aliasOf(num) : "", floors: maxF, lines: Math.min(maxL, 12) || 4, basement: 2, unitStart: 1, roof: true, skipLines: "" });
+      const dv = deriveDong(records.filter((r) => r.dong === name).map((r) => r.ho));
+      if (dv) { const cells = (dv.floors - dv.unitStart + 1) * (dv.lines - (dv.skipLines ? dv.skipLines.split(",").length : 0)); if (dv.units.length < 0.7 * cells) delete dv.units; }
+      project.dongs.push({ id: uid("d"), name, alias: Number.isFinite(num) ? aliasOf(num) : "", floors: 15, lines: 4, basement: 2, unitStart: 1, roof: true, skipLines: "", ...(dv || {}) }); delete project.dongs.at(-1).dropped;
     }
   }
-  return { toPut, newVendors, newDongs: [...newDongs], stats: { added, updated, kept, same, total: records.length } };
+  // 동 구조를 실제 데이터(이번 파일 + 이 현장의 기존 하자)에서 찾은 층·세대로 맞춤 → 없는 층/세대(예: 27층 이상, 1층 필로티) 자동 제거
+  const fitted = [];
+  if (fitDongs) {
+    const inFile = new Set(records.map((r) => r.dong).filter(Boolean));
+    for (const d of project.dongs) {
+      if (!inFile.has(d.name)) continue;
+      const hos = [...records.filter((r) => r.dong === d.name).map((r) => r.ho), ...existing.filter((x) => x.projectId === project.id && x.dong === d.name).map((x) => x.ho)];
+      const dv = deriveDong(hos); if (!dv) continue;
+      const before = { floors: d.floors, unitStart: d.unitStart || 1, count: (Array.isArray(d.units) && d.units.length) ? d.units.length : null };
+      const { dropped, ...st } = dv;
+      // 데이터가 세대를 거의 다 덮으면(층×라인 칸의 70% 이상) 실제 세대 그대로, 듬성듬성한 부분 엑셀이면 기존 구조를 줄이지 않고 넓히기만
+      const cells = (st.floors - st.unitStart + 1) * (st.lines - (st.skipLines ? st.skipLines.split(",").length : 0));
+      const full = st.units.length >= 0.7 * cells;
+      if (full) Object.assign(d, st);
+      else {
+        Object.assign(d, { floors: Math.max(d.floors || 0, st.floors), unitStart: Math.min(d.unitStart || 1, st.unitStart), lines: Math.max(d.lines || 0, st.lines) });
+        if (Array.isArray(d.units)) d.units = [...new Set([...d.units, ...st.units])].sort((a, b) => a - b);
+        continue;
+      }
+      fitted.push({ name: d.name, unitStart: dv.unitStart, floors: dv.floors, floorCount: new Set(dv.units.map((h) => Math.floor(h / 100))).size, units: dv.units.length, lines: dv.lines, dropped, before });
+    }
+  }
+  return { toPut, newVendors, newDongs: [...newDongs], fitted, stats: { added, updated, kept, same, total: records.length } };
 }
 
 export async function parseFile(file) {
