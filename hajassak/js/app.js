@@ -1534,8 +1534,8 @@ ROUTES.project = async () => {
         .map(([k, ico, t, arr]) => `<button type="button" class="sitem" data-list="${k}"><span class="si-ico">${ico}</span><span><b>${t}</b><small>${esc(arr.slice(0, 6).join(", "))}${arr.length > 6 ? " …" : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <h3 class="sec">도면 <small>동·층별 평면도 이미지 → 하자 위치를 도면에 찍기</small></h3>
     <div class="slist">${plans.map((pl) => `<button type="button" class="sitem" data-plan="${pl.id}"><span class="si-ico">🗺</span><span><b>${esc(pl.name)}</b><small>${esc(pl.utype ? `평형 ${pl.utype} 세대` : pl.dongs?.length ? pl.dongs.join(", ") : M.placeOf(pl, p) ? `단지 공용 · ${M.placeOf(pl, p)}` : "전체 동")} · ${esc(pl.floors || "전체 층")}${pl.rooms?.length ? ` · 실 ${pl.rooms.length}` : ""}</small></span><span class="chev">›</span></button>`).join("") || '<p class="help">등록된 도면이 없어요</p>'}</div>
-    <div class="row wrap"><button type="button" class="btn" id="btn-addplan">＋ 도면 이미지 추가</button><button type="button" class="btn" id="btn-bulkplan">🗂 도면 여러 장 가져오기</button><button type="button" class="btn" id="btn-planrooms">🚪 도면에서 실 목록 자동 채우기</button></div>
-    <p class="help">여러 장: 이미지 여러 개 또는 .zip(매핑표 file·dongs·floors·name TSV/CSV, rooms.json 함께 넣어도 돼요). 표가 없으면 파일 이름(301동_기준층, 지하주차장_B1, 84A_세대평면)으로 추측해요.</p>
+    <div class="row wrap"><button type="button" class="btn" id="btn-addplan">＋ 도면 이미지 추가</button><button type="button" class="btn" id="btn-bulkplan">🗂 도면 가져오기(PDF·이미지)</button><button type="button" class="btn" id="btn-planrooms">🚪 도면에서 실 목록 자동 채우기</button></div>
+    <p class="help">설계 도면 <b>PDF</b>(여러 개·여러 쪽·PDF 묶은 .zip)를 고르면 도면 이름·동·층·평형을 읽고, 실·공용부 이름과 위치를 자동으로 뽑아 하자 등록 위치를 만들어요(인터넷 없이 이 기기 안에서만). 사진·스캔 이미지는 글자를 못 읽어 실은 직접 추가해야 해요. 이미지 zip에 매핑표(TSV/CSV)·rooms.json을 넣어도 돼요.</p>
     <button type="button" class="btn btn-danger btn-block" id="btn-delproj">이 현장 삭제</button>`;
   $("#pj-name").addEventListener("change", async (e) => { p.name = e.target.value.trim() || p.name; await saveProject(p); toast("저장"); });
   $("#pj-due").addEventListener("change", async (e) => { p.dueDays = Math.max(0, Number(e.target.value) || 0); await saveProject(p); toast("저장"); });
@@ -1565,10 +1565,11 @@ const IMG_RE = /\.(jpe?g|png|webp|gif|bmp)$/i;
 const mimeOf = (n) => (/\.png$/i.test(n) ? "image/png" : /\.webp$/i.test(n) ? "image/webp" : /\.gif$/i.test(n) ? "image/gif" : "image/jpeg");
 /** 고른 파일(이미지·zip·매핑표·rooms.json)을 펼쳐 읽기 */
 async function readPlanFiles(files) {
-  const imgs = []; let mapText = "", rooms = null;
+  const imgs = [], pdfs = []; let mapText = "", rooms = null;
   const take = async (name, blob, text) => {
     const base = name.split("/").pop(); if (!base || base.startsWith(".") || name.includes("__MACOSX")) return;
     if (IMG_RE.test(base)) { if (/^contact_sheet/i.test(base)) return; imgs.push({ file: base, blob: await blob() }); }
+    else if (/\.pdf$/i.test(base)) pdfs.push({ file: base, blob: await blob() });
     else if (/\.(tsv|csv|txt)$/i.test(base)) mapText = await text();
     else if (/\.json$/i.test(base)) { try { const j = JSON.parse(await text()); if (j && typeof j === "object") rooms = j; } catch { /* 무시 */ } }
   };
@@ -1576,38 +1577,62 @@ async function readPlanFiles(files) {
     if (/\.zip$/i.test(f.name)) {
       if (!globalThis.JSZip) throw new Error("JSZip을 불러오지 못했어요");
       const zip = await globalThis.JSZip.loadAsync(f);
-      for (const e of Object.values(zip.files)) if (!e.dir) await take(e.name, async () => new Blob([await e.async("arraybuffer")], { type: mimeOf(e.name) }), () => e.async("string"));
+      for (const e of Object.values(zip.files)) if (!e.dir) await take(e.name, async () => new Blob([await e.async("arraybuffer")], { type: /\.pdf$/i.test(e.name) ? "application/pdf" : mimeOf(e.name) }), () => e.async("string"));
     } else await take(f.name, async () => f, () => f.text());
   }
-  imgs.sort((a, b) => a.file.localeCompare(b.file, "ko", { numeric: true }));
-  return { imgs, mapText, rooms };
+  imgs.sort((a, b) => a.file.localeCompare(b.file, "ko", { numeric: true })); pdfs.sort((a, b) => a.file.localeCompare(b.file, "ko", { numeric: true }));
+  return { imgs, pdfs, mapText, rooms };
 }
 async function bulkPlans() {
   const p = P();
-  const files = await pickFile("image/*,.zip,.tsv,.csv,.txt,.json", { multiple: true }); if (!files.length) return;
+  const files = await pickFile("application/pdf,.pdf,image/*,.zip,.tsv,.csv,.txt,.json", { multiple: true }); if (!files.length) return;
   busy(true, "파일 읽는 중…"); let got;
   try { got = await readPlanFiles(files); } catch (e) { busy(false); return toast("파일을 읽지 못했어요: " + (e.message || e)); }
   busy(false);
-  if (!got.imgs.length) return got.rooms ? planRoomsFrom(got.rooms) : toast("도면 이미지(jpg·png)가 없어요");
+  if (!got.imgs.length && !got.pdfs.length) return got.rooms ? planRoomsFrom(got.rooms) : toast("도면 PDF나 이미지(jpg·png)가 없어요");
   const map = M.parseMapping(got.mapText);
   const mine = S.plans.filter((x) => x.projectId === p.id);
   const rows = got.imgs.map((x) => { const m = map.get(x.file); const g = M.guessPlan(x.file, p); const dup = mine.find((pl) => pl.file === x.file);
-    return { ...x, on: true, dup, src: m ? "표" : "이름", name: m?.name || dup?.name || g.name, dongs: (m ? m.dongs : g.dongs).join(","), floors: m ? m.floors : g.floors, utype: m?.utype || g.utype, rooms: got.rooms?.[x.file] || null }; });
-  planReview(rows, { mapped: map.size, hasRooms: !!got.rooms });
+    return { ...x, on: true, dup, src: m ? "표" : "이름", name: m?.name || dup?.name || g.name, dongs: (m ? m.dongs : g.dongs).join(","), floors: m ? m.floors : g.floors, utype: m?.utype || g.utype, rooms: got.rooms?.[x.file] || null, imgOnly: !got.rooms?.[x.file] }; });
+  if (got.pdfs.length) { const pr = await scanPdfs(got.pdfs, mine); if (!pr) return; rows.push(...pr); }
+  planReview(rows, { mapped: map.size, hasRooms: !!got.rooms, pdf: got.pdfs.length });
 }
-function planReview(rows, { mapped, hasRooms }) {
+/** 1.1.0 PDF 훑기(쪽마다 글자만) → 검토 표 줄. 그림은 저장할 때 고른 쪽만 그림 */
+let PDFP = null; window.__pdfScan = null;
+async function scanPdfs(pdfs, mine) {
+  const t0 = performance.now(); let pagesDone = 0;
+  try {
+    busy(true, "도면 PDF 읽기 준비 중…"); PDFP = PDFP || (await import("./pdfplan.js")); await PDFP.loadPdfjs();
+    const out = [];
+    for (const [k, f] of pdfs.entries()) {
+      const r = await PDFP.scanPdf(f.blob, f.file, { onPage: (i, n) => busy(true, `도면 PDF 읽는 중${pdfs.length > 1 ? ` (${k + 1}/${pdfs.length})` : ""} · ${i}/${n}쪽…`) });
+      pagesDone += r.pages;
+      for (const x of r.rows) {
+        const inf = x.info; const dup = mine.find((pl) => pl.file === x.file);
+        out.push({ file: x.file, pdf: x.pdf, page: x.page, no: x.no, on: inf.check, more: !inf.check, dup, src: `PDF ${x.page}쪽${x.no ? " · " + x.no : ""}`, why: inf.why,
+          name: dup?.name || PDFP.displayName(inf, x.no), dongs: inf.dongs.join(","), floors: inf.floors, utype: inf.kind === "unit" ? inf.utype : "",
+          kind: x.kind === "other" ? "" : x.kind, rooms: x.rooms.length ? { kind: x.kind, rooms: x.rooms } : null, imgOnly: x.nText < 5 });
+      }
+    }
+    window.__pdfScan = { pages: pagesDone, ms: Math.round(performance.now() - t0), rows: out.map((r) => ({ file: r.file, page: r.page, on: r.on, name: r.name, dongs: r.dongs, floors: r.floors, utype: r.utype, why: r.why, kind: r.kind, rooms: r.rooms?.rooms || [] })) };
+    busy(false); return out;
+  } catch (e) { busy(false); toast("PDF를 읽지 못했어요: " + (e.message || e), { ms: 4000 }); return null; }
+}
+function planReview(rows, { mapped, hasRooms, pdf = 0 }) {
   const p = P(); const dn = new Set(p.dongs.map((d) => d.name));
   const warn = (r) => r.dongs.split(/[,\s]+/).filter(Boolean).filter((x) => !dn.has(x)).join(",");
   const s = openSheet({ title: `도면 ${rows.length}장 확인`, full: true, cls: "pimp-sheet",
-    html: `<p class="help">${mapped ? `매핑표 ${mapped}행으로 채웠어요` : "매핑표가 없어 파일 이름으로 추측했어요"}${hasRooms ? " · rooms.json 있음 → 저장 후 실 목록 검토" : ""}. 동은 쉼표로(비우면 전체 동), 층은 2-26 · B2,1 형식(비우면 전체 층), 평형은 세대 평면도일 때만.</p>
+    html: `<p class="help">${pdf ? `PDF ${pdf}개에서 평면도 ${rows.filter((r) => r.pdf && r.on).length}장을 골라 이름·동·층·평형을 채웠어요(실 ${rows.filter((r) => r.pdf && r.on).reduce((a, r) => a + (r.rooms?.rooms?.length || 0), 0)}개 발견) → 저장하면 실·공용부 위치를 자동으로 만들어요` : mapped ? `매핑표 ${mapped}행으로 채웠어요` : "매핑표가 없어 파일 이름으로 추측했어요"}${hasRooms ? " · rooms.json 있음 → 저장 후 실 목록 검토" : ""}. 동은 쉼표로(비우면 전체 동), 층은 2-26 · B2,1 형식(비우면 전체 층), 평형은 세대 평면도일 때만.</p>
+      ${rows.some((r) => r.more) ? `<button type="button" class="btn btn-sm" id="pi-more">평면도가 아닌 쪽 ${rows.filter((r) => r.more).length}개도 보기</button>` : ""}
       <div class="pimp-wrap"><table class="pimp"><thead><tr><th><input type="checkbox" id="pi-all" checked aria-label="모두 선택"></th><th>파일</th><th>이름</th><th>동</th><th>층</th><th>평형</th></tr></thead><tbody>
-      ${rows.map((r, i) => `<tr data-i="${i}"><td><input type="checkbox" class="pi-on" ${r.on ? "checked" : ""} aria-label="${esc(r.file)} 저장"></td><td class="fn">${esc(r.file)}${r.dup ? '<br><small class="help">기존 도면 교체</small>' : ""}<br><small class="help">${r.src}${r.rooms?.rooms?.length ? ` · 실 ${r.rooms.rooms.length}` : ""}</small></td>
+      ${rows.map((r, i) => `<tr data-i="${i}" class="${r.more ? "pi-more" : ""}" ${r.more ? "hidden" : ""}><td><input type="checkbox" class="pi-on" ${r.on ? "checked" : ""} aria-label="${esc(r.file)} 저장"></td><td class="fn" title="${esc(r.file)}">${r.pdf ? `<b>${r.page}쪽</b>${r.no ? ` <small>${esc(r.no)}</small>` : ""}` : esc(r.file)}${r.dup ? '<br><small class="help">기존 도면 교체</small>' : ""}<br><small class="help">${r.pdf ? "" : esc(r.src)}${r.rooms?.rooms?.length ? `${r.pdf ? "" : " · "}실 ${r.rooms.rooms.length}` : ""}${r.why ? ` · ${esc(r.why)}` : ""}</small></td>
         <td><input class="inp" data-f="name" value="${esc(r.name)}"></td><td><input class="inp" data-f="dongs" value="${esc(r.dongs)}" placeholder="전체"><span class="warn">${warn(r) ? "없는 동: " + esc(warn(r)) : ""}</span></td>
         <td><input class="inp" data-f="floors" value="${esc(r.floors)}" placeholder="전체"></td><td><input class="inp" data-f="utype" value="${esc(r.utype)}" placeholder="-" size="4"></td></tr>`).join("")}</tbody></table></div>`,
     footer: `<button type="button" class="btn" data-a="no">취소</button><button type="button" class="btn btn-primary" data-a="save" id="pi-save">저장</button>` });
   const cnt = () => { const n = $$(".pi-on:checked", s.el).length; $("#pi-save", s.el).textContent = `${n}장 저장`; };
   cnt();
-  $("#pi-all", s.el).addEventListener("change", (e) => { $$(".pi-on", s.el).forEach((c) => { c.checked = e.target.checked; }); cnt(); });
+  $("#pi-more", s.el)?.addEventListener("click", (e) => { const show = $$("tr.pi-more", s.el).some((t) => t.hidden); $$("tr.pi-more", s.el).forEach((t) => { t.hidden = !show; }); e.target.textContent = show ? "평면도만 보기" : `평면도가 아닌 쪽 ${rows.filter((r) => r.more).length}개도 보기`; });
+  $("#pi-all", s.el).addEventListener("change", (e) => { $$("tr:not([hidden]) .pi-on", s.el).forEach((c) => { c.checked = e.target.checked; }); cnt(); });
   $$(".pi-on", s.el).forEach((c) => c.addEventListener("change", cnt));
   $$("input[data-f=dongs]", s.el).forEach((inp) => inp.addEventListener("input", () => { const r = { dongs: inp.value }; inp.nextElementSibling.textContent = warn(r) ? "없는 동: " + warn(r) : ""; }));
   $("[data-a=no]", s.el).addEventListener("click", () => s.close());
@@ -1618,10 +1643,13 @@ function planReview(rows, { mapped, hasRooms }) {
     await s.close();
     const saved = []; let fail = 0;
     for (const [k, r] of pick.entries()) {
-      busy(true, `도면 압축·저장 ${k + 1}/${pick.length}…`);
+      busy(true, `도면 ${r.pdf ? "그리기" : "압축"}·저장 ${k + 1}/${pick.length}…`);
       try {
-        const c = await compressImage(r.blob, { max: 2400, quality: 0.8 });
-        const kind = r.rooms?.kind || r.dup?.kind || "";
+        const t1 = performance.now();
+        const src = r.pdf ? await PDFP.renderPage(r.pdf, r.page, { max: 2400 }) : r.blob;
+        const c = await compressImage(src, { max: 2400, quality: 0.8 });
+        if (r.pdf) (window.__pdfRender = window.__pdfRender || []).push(Math.round(performance.now() - t1));
+        const kind = r.rooms?.kind || r.kind || r.dup?.kind || "";
         const rooms = r.rooms?.rooms?.length ? M.roomCandidates(r.rooms.rooms, { evac: false, kind }).filter((x) => x.on).map(({ name, x, y }) => ({ name, x, y })) : r.dup?.rooms || [];
         const pl = { ...(r.dup || {}), id: r.dup?.id || M.uid("pl"), projectId: p.id, name: r.name.slice(0, 40), dongs: r.dongs, floors: r.floors, utype: r.utype, file: r.file, kind, rooms, blob: c.blob, w: c.w, h: c.h };
         pl.place = M.guessPlace(pl, p);
@@ -1629,10 +1657,31 @@ function planReview(rows, { mapped, hasRooms }) {
         saved.push({ pl, raw: r.rooms });
       } catch (e) { fail++; }
     }
-    busy(false); toast(`도면 ${saved.length}장 저장${fail ? ` · 실패 ${fail}` : ""}`, { ms: 3000 }); rerender();
+    busy(false); toast(`도면 ${saved.length}장 저장${fail ? ` · 실패 ${fail}` : ""}`, { ms: 3000 });
+    for (const pd of [...new Set(pick.map((r) => r.pdf).filter(Boolean))]) { try { await pd.destroy(); } catch { /* 무시 */ } }
+    await offerMissingDongs(saved.map((x) => ({ ...x.pl, rooms: x.raw?.rooms || x.pl.rooms }))); rerender();
     const withRooms = saved.filter((x) => x.raw?.rooms?.length);
+    const noText = pick.filter((r) => r.imgOnly).length;
+    if (noText) await ask(`사진·스캔 도면 ${noText}장은 글자를 읽을 수 없어 실·공용부를 자동으로 만들 수 없어요. 도면은 저장됐어요 — 실은 ‘목록 편집 › 실’이나 하자 등록 화면에서 직접 추가해 주세요.`, { ok: "확인", cancel: "" });
     if (withRooms.length) roomsReview(withRooms);
   });
+}
+/** 도면에서 찾은 동이 현장에 없으면 추가 제안(층수·지하·라인은 도면에서 추측, 나중에 고칠 수 있음) */
+async function offerMissingDongs(pls) {
+  const p = P(); const have = new Set(p.dongs.map((d) => d.name)); const by = new Map();
+  for (const pl of pls) for (const dn of pl.dongs || []) if (!have.has(dn)) { if (!by.has(dn)) by.set(dn, []); by.get(dn).push(pl); }
+  if (!by.size) return;
+  const names = [...by.keys()].sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
+  if (!(await ask(`도면에 있는 ${names.length}개 동(${names.slice(0, 6).join(", ")}${names.length > 6 ? " …" : ""})이 현장에 없어요. 추가할까요?`, { ok: "동 추가" }))) return;
+  for (const name of names) {
+    const fl = by.get(name).flatMap((pl) => String(pl.floors || "").split(/[,\s]+/).flatMap((t) => t.split(/[-~]/))).filter(Boolean);
+    const up = fl.filter((x) => /^\d+$/.test(x)).map(Number), dn = fl.filter((x) => /^B\d+$/i.test(x)).map((x) => Number(x.slice(1)));
+    const lines = Math.max(0, ...by.get(name).flatMap((pl) => (pl.rooms || []).map((r) => (/^(\d+)라인$/.exec(r.name) || [])[1]).filter(Boolean).map(Number)));
+    const num = name.replace(/동$/, "");
+    p.dongs.push({ id: M.uid("d"), name, alias: M.aliasOf(num), floors: up.length ? Math.max(...up) : 15, lines: lines || 4, basement: dn.length ? Math.max(...dn) : 0, unitStart: 1, roof: true, skipLines: "" });
+  }
+  p.dongs.sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true }));
+  await saveProject(p); toast(`동 ${names.length}개 추가 — 층수·라인은 ‘동’에서 확인하세요`, { ms: 3500 });
 }
 /** 이미 올린 도면에 rooms.json(또는 그게 든 zip)으로 실 목록 채우기 */
 async function planRoomsFromFile() {

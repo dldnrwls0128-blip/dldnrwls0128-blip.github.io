@@ -323,7 +323,8 @@ body.has-selbar #view{padding-bottom:132px}
 .doc small.steps{color:#444}
 /* 1.0.8 도면 여러 장·실 목록 */
 .pimp{width:100%;border-collapse:collapse;font-size:13px}.pimp th,.pimp td{border-bottom:1px solid var(--line);padding:4px 3px;text-align:left;vertical-align:middle}
-.pimp input.inp{min-height:32px;padding:2px 6px;font-size:13px}.pimp td.fn{max-width:120px;word-break:break-all;font-size:12px;color:var(--sub)}
+.pimp input.inp{min-height:32px;padding:2px 6px;font-size:13px}.pimp td.fn{max-width:120px;word-break:break-all;font-size:12px;color:var(--sub)}.pimp td.fn b{color:var(--text,#111)}.pimp td.fn small{word-break:keep-all}
+@media (max-width:520px){.pimp td.fn{max-width:84px}.pimp td:nth-child(3){min-width:96px}}
 .pimp .warn{color:var(--danger,#dc2626);font-size:11px}
 .pimp-wrap{overflow-x:auto}
 .rv-plan{border:1px solid var(--line);border-radius:10px;padding:6px 8px;margin:0 0 8px}.rv-plan summary{cursor:pointer;font-weight:700}

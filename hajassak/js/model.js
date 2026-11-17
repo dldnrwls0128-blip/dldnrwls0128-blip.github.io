@@ -433,7 +433,7 @@ export function guessPlace(pl, p) {
   const hit = cs.find((c) => c.length >= 2 && name.replace(/\s/g, "").includes(c.replace(/\s/g, ""))); if (hit) return hit;
   if (pl.kind === "parking" || /주차/.test(name)) return "지하주차장";
   if (/주민공동|어린이집|돌봄|맘스테이션|경로당|관리사무소|도서관|커뮤니티|경비실|문주/.test(name)) return "부대복리시설";
-  if (pl.kind === "amenity" || pl.kind === "") return name.split(/[_]/)[0].replace(/-\d+$/, "").slice(0, 15);
+  if (pl.kind === "amenity" || pl.kind === "") return name.split(/[_]/)[0].replace(/\s*\(.*$/, "").replace(/\s*(확대)?\s*평(면도|,).*$/, "").replace(/-\d+$/, "").trim().slice(0, 15);
   return "";
 }
 export const placeOf = (pl, p) => (pl?.place != null && pl.place !== "" ? pl.place : guessPlace(pl, p));
