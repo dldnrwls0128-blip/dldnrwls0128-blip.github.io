@@ -215,3 +215,10 @@ body.sheet-open{overflow:hidden}
 .srow-ph{min-width:52px;border:0;border-left:1px solid var(--line);background:none;color:var(--sub);font-size:13px;cursor:pointer;filter:grayscale(1);opacity:.55}
 .srow-ph.on{filter:none;opacity:1;color:var(--ink)}.srow-ph.none{cursor:default}
 .send-grid .disabled{opacity:.45}
+/* 버전 표시 */
+.ver-foot{display:flex;justify-content:center;margin:18px 0 4px}.ver-foot.top{justify-content:flex-end;margin:0 0 6px}
+.ver-chk{min-height:40px;padding:0 12px;border:0;background:none;color:var(--sub);font-size:12px;cursor:pointer}
+.ver-badge{font-size:12px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.16);color:inherit;opacity:.9}
+.toast-act{white-space:nowrap;flex:none}#toast span{min-width:0}
+#hdr-action{display:flex;align-items:center;gap:8px}
+#toast:has(.toast-act){width:min(92vw,440px);justify-content:space-between}

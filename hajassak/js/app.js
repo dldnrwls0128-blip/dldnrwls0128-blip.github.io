@@ -7,7 +7,7 @@ import { shareKakao, copyText, contactPickerSupported, pickContacts, canShareFil
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
 
-export const APP_VERSION = "1.0.2";
+export const APP_VERSION = self.HAJASSAK_VERSION || "0.0.0"; // 유일 출처: /version.js (sw.js 캐시 이름도 같은 값)
 export const APP_NAME = "하자싹";
 const LS = {
   get(k, d) { try { return JSON.parse(localStorage.getItem("hs:" + k)) ?? d; } catch { return d; } },
@@ -165,7 +165,7 @@ ROUTES.home = async () => {
   const open = list.filter(M.isOpen), od = list.filter((d) => M.isOverdue(d, today));
   const done = list.filter((d) => d.status === "조치완료" || d.status === "확인완료").length;
   const todayN = list.filter((d) => (d.createdAt || "").slice(0, 10) === today).length;
-  setHeader(p.name, { backBtn: false, action: S.projects.length > 1 || true ? `<button type="button" class="hdr-btn" id="btn-proj" aria-label="현장 전환">현장 ▾</button>` : "" });
+  setHeader(p.name, { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span><button type="button" class="hdr-btn" id="btn-proj" aria-label="현장 전환">현장 ▾</button>` });
   const recent = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 5);
   view().innerHTML = `
     <form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="예: ${esc(exampleQuery(p))}  ·  동/호/내용 검색" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>
@@ -184,8 +184,9 @@ ROUTES.home = async () => {
     </div>
     <h3 class="sec">최근 기록 <small>오늘 등록 ${todayN}건 · 전체 ${n(list.length)}건</small></h3>
     ${recent.length ? recent.map((d) => defectCard(d)).join("") : `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p></div>`}
-    ${recent.length ? `<button type="button" class="btn btn-block" data-go="#/list">전체 목록 보기</button>` : ""}`;
-  bindCards();
+    ${recent.length ? `<button type="button" class="btn btn-block" data-go="#/list">전체 목록 보기</button>` : ""}
+    ${verFoot()}`;
+  bindCards(); bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
   $("#btn-proj").addEventListener("click", switchProject);
@@ -1085,12 +1086,12 @@ async function exportSheet(list, title) {
 
 /* ---------- 설정 ---------- */
 ROUTES.settings = async () => {
-  setTab("settings"); setHeader("설정", { backBtn: navDepth() > 1 });
+  setTab("settings"); setHeader("설정", { backBtn: navDepth() > 1, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
   const p = P(); let est = "";
   try { const e = await navigator.storage?.estimate?.(); if (e) est = `${(e.usage / 1048576).toFixed(1)}MB 사용`; } catch {}
   let persisted = false; try { persisted = await navigator.storage?.persisted?.(); } catch {}
   const item = (go2, ico, t, sub = "", attr = "") => `<button type="button" class="sitem" ${go2 ? `data-go="${go2}"` : ""} ${attr}><span class="si-ico">${ico}</span><span><b>${t}</b>${sub ? `<small>${sub}</small>` : ""}</span><span class="chev">›</span></button>`;
-  view().innerHTML = `
+  view().innerHTML = `${verFoot().replace('class="ver-foot"', 'class="ver-foot top"')}
     <h3 class="sec">현장</h3><div class="slist">
       ${p ? item("#/project", "🏗", esc(p.name), `${p.dongs.length}개 동 · 공종 ${p.trades.length} · 유형 ${p.types.length} · 도면 ${S.plans.filter((x) => x.projectId === p.id).length}`) : ""}
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장${Pro.isPro() ? "" : " · 무료판 1개"}`, 'data-a="switch"')}
@@ -1108,6 +1109,7 @@ ROUTES.settings = async () => {
       ${item("#/about", "ℹ️", "앱 정보", `버전 ${APP_VERSION}`)}
       ${item("#/privacy", "🔒", "개인정보처리방침", "개인정보를 수집하지 않아요")}
       ${item("", "🗑", "모든 데이터 삭제", "이 기기의 현장·하자·사진·업체", 'data-a="wipe"')}</div>`;
+  bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", async () => {
     const a = b.dataset.a;
@@ -1486,6 +1488,50 @@ async function loadSample() {
 }
 
 /* ---------- 시작 ---------- */
+/* ---------- 버전 표시 · 업데이트 안내 ---------- */
+const UPD = { reg: null, waiting: null, next: "", clicked: false };
+function verFoot() {
+  return `<div class="ver-foot" id="ver-foot">${UPD.waiting ? `<button type="button" class="btn btn-sm btn-primary" id="ver-upd">새 버전 v${esc(UPD.next)} · 눌러서 업데이트</button>` : `<button type="button" class="ver-chk" id="ver-chk" aria-label="업데이트 확인">${APP_NAME} v${APP_VERSION}</button>`}</div>`;
+}
+function bindVerFoot(root = view()) {
+  $("#ver-upd", root)?.addEventListener("click", applyUpdate);
+  $("#ver-chk", root)?.addEventListener("click", async () => {
+    if (!UPD.reg) return toast(`현재 v${APP_VERSION}`);
+    toast("업데이트 확인 중…"); try { await UPD.reg.update(); } catch {}
+    setTimeout(() => { if (!UPD.waiting) toast(`최신 버전이에요 (v${APP_VERSION})`); }, 2500);
+  });
+}
+const swVersion = (w) => new Promise((res) => { try { const ch = new MessageChannel(); ch.port1.onmessage = (e) => res(String(e.data || "")); w.postMessage({ type: "VERSION" }, [ch.port2]); setTimeout(() => res(""), 1500); } catch { res(""); } });
+async function offerUpdate(w) {
+  if (!w || UPD.waiting === w) return;
+  UPD.waiting = w; UPD.next = (await swVersion(w)) || "새";
+  toast(`새 버전(v${UPD.next})이 있어요 — 새로고침`, { action: "새로고침", onAction: applyUpdate, ms: 600000 });
+  const f = $("#ver-foot"); if (f) { f.outerHTML = verFoot(); bindVerFoot(document); }
+}
+function applyUpdate() {
+  UPD.clicked = true;
+  if (UPD.waiting) UPD.waiting.postMessage({ type: "SKIP_WAITING" });
+  setTimeout(() => location.reload(), 2500); // controllerchange가 안 오면 그래도 새로고침
+}
+async function initUpdates() {
+  if (!("serviceWorker" in navigator) || location.protocol === "file:") return;
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", async () => {
+    if (UPD.clicked) return location.reload();
+    if (!hadController) return; // 첫 설치
+    // 옛 버전(≤1.0.2)에서 바로 활성화된 경우: 새로고침만 하면 됨
+    const v = navigator.serviceWorker.controller ? await swVersion(navigator.serviceWorker.controller) : "";
+    if (v && v !== APP_VERSION) toast(`새 버전(v${v})이 있어요 — 새로고침`, { action: "새로고침", onAction: () => location.reload(), ms: 600000 });
+  });
+  try {
+    const reg = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }); UPD.reg = reg;
+    if (reg.waiting && navigator.serviceWorker.controller) offerUpdate(reg.waiting);
+    reg.addEventListener("updatefound", () => { const w = reg.installing; w?.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) offerUpdate(w); }); });
+    const check = () => reg.update().catch(() => {});
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
+    setInterval(check, 30 * 60 * 1000);
+  } catch {}
+}
 async function main() {
   $("#btn-back").addEventListener("click", () => back());
   $$(".tab-item").forEach((a) => a.addEventListener("click", (e) => {
@@ -1497,7 +1543,7 @@ async function main() {
   window.addEventListener("afterprint", () => document.body.classList.remove("printing"));
   try { await loadAll(); } catch (e) { $("#view").innerHTML = `<div class="card"><p>저장소를 열 수 없어요: ${esc(e.message)}</p></div>`; return; }
   initNav(() => { ROUTES._cleanup?.(); ROUTES._cleanup = null; route(); });
-  if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("./sw.js").catch(() => {});
-  window.__hs = { S, M, db, Pro, go, replace }; // 테스트·디버그용
+  initUpdates();
+  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION }; // 테스트·디버그용
 }
 main();

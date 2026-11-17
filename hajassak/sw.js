@@ -1,11 +1,28 @@
+/* hajassak-v1.0.3 (build-deploy.sh가 version.js에서 찍음) */
 /* 하자싹 서비스 워커 — 앱 셸 캐시(오프라인). 사용자 데이터는 IndexedDB에만 있고 캐시하지 않음 */
-const CACHE = "hajassak-v1.0.2";
-const PRECACHE = ["./", "./index.html", "./manifest.webmanifest", "./css/app.css",
+importScripts("./version.js"); // 버전 유일 출처
+const VERSION = self.HAJASSAK_VERSION || "0";
+const CACHE = "hajassak-v" + VERSION;
+const PRECACHE = ["./", "./index.html", "./version.js", "./manifest.webmanifest", "./css/app.css",
   "./js/app.js", "./js/ui.js", "./js/db.js", "./js/model.js", "./js/photo.js", "./js/share.js", "./js/pro.js", "./js/speech.js",
   "./js/backup.js", "./js/importer.js", "./js/import-worker.js", "./js/exporter.js", "./js/sample.js",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/maskable-192.png", "./icons/maskable-512.png", "./icons/apple-touch-icon.png",
   "./vendor/jszip/jszip.min.js", "./vendor/xlsx/xlsx.mjs", "./privacy.html"];
-self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting())); });
+// 설치: HTTP 캐시를 거치지 않고 새로 받아 저장. 첫 설치이거나 업데이트 안내가 없는 옛 버전(≤1.0.2)에서 올라올 때만 바로 활성화,
+// 그 외에는 대기 → 앱이 ‘새 버전이 있어요 — 새로고침’ 안내 → 사용자가 누르면 SKIP_WAITING
+self.addEventListener("install", (e) => {
+  e.waitUntil((async () => {
+    const c = await caches.open(CACHE);
+    await c.addAll(PRECACHE.map((u) => new Request(u, { cache: "reload" })));
+    const keys = await caches.keys();
+    const legacy = keys.some((k) => /^hajassak-v1\.0\.[0-2]$/.test(k));
+    if (!self.registration.active || legacy) await self.skipWaiting();
+  })());
+});
+self.addEventListener("message", (e) => {
+  if (e.data?.type === "SKIP_WAITING") self.skipWaiting();
+  if (e.data?.type === "VERSION") e.ports[0]?.postMessage(VERSION);
+});
 self.addEventListener("activate", (e) => {
   e.waitUntil((async () => { for (const k of await caches.keys()) if (k !== CACHE) await caches.delete(k); await self.clients.claim(); })());
 });
