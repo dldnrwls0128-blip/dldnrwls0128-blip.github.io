@@ -3,7 +3,7 @@ import * as db from "./db.js";
 import * as M from "./model.js";
 import { $, $$, esc, n, toast, busy, initNav, go, replace, back, rerender, navDepth, pushLayer, closeLayer, unwind, openSheet, ask, prompt2, choose, pickFile } from "./ui.js";
 import { compressImage, downloadBlob, shareOrDownload } from "./photo.js";
-import { shareKakao, copyText, contactPickerSupported, pickContacts, canShareFiles } from "./share.js";
+import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactPickerSupported, pickContacts, canShareFiles } from "./share.js";
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
 import * as Sync from "./sync.js";
@@ -22,7 +22,9 @@ const S = {
 const P = () => S.projects.find((p) => p.id === S.pid) || null;
 const PD = () => S.defects.filter((d) => d.projectId === S.pid);
 const V = (id) => S.vendors.find((v) => v.id === id) || null;
-const vName = (d) => V(d.vendorId)?.name || "";
+/** 업체 이름: 업체 기록 → 하자에 적어 둔 이름 → ‘업체 정보 받는 중’(다른 기기에서 업체 기록이 아직 안 왔을 때) */
+const vLabel = (id) => { const v = V(id); if (v) return v.name; const d = id && S.defects.find((x) => x.vendorId === id && x.vendorName); return d ? d.vendorName : "업체 정보 받는 중"; };
+const vName = (d) => V(d.vendorId)?.name || d.vendorName || "";
 const photoCount = (d) => S.pidx.get(d.id) || { before: 0, after: 0 };
 const view = () => $("#view");
 const q = () => Object.fromEntries(new URLSearchParams((location.hash.split("?")[1] || "")));
@@ -41,7 +43,7 @@ function setTab(tab) { $$(".tab-item").forEach((a) => a.classList.toggle("active
 /* ---------- 데이터 ---------- */
 async function loadAll() {
   [S.projects, S.defects, S.vendors, S.plans] = await Promise.all([db.getAll("projects"), db.getAll("defects"), db.getAll("vendors"), db.getAll("plans")]);
-  S.pidx = await db.photoIndex();
+  S.pidx = await db.photoIndex(); db.setVendorNames(S.vendors);
   S.projects.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   if (!S.projects.some((p) => p.id === S.pid)) S.pid = S.projects[0]?.id || "";
   LS.set("pid", S.pid);
@@ -58,7 +60,7 @@ async function saveVendor(v) { await db.put("vendors", v); const i = S.vendors.f
 function setStatus(d, status, note = "") {
   if (d.status === status && !note) return d;
   const now = new Date().toISOString();
-  d.history = [...(d.history || []), { at: now, status, note, from: d.status }];
+  d.history = [...(d.history || []), { at: now, status, note, from: d.status, ...(Sync.attached() && Sync.signedIn() ? { by: Sync.actorName() } : {}) }];
   d.status = status;
   if (status === "업체전달") d.sentAt = now;
   if (status === "조치완료") d.doneAt = now;
@@ -108,13 +110,14 @@ function noProject() {
     <p class="help">동·층·호수를 한 번 만들어 두면 위치를 몇 번의 탭으로 고를 수 있어요.</p>
     <button type="button" class="btn btn-primary btn-lg" data-a="wizard">+ 새 현장 만들기</button>
     <button type="button" class="btn btn-lg" data-a="sample">샘플 현장 불러오기</button>
+    <button type="button" class="btn btn-lg" data-a="team">👥 팀 현장 참여·열기 (초대코드)</button>
     <button type="button" class="btn btn-ghost" data-a="restore">백업 파일에서 복원</button>
-    <button type="button" class="btn btn-ghost" data-a="sync">☁️ 다른 기기 데이터 받기 (구글 로그인)</button></div>`;
+    ${Sync.attached() ? `<p class="help">‘${esc(Sync.state.ws.name)}’ 팀 데이터를 받는 중이에요… (${esc(Sync.status().label)})</p>` : ""}</div>`;
 }
 function bindNoProject() {
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
     const a = b.dataset.a;
-    if (a === "wizard") go("#/wizard"); else if (a === "sample") loadSample(); else if (a === "sync") go("#/sync"); else go("#/restore");
+    if (a === "wizard") go("#/wizard"); else if (a === "sample") loadSample(); else if (a === "team") go("#/sync"); else go("#/restore");
   }));
 }
 
@@ -218,7 +221,7 @@ async function sendChecked(sel) {
   let vid = [...byV.keys()][0];
   if (byV.size > 1) {
     vid = await choose(`체크한 ${sel.length}건 · 업체 ${byV.size}곳 — 어느 업체에 보낼까요?`, [...byV.entries()].sort((a, b) => b[1].length - a[1].length)
-      .map(([id, l]) => ({ icon: "🏢", label: id ? V(id)?.name || "?" : "업체 미지정", sub: `${l.length}건 · ${[...new Set(l.map((d) => M.tradeText(d)).filter(Boolean))].slice(0, 3).join(", ")}`, value: id || "_none" })));
+      .map(([id, l]) => ({ icon: "🏢", label: id ? vLabel(id) : "업체 미지정", sub: `${l.length}건 · ${[...new Set(l.map((d) => M.tradeText(d)).filter(Boolean))].slice(0, 3).join(", ")}`, value: id || "_none" })));
     if (vid === null) return;
     if (vid === "_none") vid = "";
   }
@@ -287,7 +290,7 @@ async function newProjectGate() {
 const FILTER_LABEL = { dong: "동", ho: "호", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
 function filterChipText(k, v) {
   if (k === "status") return v === "_open" ? "미조치" : v;
-  if (k === "vendorId") return v === "_none" ? "업체 미지정" : V(v)?.name || "업체";
+  if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
   if (k === "overdue") return "기한초과";
   if (k === "ho") return v + "호";
   if (k === "text") return `“${v}”`;
@@ -467,7 +470,7 @@ ROUTES.dash = async () => {
     <section class="card"><h3>상태별</h3><div class="stbar">${M.STATUSES.map((s) => (st.get(s) ? `<i class="${M.STATUS_CLS[s]}" style="flex:${st.get(s)}" title="${s}"></i>` : "")).join("")}</div>
       <div class="stleg">${M.STATUSES.map((s) => `<button type="button" class="lg" data-st="${s}">${pill(s)} ${n(st.get(s) || 0)}</button>`).join("")}</div></section>
     <section class="card"><h3>업체별 <small>미조치 · 기한초과 · 조치율</small></h3>
-      <table class="tbl"><tbody>${vlist.map(([k, m]) => `<tr data-v="${k}"><td>${esc(k === "_none" ? "업체 미지정" : V(k)?.name || "?")}</td><td class="r">${m.open}</td><td class="r ${m.od ? "od" : ""}">${m.od}</td><td class="w">${bar(m.done, m.all, "ok")}<small>${Math.round((m.done / m.all) * 100)}%</small></td></tr>`).join("") || '<tr><td class="help">데이터 없음</td></tr>'}</tbody></table></section>
+      <table class="tbl"><tbody>${vlist.map(([k, m]) => `<tr data-v="${k}"><td>${esc(k === "_none" ? "업체 미지정" : vLabel(k))}</td><td class="r">${m.open}</td><td class="r ${m.od ? "od" : ""}">${m.od}</td><td class="w">${bar(m.done, m.all, "ok")}<small>${Math.round((m.done / m.all) * 100)}%</small></td></tr>`).join("") || '<tr><td class="help">데이터 없음</td></tr>'}</tbody></table></section>
     <section class="card"><h3>미조치 경과일</h3>${aging.map(([l, v]) => `<div class="hrow"><span>${l}</span>${bar(v, amax, v && l.includes("초과") ? "bad" : "")}<b>${v}</b></div>`).join("")}</section>
     <section class="card"><h3>구분별 <small>전체 · 미조치</small></h3>${cats.map(([t, v]) => `<div class="hrow" data-cat="${esc(t)}"><span>${esc(t || "-")}</span>${bar(v, cmax)}<b>${v}<small> · ${copen.get(t) || 0}</small></b></div>`).join("") || '<p class="help">없음</p>'}</section>
     <section class="card"><h3>유형별(미조치)</h3>${types.map(([t, v]) => `<div class="hrow"><span>${esc(t || "-")}</span>${bar(v, tmax)}<b>${v}</b></div>`).join("") || '<p class="help">없음</p>'}</section>
@@ -891,8 +894,9 @@ ROUTES.item = async (qq) => {
     <section class="card item-hd ${od ? "overdue" : ""}"><div class="row">${pill(d.status)}${sevBadge(d)}<span class="tbadge">${esc(d.category || "")}</span>${od ? '<span class="od">기한초과</span>' : ""}</div>
       <h2>${esc(M.tradeText(d))}${d.type ? ` · ${esc(d.type)}` : ""}</h2><p class="content">${esc(d.content || "")}</p>
       <dl class="kv"><dt>위치</dt><dd>${esc(M.locText(d))}</dd><dt>업체</dt><dd>${v ? `<a href="#/vendor?id=${v.id}">${esc(v.name)}</a>` : "미지정"}</dd>
-        <dt>조치기한</dt><dd>${esc(d.due || "-")}</dd><dt>등록</dt><dd>${fmtDT(d.createdAt)}${d.extId ? ` · 외부ID ${esc(d.extId)}` : ""}</dd></dl></section>
-    <ol class="flow">${["접수", "업체전달", "조치중", "조치완료", "확인완료"].map((s2, i) => `<li class="${s2 === d.status ? "on" : i < idx && d.status !== "재접수" ? "done" : ""}">${s2}</li>`).join("")}</ol>
+        <dt>조치기한</dt><dd>${esc(d.due || "-")}</dd><dt>등록</dt><dd>${fmtDT(d.createdAt)}${d.createdBy ? ` · <b class="who">${esc(d.createdBy)}</b>` : ""}${d.extId ? ` · 외부ID ${esc(d.extId)}` : ""}</dd>
+         ${d.updatedBy ? `<dt>최근 수정</dt><dd id="who-upd"><b class="who">${esc(d.updatedBy)}</b> · ${fmtDT(d.updatedByAt || d.updatedAt)}</dd>` : ""}</dl></section>
+    <ol class="flow" aria-label="상태 바로 바꾸기">${["접수", "업체전달", "조치중", "조치완료", "확인완료", ...(["재접수", "조치완료", "확인완료"].includes(d.status) ? ["재접수"] : [])].map((s2, i) => `<li class="${s2 === d.status ? "on" : i < idx && d.status !== "재접수" ? "done" : ""}${s2 === "재접수" ? " re" : ""}"><button type="button" class="flow-b" data-flow="${s2}" ${s2 === d.status ? 'aria-current="step"' : ""} aria-label="상태를 ${s2}(으)로">${s2}</button></li>`).join("")}</ol>
     <div class="act-row">${nx ? `<button type="button" class="btn btn-primary btn-lg" data-st="${nx}">${nx === "업체전달" ? "업체에 보내기" : nx + " 처리"}</button>` : ""}
       ${d.status === "조치완료" || d.status === "확인완료" ? `<button type="button" class="btn btn-lg btn-warn" data-st="재접수">재접수</button>` : ""}
       <button type="button" class="btn btn-lg" id="btn-stany">상태 선택</button></div>
@@ -904,11 +908,12 @@ ROUTES.item = async (qq) => {
       <button type="button" class="ph-add" data-add="after">📷<span>추가</span></button></div></section>
     ${plan ? `<section class="card"><h3>도면 위치 <small>${esc(plan.name)}</small></h3><div class="plan mini"><img src="${(() => { const u = URL.createObjectURL(plan.blob); urls.push(u); return u; })()}" alt="도면"><i class="pin" style="left:${d.pin.x * 100}%;top:${d.pin.y * 100}%"></i></div></section>` : ""}
     <section class="card"><h3>메모</h3><textarea class="inp" id="memo" rows="2" placeholder="현장 메모(업체 전달 문구에는 포함되지 않음)">${esc(d.memo || "")}</textarea></section>
-    <section class="card"><h3>처리 이력</h3><ol class="hist">${[...(d.history || [])].reverse().map((h) => `<li><time>${fmtDT(h.at)}</time> ${pill(h.status)} ${esc(h.note || "")}</li>`).join("")}</ol></section>
+    <section class="card"><h3>처리 이력</h3><ol class="hist">${[...(d.history || [])].reverse().map((h) => `<li><time>${fmtDT(h.at)}</time> ${pill(h.status)} ${esc(h.note || "")}${h.by ? ` <small class="who">· ${esc(h.by)}</small>` : ""}</li>`).join("")}</ol></section>
     <button type="button" class="btn btn-danger btn-block" id="btn-del">이 하자 삭제</button>`;
   ROUTES._cleanup = () => urls.forEach((u) => URL.revokeObjectURL(u));
   $("#btn-edit").addEventListener("click", () => { startDraft({}, d); go(`#/edit?id=${d.id}`); });
   $$("[data-st]", view()).forEach((b) => b.addEventListener("click", () => changeStatus(d, b.dataset.st)));
+  $$("[data-flow]", view()).forEach((b) => b.addEventListener("click", () => quickStatus(d, b.dataset.flow)));
   $("#btn-stany").addEventListener("click", async () => { const st = await choose("상태 선택", M.STATUSES.map((s2) => ({ label: s2, value: s2, sub: s2 === d.status ? "현재" : "" }))); if (st) changeStatus(d, st); });
   $("#btn-kakao").addEventListener("click", () => sendSheet({ items: [d], vendor: v }));
   $("[data-sms]", view())?.addEventListener("click", () => setTimeout(() => markSent([d], "문자"), 300));
@@ -924,6 +929,13 @@ ROUTES.item = async (qq) => {
     S.defects = S.defects.filter((x) => x.id !== d.id); S.pidx.delete(d.id); toast("삭제했어요"); back();
   });
 };
+/** 상세 화면 상태 단계 탭: 묻지 않고 바로 바꾸고 3초 ‘되돌리기’. 조치완료인데 조치 후 사진이 없으면 안내만(막지 않음) */
+async function quickStatus(d, st) {
+  if (d.status === st) return toast(`이미 ‘${st}’ 상태예요`);
+  const prev = d.status; setStatus(d, st); await saveDefect(d); rerender();
+  const hint = st === "조치완료" && !photoCount(d).after ? " · 조치 후 사진은 아래 📷에서 추가" : "";
+  toast(`‘${st}’(으)로 변경${hint}`, { ms: 3000, action: "되돌리기", onAction: async () => { setStatus(d, prev, "되돌리기"); await saveDefect(d); rerender(); } });
+}
 async function changeStatus(d, st) {
   if (st === "업체전달") return sendSheet({ items: [d], vendor: V(d.vendorId) });
   if (st === "조치완료" && !photoCount(d).after) {
@@ -952,13 +964,13 @@ function photoViewer(photos, id, onChange) {
 }
 
 /* ---------- 보내기(카톡·문자·전화·복사) ---------- */
-async function markSent(items, via) {
+async function markSent(items, via, note = "") {
   const targets = items.filter((d) => d.status === "접수" || d.status === "재접수");
-  if (!targets.length) return;
+  if (!targets.length) { if (note) toast(note, { ms: 7000 }); return; }
   const prev = targets.map((d) => [d, d.status]);
   for (const d of targets) { setStatus(d, "업체전달", `${via}로 전달`); await saveDefect(d); }
   rerender();
-  toast(`${targets.length}건 ‘업체전달’로 표시`, { action: "되돌리기", onAction: async () => { for (const [d, st] of prev) { setStatus(d, st, "전달 취소"); await saveDefect(d); } rerender(); } });
+  toast(`${note ? note + " · " : ""}${targets.length}건 ‘업체전달’로 표시`, { ms: note ? 9000 : 2400, action: "되돌리기", onAction: async () => { for (const [d, st] of prev) { setStatus(d, st, "전달 취소"); await saveDefect(d); } rerender(); } });
 }
 /** 업체에 보내기: 건마다 체크해서 고른 건만 카톡·문자·복사·PDF로 보내고, 고른 건만 ‘업체전달’ 표시(되돌리기 가능).
  *  preselect: 처음 체크할 id 목록(없으면 미전달 → 없으면 미조치 → 전체) */
@@ -967,7 +979,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
   const byV = new Map(); for (const d of items) byV.set(d.vendorId || "", (byV.get(d.vendorId || "") || 0) + 1);
   if (!vendor && byV.size === 1 && [...byV.keys()][0]) vendor = V([...byV.keys()][0]);
   if (!vendor && byV.size > 1) {
-    const v = await choose("어느 업체에 보낼까요?", [...byV.entries()].sort((a, b) => b[1] - a[1]).map(([id, c]) => ({ label: id ? V(id)?.name || "?" : "업체 미지정", sub: `${c}건`, value: id || "_none" })).concat([{ label: "업체 구분 없이 전체", sub: `${items.length}건`, value: "_all" }]));
+    const v = await choose("어느 업체에 보낼까요?", [...byV.entries()].sort((a, b) => b[1] - a[1]).map(([id, c]) => ({ label: id ? vLabel(id) : "업체 미지정", sub: `${c}건`, value: id || "_none" })).concat([{ label: "업체 구분 없이 전체", sub: `${items.length}건`, value: "_all" }]));
     if (!v) return;
     if (v !== "_all") { items = items.filter((d) => (d.vendorId || "_none") === v); vendor = v === "_none" ? null : V(v); }
   }
@@ -999,10 +1011,12 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
       <label class="check"><input type="checkbox" id="withph" ${phOn.size ? "checked" : ""}> 조치 전 사진 첨부 (카톡 공유 시, 최대 10장 · 건마다 📷로 켜고 끄기)</label>
       <div class="send-grid">
         <button type="button" class="btn btn-kakao btn-lg" data-s="kakao">카카오톡으로 보내기</button>
+        <p class="help small kakao-hint" id="kakao-hint">${isMobileDevice() ? (isAndroid() ? "카카오톡이 바로 열려요(내용은 복사도 돼요). 사진을 붙이면 공유창에서 <b>카카오톡</b>을 골라 주세요." : "공유창에서 <b>카카오톡</b>을 골라 주세요. 내용은 미리 복사돼요.") : "PC: 내용이 복사되고 카카오톡 PC가 열려요. 업체 채팅방에 <b>Ctrl+V</b>로 붙여넣으세요. 사진은 PC에서 자동으로 붙지 않아요(요청서 PDF를 쓰세요)."}</p>
         ${phones.map((ph) => `<a class="btn btn-lg" data-s="sms" href="#" data-ph="${esc(ph)}">💬 문자 ${esc(ph)}</a><a class="btn btn-lg" href="${M.telHref(ph)}" data-s="tel">📞 전화 ${esc(ph)}</a>`).join("")}
         <button type="button" class="btn btn-lg" data-s="copy">📋 내용 복사</button>
+        <button type="button" class="btn btn-lg" data-s="share">📤 다른 앱으로 공유</button>
         <button type="button" class="btn btn-lg" data-s="pdf">📄 요청서 PDF(인쇄)</button></div>
-      <p class="help">카카오톡은 앱이 특정 친구를 대신 고를 수 없어요. 공유창에서 <b>카카오톡 → 대화방</b>을 고르면 내용이 채워진 채로 열려요.${phones.length ? "" : " 업체에 전화번호를 등록하면 문자·전화 버튼이 생겨요."}</p>
+      <p class="help">카카오톡은 앱이 특정 친구를 대신 고를 수 없어요. 카카오톡에서 <b>업체 대화방</b>을 고르면 돼요.${phones.length ? "" : " 업체에 전화번호를 등록하면 문자·전화 버튼이 생겨요."}</p>
       <label class="check"><input type="checkbox" id="mark" checked> 보낸 뒤 선택한 건 중 ‘접수’ 건을 ‘업체전달’로 표시</label>` });
   const el = s.el; const ta = $("#msg", el);
   const refresh = () => {
@@ -1037,18 +1051,21 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
     const k = b.dataset.s;
     if (k === "tel") return; // 기본 동작(tel:)
     if (!chosen.size) { e.preventDefault(); return toast("보낼 하자를 하나 이상 선택하세요"); }
-    if (k === "kakao") {
+    if (k === "kakao" || k === "share") {
       let files = [];
       if ($("#withph", el).checked) {
         busy(true, "사진 준비 중…");
         for (const d of sel()) { if (!phOn.has(d.id)) continue; for (const ph of (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 2)) if (files.length < 10) files.push(new File([ph.blob], `${M.locText(d).replace(/\s+/g, "_")}_${files.length + 1}.jpg`, { type: "image/jpeg" })); }
         busy(false);
       }
-      const r = await shareKakao({ text: ta.value, files });
+      if (k === "kakao" && !isMobileDevice()) files = []; // PC: 공유창 대신 복사
+      const r = k === "share" ? await shareGeneric({ text: ta.value, files }) : await shareKakao({ text: ta.value, files });
       if (r === "cancel") return;
-      if (r === "copied") toast("공유를 지원하지 않아 내용을 복사했어요. 카톡에 붙여넣기 하세요");
-      if (r === "fail") return toast("공유할 수 없어요");
-      return after("카톡");
+      if (r === "fail") return toast(k === "share" ? "공유할 수 없어요" : "복사할 수 없어요. ‘내용 복사’를 눌러 보세요");
+      const note = r === "kakao-pc" ? "내용 복사됨 — 카카오톡 PC에서 업체 채팅방에 붙여넣기(Ctrl+V)" : r === "copied" ? "내용 복사됨 — 카카오톡 대화방에 붙여넣기 하세요" : "";
+      const mark = $("#mark", el).checked; const items2 = sel(); await s.close();
+      if (mark) await markSent(items2, k === "share" ? "공유" : "카톡", note); else if (note) toast(note, { ms: 7000 });
+      return;
     }
     if (k === "sms") { e.preventDefault(); const href = M.smsHref(b.dataset.ph, ta.value); S.lastSms = href; location.href = href; return after("문자"); }
     if (k === "copy") { (await copyText(ta.value)) ? toast("복사했어요") : toast("복사 실패"); return after("복사"); }
@@ -1189,7 +1206,7 @@ async function exportSheet(list, title) {
   if (k === "csv") { const b = toCsv(list, ctx); S.lastExport = { name: fn + ".csv", size: b.size }; return shareOrDownload(b, fn + ".csv"); }
   const byV = new Map(); for (const d of list) byV.set(d.vendorId || "", [...(byV.get(d.vendorId || "") || []), d]);
   if (byV.size === 1) return printRequest({ vendor: V([...byV.keys()][0]), items: list });
-  const vid = await choose("어느 업체 요청서?", [...byV.entries()].map(([id, a]) => ({ label: V(id)?.name || "업체 미지정", sub: `${a.length}건`, value: id || "_none" })));
+  const vid = await choose("어느 업체 요청서?", [...byV.entries()].map(([id, a]) => ({ label: id ? vLabel(id) : "업체 미지정", sub: `${a.length}건`, value: id || "_none" })));
   if (vid) printRequest({ vendor: V(vid), items: byV.get(vid === "_none" ? "" : vid) });
 }
 
@@ -1207,7 +1224,7 @@ ROUTES.settings = async () => {
       ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "🧪", "샘플 현장 불러오기", "기능을 둘러볼 수 있는 가상 데이터", 'data-a="sample"')}</div>
     <h3 class="sec">동기화</h3><div class="slist">
-      ${item("#/sync", "☁️", "동기화 (PC·폰)", Sync.attached() ? `${esc(Sync.state.email || "구글 계정")} · ${esc(Sync.status().label)}` : "꺼짐 · 구글 로그인하면 컴퓨터와 폰이 실시간으로 맞춰져요", 'id="si-sync"')}</div>
+      ${item("#/sync", "👥", "동기화·팀 현장", Sync.attached() ? `${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""} · ${esc(Sync.status().label)}` : "꺼짐 · 팀원·PC·폰이 같은 현장을 실시간으로 공유", 'id="si-sync"')}</div>
     <h3 class="sec">데이터</h3><div class="slist">
       ${p ? item("#/import", "📥", "엑셀·CSV 가져오기", "다른 시스템 하자 목록 → 열 매핑 후 가져오기") : ""}
       ${p ? item("", "📤", "전체 내보내기", "엑셀·CSV·요청서", 'data-a="export"') : ""}
@@ -1220,7 +1237,7 @@ ROUTES.settings = async () => {
       ${item("#/onboard?again=1", "📘", "사용법 다시 보기", "")}
       ${item("#/about", "ℹ️", "앱 정보", `버전 ${APP_VERSION}`)}
       ${item("#/privacy", "🔒", "개인정보처리방침", Sync.attached() ? "동기화 중: 데이터가 Google Firebase에 저장돼요" : "동기화를 켜기 전에는 기기에만 저장")}
-      ${item("", "🗑", "모든 데이터 삭제", Sync.attached() ? "현장·하자·사진·업체 · 동기화된 기기·클라우드에서도 삭제" : "이 기기의 현장·하자·사진·업체", 'data-a="wipe"')}</div>`;
+      ${item("", "🗑", "모든 데이터 삭제", Sync.attached() ? "현장·하자·사진·업체 · 팀 현장 전체(모든 팀원 기기·클라우드)에서도 삭제" : "이 기기의 현장·하자·사진·업체", 'data-a="wipe"')}</div>`;
   bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", async () => {
@@ -1233,7 +1250,7 @@ ROUTES.settings = async () => {
     if (a === "persist") { const ok = await navigator.storage?.persist?.(); toast(ok ? "저장공간 보호가 켜졌어요" : "브라우저가 거절했어요. 앱을 홈 화면에 설치하면 보통 허용돼요"); return rerender(); }
     if (a === "issuer") { const v = await prompt2("요청자 이름(요청서 표시)", S.issuer); if (v !== null) { S.issuer = v; LS.set("issuer", v); rerender(); } return; }
     if (a === "wipe") {
-      if (!(await ask(Sync.attached() ? "모든 현장·하자·사진·업체를 삭제할까요?\n동기화 중이라 클라우드와 다른 기기에서도 지워져요. 이 기기만 비우려면 먼저 동기화에서 로그아웃하세요.\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요." : "이 기기의 모든 현장·하자·사진·업체를 삭제할까요?\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요.", { ok: "모두 삭제", danger: true }))) return;
+      if (!(await ask(Sync.attached() ? "이 팀 현장의 모든 현장·하자·사진·업체를 삭제할까요?\n팀 현장이라 클라우드와 모든 팀원 기기에서도 지워져요. 이 기기만 비우려면 동기화·팀에서 ‘이 기기 전용으로 전환’하세요.\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요." : "이 기기의 모든 현장·하자·사진·업체를 삭제할까요?\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요.", { ok: "모두 삭제", danger: true }))) return;
       for (const st of ["projects", "defects", "photos", "vendors", "plans"]) await db.clear(st);
       await loadAll(); toast("모두 삭제했어요"); replace("#/home");
     }
@@ -1580,15 +1597,16 @@ ROUTES.privacy = async () => {
   setTab(null); setHeader("개인정보처리방침", { backBtn: true });
   view().innerHTML = `<article class="card legal">${PRIVACY_HTML}</article>`;
 };
-export const PRIVACY_HTML = `<h2>하자싹 개인정보처리방침</h2><p class="help">시행일: 2026년 11월 17일 (동기화 기능 추가 반영)</p>
+export const PRIVACY_HTML = `<h2>하자싹 개인정보처리방침</h2><p class="help">시행일: 2026년 11월 17일 (팀 현장 공유 기능 반영)</p>
 <p>하자싹(이하 ‘앱’)은 기본적으로 이용자의 데이터를 이용자 기기 안에만 저장합니다. 이용자가 직접 <b>동기화</b>를 켠 경우에만 아래와 같이 Google Firebase에 저장됩니다.</p>
 <h3>1. 기기 저장(기본)</h3><p>회원가입 없이 사용할 수 있으며, 이용자가 입력한 현장·하자 내용, 사진, 업체명·전화번호, 도면 이미지는 <b>이용자 기기 안(브라우저 저장소)</b>에 저장됩니다. 동기화를 켜지 않으면 개발자나 외부 서버로 아무 정보도 보내지 않습니다.</p>
-<h3>2. 동기화(선택)</h3><p>설정 &gt; 동기화에서 구글 계정으로 로그인하면 여러 기기(PC·폰)에서 같은 데이터를 쓰기 위해 다음 정보가 <b>Google Firebase(Google LLC 제공, Cloud Firestore 서울 리전 asia-northeast3)</b>에 저장됩니다.</p>
-<ul><li>계정 정보: 구글 계정 이메일, 이름, 계정 식별자(Firebase Authentication)</li><li>앱 데이터: 현장·하자 내용, 사진·도면 이미지, 업체명·전화번호, 엑셀 열 맞춤 설정</li></ul>
-<p>데이터는 로그인한 본인 계정에서만 읽고 쓸 수 있도록 보안 규칙으로 제한되며, 전송 구간은 암호화(HTTPS)됩니다. 개발자는 이 데이터를 광고·분석 등 다른 목적으로 쓰지 않습니다. Google의 처리 방침: <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">firebase.google.com/support/privacy</a></p>
+<h3>2. 동기화·팀 현장(선택)</h3><p>설정 &gt; 동기화·팀 현장에서 구글 계정으로 로그인하고 <b>팀 현장</b>을 만들거나 초대코드로 참여하면, 여러 기기와 팀원이 같은 데이터를 쓰기 위해 다음 정보가 <b>Google Firebase(Google LLC 제공, Firebase Authentication · Cloud Firestore 서울 리전 asia-northeast3)</b>에 저장됩니다. 로그인만 하고 팀 현장을 열지 않으면 앱 데이터는 올라가지 않습니다.</p>
+<ul><li>계정 정보: 구글 계정 이메일, 이름, 계정 식별자(Firebase Authentication)와 내가 속한 팀 현장 목록</li><li>팀 현장 정보: 현장 이름, 초대코드, 멤버 목록(각 멤버의 이름·이메일·역할)</li><li>앱 데이터: 현장·하자 내용, 사진·도면 이미지, 업체명·전화번호, 처리 이력, 엑셀 열 맞춤 설정, 그리고 각 항목을 누가 언제 등록·수정했는지(이름)</li></ul>
+<p><b>팀 현장 데이터는 그 팀 멤버 모두에게 보입니다.</b> 팀 현장에 올린 하자·사진·업체 연락처와 내 이름·이메일은 같은 팀 멤버가 볼 수 있고, ‘편집’ 멤버는 고치거나 지울 수 있습니다(‘보기 전용’ 멤버는 볼 수만 있음). 팀 현장은 만든 사람(소유자)이 관리하며, 소유자는 멤버를 초대·역할 변경·내보내기 할 수 있습니다. 초대코드나 초대 링크를 받은 사람은 그 팀에 참여할 수 있으니 믿을 수 있는 사람에게만 보내 주세요(소유자는 코드를 언제든 새로 바꿀 수 있음).</p>
+<p>멤버가 아닌 사람은 읽고 쓸 수 없도록 보안 규칙으로 제한되며, 전송 구간은 암호화(HTTPS)됩니다. 개발자는 이 데이터를 광고·분석 등 다른 목적으로 쓰지 않습니다. Google의 처리 방침: <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">firebase.google.com/support/privacy</a></p>
 <h3>3. 기기 권한</h3><ul><li>카메라·사진: 하자 사진 촬영·첨부 시에만 사용</li><li>연락처(선택): ‘연락처에서 가져오기’를 누를 때 이용자가 고른 연락처의 이름·전화번호만 앱 안에 저장</li><li>마이크(선택): 음성 입력 시 기기의 음성 인식 기능 사용(기기·브라우저 제공자의 정책 적용)</li></ul>
-<h3>4. 제3자 제공</h3><p>앱은 정보를 제3자에게 판매·제공하지 않습니다. 동기화를 켠 경우 저장·처리를 위해 Google Firebase(처리 위탁)를 이용합니다. 이용자가 ‘카톡으로 보내기’, ‘문자’, ‘공유’를 누르면 이용자가 고른 앱으로 내용이 전달되며, 이후 처리는 해당 앱의 정책을 따릅니다.</p>
-<h3>5. 보관 및 삭제</h3><p>기기 데이터는 이용자가 삭제하거나 앱을 삭제할 때까지 남습니다. 동기화 데이터는 이용자가 삭제할 때까지 보관되며, 동기화 중 설정 &gt; ‘모든 데이터 삭제’를 하면 클라우드에서도 삭제됩니다. 계정과 클라우드 데이터 전체 삭제는 아래 이메일로 요청할 수 있습니다. 로그아웃하면 동기화가 멈추고 기기 데이터는 그대로 남습니다.</p>
+<h3>4. 제3자 제공</h3><p>앱은 정보를 제3자에게 판매·제공하지 않습니다. 팀 현장을 쓰는 경우 저장·처리를 위해 Google Firebase(처리 위탁)를 이용하며, 팀 현장 데이터는 이용자가 초대한 같은 팀 멤버에게 보입니다. 이용자가 ‘카톡으로 보내기’, ‘문자’, ‘공유’를 누르면 이용자가 고른 앱으로 내용이 전달되며, 이후 처리는 해당 앱의 정책을 따릅니다.</p>
+<h3>5. 보관 및 삭제</h3><p>기기 데이터는 이용자가 삭제하거나 앱을 삭제할 때까지 남습니다. 팀 현장 데이터는 팀이 지울 때까지 보관됩니다. 팀 현장에서 하자·사진을 지우면 팀 전체에서 지워지고, 팀 현장에서 ‘모든 데이터 삭제’를 하면 그 팀 현장의 클라우드 데이터가 팀 전체에서 삭제됩니다. 팀에서 나가거나 내보내지면 멤버 목록에서 내 이름·이메일이 빠지고 이 기기에 있던 그 팀 현장 사본이 지워집니다(내가 올린 하자 기록은 팀 데이터로 남음). 계정과 클라우드 데이터 삭제는 아래 이메일로 요청할 수 있습니다. 로그아웃하면 동기화가 멈추고 이 기기 전용 데이터는 그대로 남습니다.</p>
 <h3>6. 아동</h3><p>앱은 업무용이며 아동을 대상으로 하지 않습니다.</p>
 <h3>7. 문의</h3><p>개발자 이메일: <span class="contact-email">(스토어 등록 시 기재)</span></p>`;
 
@@ -1667,74 +1685,146 @@ function paintSyncChip(stt = Sync.status()) {
   const c = $("#sync-chip"); if (!c) return;
   c.hidden = false; c.dataset.k = stt.key; c.innerHTML = `<span class="sc-in">${esc(stt.label)}</span>`; c.title = stt.detail || stt.label;
   c.setAttribute("aria-label", "동기화 상태: " + stt.label);
-  const si = $("#si-sync small"); if (si && Sync.attached()) si.textContent = `${Sync.state.email || "구글 계정"} · ${stt.label}`;
+  const si = $("#si-sync small"); if (si && Sync.attached()) si.textContent = `${Sync.state.ws.name} · ${ROLE_KO[Sync.state.ws.role] || ""} · ${stt.label}`;
   const box = $("#sync-status"); if (box) renderSyncStatus(box);
 }
-async function askMerge({ local, email }) {
-  const n = `현장 ${local.projects}개 · 하자 ${local.defects}건 · 사진 ${local.photos}장 · 업체 ${local.vendors}곳`;
-  const mode = await choose(`이 기기 데이터 처리 (${email || "구글 계정"})`, [
-    { icon: "🔀", label: "합치기 (권장)", sub: `이 기기(${n})와 클라우드 데이터를 모두 남겨요. 같은 건은 최근에 고친 쪽으로 맞춰요.`, value: "merge" },
-    { icon: "⬆️", label: "이 기기 데이터 올리기", sub: "이 기기 데이터를 클라우드에 올려요. 같은 건은 이 기기 내용이 우선이고, 클라우드에만 있는 건도 남아요.", value: "upload" },
-    { icon: "⬇️", label: "클라우드 데이터로 바꾸기", sub: "이 기기 데이터를 지우고 클라우드 데이터를 받아요. 지우기 전에 백업 파일을 저장해요.", value: "replace" },
-  ]);
-  if (mode !== "replace") return mode; // null(닫기) = 취소 → 로그인 취소, 아무것도 안 바뀜
-  if (!(await ask(`이 기기의 ${n}이 지워지고 클라우드 데이터로 바뀌어요.\n먼저 백업 파일(zip)을 저장한 뒤 바꿀게요.`, { ok: "백업 후 바꾸기", danger: true }))) return null;
-  try { busy(true, "백업 만드는 중…"); const { exportBackup } = await import("./backup.js"); const b = await exportBackup(APP_VERSION); busy(false);
-    await db.setMeta("lastBackupAt", new Date().toISOString()); downloadBlob(b, `하자싹_백업_교체전_${M.todayStr()}.zip`); }
-  catch (e) { busy(false); toast("백업 실패 — 바꾸지 않았어요: " + e.message); return null; }
-  return "replace";
-}
+const ROLE_KO = { owner: "소유자", editor: "편집", viewer: "보기 전용" };
 function initSync() {
   Sync.onChange((stt) => paintSyncChip(stt));
   $("#sync-chip")?.addEventListener("click", () => go("#/sync"));
   paintSyncChip();
-  Sync.boot({ onRemote: onRemoteChange, askMerge }).catch((e) => console.warn(e));
+  // 보기 전용 멤버가 고치려 하면 안내
+  window.addEventListener("unhandledrejection", (e) => { if (e.reason?.readOnly) { e.preventDefault(); busy(false); toast(e.reason.message); } });
+  Sync.boot({ onRemote: onRemoteChange, onTeam: () => { if ((location.hash || "").startsWith("#/sync") && !document.body.classList.contains("sheet-open")) rerender(); } }).catch((e) => console.warn(e));
+}
+/** 초대 링크(?join=CODE)로 열렸을 때: 코드 기억 → 동기화·팀 화면에서 참여 */
+function takeJoinParam() {
+  const u = new URL(location.href); const code = u.searchParams.get("join");
+  if (!code) return false;
+  LS.set("pendingJoin", Sync.normCode(code)); u.searchParams.delete("join");
+  history.replaceState(null, "", u.pathname + u.search + "#/sync"); return true;
 }
 function renderSyncStatus(box) {
   const stt = Sync.status(); const at = Sync.state.lastSync;
   box.innerHTML = `<div class="sync-row"><span class="sync-chip big" data-k="${stt.key}">${esc(stt.label)}</span></div>
-    <dl class="kv"><dt>계정</dt><dd id="sync-email">${Sync.attached() ? esc(Sync.state.email || "-") : "로그인 안 됨"}</dd>
-    <dt>대기 중</dt><dd id="sync-pending">${Sync.state.pending}건</dd>
-    <dt>마지막 동기화</dt><dd>${at ? fmtDT(new Date(at).toISOString()) : "-"}</dd>${stt.detail && stt.key === "error" ? `<dt>오류</dt><dd class="err">${esc(stt.detail)}</dd>` : ""}</dl>`;
+    <dl class="kv"><dt>계정</dt><dd id="sync-email">${Sync.signedIn() ? esc(Sync.state.email || "-") : "로그인 안 됨"}</dd>
+    ${Sync.attached() ? `<dt>팀 현장</dt><dd id="sync-ws">${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""}</dd><dt>대기 중</dt><dd id="sync-pending">${Sync.state.pending}건</dd>
+    <dt>마지막 동기화</dt><dd>${at ? fmtDT(new Date(at).toISOString()) : "-"}</dd>` : `<dt>지금 데이터</dt><dd>이 기기 전용(동기화 안 함)</dd>`}${stt.detail && stt.key === "error" ? `<dt>오류</dt><dd class="err">${esc(stt.detail)}</dd>` : ""}</dl>`;
+}
+/** 이 기기 전용 데이터가 있으면 팀 현장에 합칠지 묻는다. null=취소 */
+async function askMergeLocal(wsName) {
+  if (Sync.attached()) return false; // 이미 팀 현장 화면: 합치기 대상 아님
+  const c = await Sync.localCounts();
+  if (!(c.projects + c.defects + c.vendors)) return false;
+  const n = `현장 ${c.projects}개 · 하자 ${c.defects}건 · 사진 ${c.photos}장 · 업체 ${c.vendors}곳`;
+  const v = await choose(`이 기기 데이터(${n})`, [
+    { icon: "📦", label: "따로 두기 (권장)", sub: `‘${wsName}’에는 팀 데이터만 받아요. 이 기기 데이터는 ‘이 기기 전용’에 그대로 남아요.`, value: "keep" },
+    { icon: "🔀", label: `‘${wsName}’에 합치기`, sub: "이 기기 데이터를 팀 현장에 올려 팀원도 보게 해요. 같은 건은 최근에 고친 쪽으로 맞춰요.", value: "merge" },
+  ]);
+  return v === null ? null : v === "merge";
+}
+function memberRow(m) {
+  const own = Sync.isOwner() && !m.me && m.role !== "owner";
+  return `<div class="mrow" data-uid="${esc(m.uid)}"><span class="mav" aria-hidden="true">${esc((m.name || m.email || "?").slice(0, 1))}</span>
+    <span class="mname"><b>${esc(m.name || "멤버")}${m.me ? " (나)" : ""}</b><small>${esc(m.email || "")}</small></span>
+    ${own ? `<select class="inp msel" data-role="${esc(m.uid)}" aria-label="${esc(m.name || "")} 역할"><option value="editor" ${m.role === "editor" ? "selected" : ""}>편집</option><option value="viewer" ${m.role === "viewer" ? "selected" : ""}>보기 전용</option></select>
+      <button type="button" class="btn btn-sm btn-ghost" data-kick="${esc(m.uid)}" aria-label="${esc(m.name || "")} 내보내기">내보내기</button>` : `<span class="mrole r-${m.role}">${ROLE_KO[m.role] || m.role}</span>`}</div>`;
 }
 ROUTES.sync = async () => {
-  setTab("settings"); setHeader("동기화", { backBtn: true });
-  const on = Sync.attached();
-  view().innerHTML = `<section class="card"><h3>☁️ PC·폰 동기화</h3>
-      <p class="help">구글 계정으로 로그인하면 컴퓨터와 폰에서 같은 하자·사진·업체를 실시간으로 봐요. 인터넷이 없을 때 고친 내용은 모아 뒀다가 연결되면 올라가요. 로그인하지 않아도 앱은 지금처럼 이 기기에서만 쓸 수 있어요.</p>
+  setTab("settings"); setHeader("동기화·팀 현장", { backBtn: true });
+  const on = Sync.attached(), user = Sync.signedIn(), ws = Sync.state.ws, wd = Sync.state.wsDoc;
+  const pending = LS.get("pendingJoin", "");
+  let list = [];
+  if (user && !on) { try { list = await Sync.myWorkspaces(); } catch (e) { console.warn(e); } }
+  const mem = on ? Sync.members() : [];
+  const card = (h) => `<section class="card">${h}</section>`;
+  view().innerHTML = `
+    ${card(`<h3>👥 팀 현장 · PC·폰 동기화</h3>
+      <p class="help">구글 로그인 후 <b>팀 현장</b>을 만들거나 초대코드로 참여하면 팀원·컴퓨터·폰이 같은 하자·사진·업체를 실시간으로 봐요. 인터넷이 없을 때 고친 내용은 모아 뒀다가 연결되면 올라가요. 로그인하지 않아도 앱은 지금처럼 이 기기에서만 쓸 수 있어요.</p>
       <div id="sync-status"></div>
-      <div class="btn-col">${on ? `<button type="button" class="btn btn-primary btn-lg" data-a="now">🔄 지금 동기화</button>
-        ${Sync.status().key === "login" ? '<button type="button" class="btn btn-lg" data-a="login">구글로 다시 로그인</button>' : ""}
-        <button type="button" class="btn" data-a="logout">로그아웃 (이 기기 데이터는 남아요)</button>`
-      : `<button type="button" class="btn btn-primary btn-lg gbtn" data-a="login"><span class="g-logo" aria-hidden="true">G</span> Google 계정으로 로그인</button>`}</div></section>
-    <section class="card"><h3>알아 두세요</h3><ul class="help">
-      <li>데이터는 Google Firebase(서울 리전)에 본인 계정 전용으로 저장돼요. 다른 사람은 볼 수 없어요.</li>
-      <li>무료 한도: 저장 1GB(사진 약 5천~1만 장), 하루 읽기 5만·쓰기 2만 번. 넘으면 다음 날까지 동기화가 멈추고, 앱은 계속 쓸 수 있어요.</li>
-      <li>컴퓨터와 폰에서 같은 구글 계정으로 로그인하세요.</li>
-      <li>같은 건을 두 기기에서 동시에 고치면 나중에 고친 쪽으로 맞춰져요.</li></ul></section>`;
+      <div class="btn-col">${!user ? `<button type="button" class="btn btn-primary btn-lg gbtn" data-a="login"><span class="g-logo" aria-hidden="true">G</span> Google 계정으로 로그인</button>`
+        : on ? `<button type="button" class="btn btn-primary btn-lg" data-a="now">🔄 지금 동기화</button>` : ""}</div>`)}
+    ${!on && LS.get("sync.cursors", null) !== null && !list.length && !pending ? card(`<h3>ℹ️ 이전 버전 동기화(1.0.4~1.0.5)는 끝났어요</h3><p class="help">이 기기 데이터는 그대로 있어요. 이제는 <b>팀 현장</b>으로 맞춰요: 데이터가 가장 많은 기기(보통 PC)에서 <b>＋ 현장(팀) 만들기</b>를 누르면 전부 올라가고(하자 수만 건도 몇 분), 다른 기기·팀원은 <b>초대코드로 참여</b>하면서 ‘따로 두기’를 고르세요.</p>`) : ""}
+    ${pending ? card(`<h3>✉️ 초대받은 팀 현장</h3><p>초대코드 <b class="code">${esc(pending)}</b>로 참여할 수 있어요.${user ? "" : " 먼저 구글로 로그인해 주세요."}</p>
+      <div class="btn-col">${user ? `<button type="button" class="btn btn-primary btn-lg" data-a="join-pending">이 팀 현장에 참여하기</button>` : ""}<button type="button" class="btn btn-ghost" data-a="join-cancel">초대 무시</button></div>`) : ""}
+    ${on ? card(`<h3>🏗 ${esc(ws.name)} <small>${ROLE_KO[ws.role] || ""}</small></h3>
+      ${Sync.isOwner() && wd ? `<div class="invite"><span>초대코드</span><b class="code" id="inv-code">${esc(wd.inviteCode)}</b></div>
+        <div class="btn-row"><button type="button" class="btn btn-kakao" data-a="inv-kakao">카톡으로 초대</button><button type="button" class="btn" data-a="inv-copy">초대 링크 복사</button><button type="button" class="btn btn-ghost" data-a="inv-new">코드 바꾸기</button></div>
+        <p class="help small">링크를 받은 사람이 구글로 로그인하면 <b>편집</b> 멤버로 들어와요. 무료판은 팀원 ${Pro.FREE_LIMITS.members}명까지(지금 ${mem.length}/${wd.maxMembers}명).</p>` : ""}
+      <h4 class="sec">멤버 ${mem.length}명</h4><div class="mlist" id="mlist">${mem.map(memberRow).join("") || '<p class="help">불러오는 중…</p>'}</div>
+      <div class="btn-col">${Sync.isOwner() ? '<button type="button" class="btn" data-a="rename">팀 현장 이름 바꾸기</button>' : ""}
+        <button type="button" class="btn" data-a="to-local">이 기기 전용 데이터로 전환</button>
+        ${!Sync.isOwner() && wd ? '<button type="button" class="btn btn-danger" data-a="leave">이 팀 현장 나가기</button>' : ""}</div>`) : ""}
+    ${user ? card(`<h3>현장 전환</h3><div class="opt-list">
+      ${on ? "" : `<div class="opt cur"><span class="opt-ico">📱</span><span><b>이 기기 전용 (지금)</b><small>로그인 없이 쓰던 데이터</small></span></div>`}
+      ${list.map((w) => `<button type="button" class="opt" data-open="${esc(w.id)}"><span class="opt-ico">🏗</span><span><b>${esc(w.name)}</b><small>${ROLE_KO[w.role] || ""} · 멤버 ${w.members}명</small></span></button>`).join("")}
+      ${on ? `<div class="opt cur"><span class="opt-ico">🏗</span><span><b>${esc(ws.name)} (지금)</b><small>다른 팀 현장은 ‘이 기기 전용으로 전환’ 후 목록에서 열어요</small></span></div>` : ""}</div>
+      <div class="btn-col">${on ? "" : `<button type="button" class="btn btn-primary btn-lg" data-a="create">＋ 현장(팀) 만들기 <small>지금 데이터로</small></button>`}
+        <button type="button" class="btn btn-lg" data-a="join">초대코드로 참여</button></div>`) : ""}
+    ${user ? `<button type="button" class="btn btn-block btn-ghost" data-a="logout">로그아웃 ${on ? "(팀 데이터는 이 기기에 남고, 다시 로그인하면 이어서 동기화)" : ""}</button>` : ""}
+    ${card(`<h3>알아 두세요</h3><ul class="help">
+      <li>팀 현장 데이터는 Google Firebase(서울 리전)에 저장되고, 그 팀 멤버만 볼 수 있어요. 보기 전용 멤버는 고칠 수 없어요.</li>
+      <li>무료 한도(팀 전체 합산): 저장 1GB(사진 약 5천~1만 장), 하루 읽기 5만·쓰기 2만 번. 넘으면 다음 날까지 동기화가 멈추고, 앱은 계속 쓸 수 있어요.</li>
+      <li>같은 건을 두 사람이 동시에 고치면 나중에 고친 쪽으로 맞춰져요. 상세 화면에 누가 언제 고쳤는지 나와요.</li>
+      <li>무료판: 팀 현장 ${Pro.FREE_LIMITS.workspaces}개 · 팀원 ${Pro.FREE_LIMITS.members}명까지. 프로: 무제한.</li></ul>`)}`;
   renderSyncStatus($("#sync-status"));
-  if (!on) Sync.preload();
+  if (navigator.onLine !== false) Sync.preload();
+  const wsCount = async () => { try { return (await Sync.myWorkspaces()).length; } catch { return list.length; } };
+  const doJoin = async (code) => {
+    const merge = await askMergeLocal("팀 현장"); if (merge === null) return;
+    busy(true, "참여하는 중…");
+    try { await Sync.joinWorkspace(code, { workspaceCount: await wsCount(), isPro: Pro.isPro(), mergeLocal: merge }); LS.set("pendingJoin", ""); }
+    catch (e) { busy(false); if (e.pro) return proSheet(e.message); throw e; }
+  };
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", async () => {
     const a = b.dataset.a;
     try {
       if (a === "login") {
         const label = b.innerHTML; b.disabled = true; b.textContent = "구글 로그인 여는 중…";
-        // 지켜보기: 10초 안에 로그인 화면으로 넘어가지 않으면 버튼을 되살리고 이유를 알려 줌(아무 반응 없음 방지)
         let left = false; const onHide = () => { left = true; }; document.addEventListener("visibilitychange", onHide, { once: true }); window.addEventListener("pagehide", onHide, { once: true });
-        const wd = setTimeout(() => { if (!left && !Sync.attached() && b.isConnected) { b.disabled = false; b.innerHTML = label; toast("구글 로그인 화면이 열리지 않았어요. 인터넷 연결을 확인하고 다시 눌러 주세요", { ms: 6000 }); } }, 10000);
-        try {
-          const r = await Sync.signIn();
-          if (r !== "redirect") { clearTimeout(wd); if (Sync.attached()) toast("로그인했어요 · 동기화를 시작해요"); rerender(); }
-        } catch (e) { clearTimeout(wd); b.disabled = false; b.innerHTML = label; toast("로그인을 시작하지 못했어요: " + (e.message || e), { ms: 6000 }); }
+        const wd = setTimeout(() => { if (!left && !Sync.signedIn() && b.isConnected) { b.disabled = false; b.innerHTML = label; toast("구글 로그인 화면이 열리지 않았어요. 인터넷 연결을 확인하고 다시 눌러 주세요", { ms: 6000 }); } }, 10000);
+        try { const r = await Sync.signIn(); if (r !== "redirect") { clearTimeout(wd); if (Sync.signedIn()) toast("로그인했어요"); rerender(); } }
+        catch (e) { clearTimeout(wd); b.disabled = false; b.innerHTML = label; toast("로그인을 시작하지 못했어요: " + (e.message || e), { ms: 6000 }); }
         return;
       }
       if (a === "now") { b.disabled = true; await Sync.syncNow(); toast("동기화했어요"); rerender(); }
+      if (a === "join-cancel") { LS.set("pendingJoin", ""); rerender(); }
+      if (a === "join-pending") await doJoin(pending);
+      if (a === "join") { const c = await prompt2("초대코드 6자리", ""); if (c) await doJoin(c); }
+      if (a === "create") {
+        const n0 = await wsCount();
+        if (!Pro.can("workspace", { workspaceCount: n0 })) return proSheet("무료판은 팀 현장 1개까지예요");
+        const name = await prompt2("팀 현장 이름", P()?.name || "우리 현장"); if (name === null) return;
+        const c = await Sync.localCounts(db.DB_NAME);
+        if (!(await ask(`‘${name || "팀 현장"}’ 팀 현장을 만들고 지금 데이터(현장 ${c.projects}개 · 하자 ${c.defects}건 · 사진 ${c.photos}장 · 업체 ${c.vendors}곳)를 올릴까요?\n이 기기 전용 데이터는 그대로 남아요(복사).`, { ok: "만들기" }))) return;
+        busy(true, "팀 현장 만드는 중…"); await Sync.createWorkspace(name.trim() || "팀 현장", { workspaceCount: n0, isPro: Pro.isPro(), memberLimit: Pro.memberLimit() });
+      }
+      if (a === "inv-copy") { (await copyText(Sync.inviteLink(Sync.state.wsDoc.inviteCode))) ? toast("초대 링크를 복사했어요") : toast("복사 실패"); }
+      if (a === "inv-kakao") {
+        const text = `[하자싹] ‘${ws.name}’ 팀 현장에 초대합니다.\n아래 링크를 열고 구글로 로그인하면 참여돼요.\n${Sync.inviteLink(Sync.state.wsDoc.inviteCode)}\n(초대코드 ${Sync.state.wsDoc.inviteCode})`;
+        const r = await shareKakao({ text });
+        if (r === "kakao-pc" || r === "copied") toast("초대 내용 복사됨 — 카카오톡 대화방에 붙여넣기(Ctrl+V)", { ms: 6000 });
+      }
+      if (a === "inv-new") { if (!(await ask("초대코드를 새로 만들까요? 예전 코드·링크로는 더 이상 참여할 수 없어요."))) return; await Sync.regenerateCode(); toast("새 초대코드를 만들었어요"); }
+      if (a === "rename") { const n2 = await prompt2("팀 현장 이름", ws.name); if (n2) { await Sync.renameWorkspace(n2.trim()); toast("이름을 바꿨어요"); } }
+      if (a === "to-local") { if (Sync.state.pending && !(await ask(`아직 안 올라간 변경 ${Sync.state.pending}건은 이 팀 현장을 다시 열면 이어서 올라가요. 전환할까요?`))) return; busy(true, "전환 중…"); await Sync.switchTo(null); }
+      if (a === "leave") { if (!(await ask(`‘${ws.name}’에서 나갈까요?\n이 기기에 받아 둔 팀 데이터는 지워지고(팀에는 남아요), 이 기기 전용 데이터로 돌아가요.`, { ok: "나가기", danger: true }))) return; busy(true, "나가는 중…"); await Sync.leaveWorkspace(); }
       if (a === "logout") {
-        const pend = Sync.state.pending;
-        if (!(await ask(`${pend ? `아직 올라가지 않은 변경 ${pend}건이 있어요. 로그아웃하면 이 변경은 이 기기에만 남아요.\n` : ""}동기화를 끄고 로그아웃할까요? 이 기기 데이터는 그대로 남아요.`, { ok: "로그아웃" }))) return;
+        if (!(await ask("로그아웃할까요? 이 기기 데이터는 지우지 않아요.", { ok: "로그아웃" }))) return;
         await Sync.signOut(); toast("로그아웃했어요"); rerender();
       }
-    } catch (e) { toast(e.message || String(e)); b.disabled = false; renderSyncStatus($("#sync-status")); }
+    } catch (e) { busy(false); toast(e.message || String(e)); b.disabled = false; renderSyncStatus($("#sync-status")); }
+  }));
+  $$("[data-open]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const w = list.find((x) => x.id === b.dataset.open); if (!w) return;
+    const merge = await askMergeLocal(w.name); if (merge === null) return;
+    busy(true, "여는 중…"); try { await Sync.openWorkspace({ id: w.id, name: w.name, role: w.role }, { mergeLocal: merge }); } catch (e) { busy(false); toast(e.message); }
+  }));
+  $$("[data-role]", view()).forEach((sel) => sel.addEventListener("change", async () => { try { await Sync.setRole(sel.dataset.role, sel.value); toast("역할을 바꿨어요"); } catch (e) { toast(e.message); } }));
+  $$("[data-kick]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const m = Sync.members().find((x) => x.uid === b.dataset.kick);
+    if (!(await ask(`${m?.name || "멤버"}님을 팀에서 내보낼까요?`, { ok: "내보내기", danger: true }))) return;
+    try { await Sync.removeMember(b.dataset.kick); toast("내보냈어요"); } catch (e) { toast(e.message); }
   }));
 };
 async function main() {
@@ -1746,6 +1836,7 @@ async function main() {
     if (navDepth() <= 1 || h === "#/home") replace(h); else go(h);
   }));
   window.addEventListener("afterprint", () => document.body.classList.remove("printing"));
+  const joined = takeJoinParam();
   try { await loadAll(); } catch (e) { $("#view").innerHTML = `<div class="card"><p>저장소를 열 수 없어요: ${esc(e.message)}</p></div>`; return; }
   initNav(() => { ROUTES._cleanup?.(); ROUTES._cleanup = null; route(); });
   initUpdates();

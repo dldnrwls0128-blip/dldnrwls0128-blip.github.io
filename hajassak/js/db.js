@@ -1,5 +1,8 @@
 /** IndexedDB — 이 기기 저장소(오프라인 캐시). 동기화를 켜면 sync.js가 변경분을 outbox에 모아 Firebase로 올린다. */
-export const DB_NAME = "hajassak";
+/** 저장소 이름: 이 기기 전용 = "hajassak", 팀 현장(워크스페이스) = "hajassak-ws-{id}" (sync.js가 hs:db로 고른 뒤 새로고침) */
+export const LOCAL_DB = "hajassak";
+export const DB_NAME = (() => { try { return localStorage.getItem("hs:db") || LOCAL_DB; } catch { return LOCAL_DB; } })();
+export const wsDbName = (wsId) => "hajassak-ws-" + wsId;
 export const DB_VERSION = 2; // v2: outbox(동기화 대기열)
 export const STORES = ["projects", "defects", "photos", "vendors", "plans", "meta"];
 /** 기기 간 동기화 대상: 저장소 전체 + meta 중 일부 키 */
@@ -17,7 +20,25 @@ let _outboxOn = false; const _listeners = new Set();
 export function setOutboxEnabled(on) { _outboxOn = !!on; }
 export function onOutbox(fn) { _listeners.add(fn); return () => _listeners.delete(fn); }
 const keyOf = (store, v) => (store === "meta" ? v.key : v.id);
-function stamp(store, v) { if (v && typeof v === "object" && isSynced(store, v)) { v._u = Math.max(Date.now(), (v._u || 0) + 1); v._dev = deviceId(); } }
+/* 팀 동기화: 수정한 사람 기록 + 보기 전용 멤버는 쓰기 금지 */
+let _actor = null, _readOnly = false;
+export function setActor(a) { _actor = a; }
+export function setReadOnly(on) { _readOnly = !!on; }
+export const isReadOnly = () => _readOnly;
+function guard(store, v) { if (_readOnly && isSynced(store, v)) { const e = new Error("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요"); e.readOnly = true; throw e; } }
+/** 업체 id → 이름(앱이 불러올 때 알려 줌). 하자에 업체 이름을 같이 적어 두어 업체 기록이 없을 때도 이름 표시 */
+let _vnames = new Map();
+export function setVendorNames(list) { _vnames = new Map((list || []).map((v) => [v.id, v.name])); }
+function stamp(store, v) {
+  if (!(v && typeof v === "object" && isSynced(store, v))) return;
+  v._u = Math.max(Date.now(), (v._u || 0) + 1); v._dev = deviceId();
+  if (_actor && (store === "defects" || store === "photos")) {
+    const now = new Date(v._u).toISOString();
+    if (!v.createdBy) { v.createdBy = _actor.name; v.createdByUid = _actor.uid; v.createdByAt = v.createdAt || now; }
+    v.updatedBy = _actor.name; v.updatedByUid = _actor.uid; v.updatedByAt = now;
+  }
+  if (store === "defects" && v.vendorId && _vnames.has(v.vendorId)) v.vendorName = _vnames.get(v.vendorId);
+}
 function obEntry(store, id, del, v) {
   const e = { k: store + "/" + id, store, id, at: Date.now(), del: !!del };
   if (del && v && (store === "photos" || store === "plans")) e.blobSizes = Object.fromEntries(Object.entries(v).filter(([, x]) => x instanceof Blob).map(([f, x]) => [f, x.size]));
@@ -25,10 +46,11 @@ function obEntry(store, id, del, v) {
 }
 
 let _dbp;
-export function openDb() {
-  if (_dbp) return _dbp;
-  _dbp = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+export function openDb() { if (!_dbp) _dbp = openDbNamed(DB_NAME); return _dbp; }
+/** 다른 이름의 저장소 열기(팀 현장 만들기·합치기 때 복사용) */
+export function openDbNamed(name) {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(name, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       const mk = (name, key, idx = []) => {
@@ -47,7 +69,6 @@ export function openDb() {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
-  return _dbp;
 }
 export function done(tx) {
   return new Promise((resolve, reject) => {
@@ -67,7 +88,7 @@ async function writeOutbox(entries) {
 }
 /** 동기화 훅을 거치는 일반 쓰기(앱 코드용) */
 export async function put(store, value) {
-  stamp(store, value);
+  guard(store, value); stamp(store, value);
   const db = await openDb(); const tx = db.transaction(store, "readwrite");
   tx.objectStore(store).put(value); await done(tx);
   if (_outboxOn && isSynced(store, value)) await writeOutbox([obEntry(store, keyOf(store, value), false)]);
@@ -75,11 +96,13 @@ export async function put(store, value) {
 }
 export async function del(store, key) { return delMany(store, [key]); }
 export async function putMany(store, values) {
+  for (const v of values) guard(store, v);
   for (const v of values) stamp(store, v);
   await rawPutMany(store, values);
   if (_outboxOn) await writeOutbox(values.filter((v) => isSynced(store, v)).map((v) => obEntry(store, keyOf(store, v), false)));
 }
 export async function delMany(store, keys) {
+  for (const k of keys) guard(store, k);
   const track = _outboxOn && keys.some((k) => isSynced(store, k));
   const entries = [];
   if (track) { for (const k of keys) if (isSynced(store, k)) entries.push(obEntry(store, k, true, (store === "photos" || store === "plans") ? await get(store, k) : null)); }
@@ -101,6 +124,13 @@ export async function allKeys(store) { const db = await openDb(); return rq(db.t
 export async function count(store) { const db = await openDb(); return rq(db.transaction(store).objectStore(store).count()); }
 /* ---- 훅 없는 원시 쓰기(동기화 엔진이 원격 변경을 반영할 때) ---- */
 export async function rawPut(store, value) { const db = await openDb(); const tx = db.transaction(store, "readwrite"); tx.objectStore(store).put(value); await done(tx); return value; }
+export async function getMany(store, keys) {
+  if (!keys.length) return [];
+  const db = await openDb(); const tx = db.transaction(store); const os = tx.objectStore(store);
+  const out = new Array(keys.length);
+  await Promise.all(keys.map((k, i) => new Promise((res) => { const r = os.get(k); r.onsuccess = () => { out[i] = r.result; res(); }; r.onerror = () => res(); })));
+  return out;
+}
 export async function rawPutMany(store, values) {
   const db = await openDb();
   for (let i = 0; i < values.length; i += 2000) {
