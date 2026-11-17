@@ -282,3 +282,4 @@ body.has-selbar #view{padding-bottom:132px}
 .opt.cur{opacity:.75;cursor:default}
 .who{color:var(--brand)}
 @media (prefers-color-scheme:dark){.who{color:var(--brand-2)}}
+@media (hover:hover) and (pointer:fine){.chips.scroll{flex-wrap:wrap;overflow-x:visible}}
