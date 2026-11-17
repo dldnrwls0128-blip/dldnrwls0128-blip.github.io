@@ -182,11 +182,12 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.trade && d.trade !== f.trade) return false;
     if (f.turn && !isTurnOf(d, f.turn)) return false;
     if (f.chain && !hasSteps(d)) return false;
+    if (f.mine && !isMyTurn(d)) return false;
     if (f.vendorId && (f.vendorId === "_none" ? d.vendorId : d.vendorId !== f.vendorId)) return false;
     if (f.type && d.type !== f.type) return false;
     if (f.category && d.category !== f.category) return false;
     if (f.severity && d.severity !== f.severity) return false;
-    if (f.status === "_open" ? !isOpen(d) : f.status && d.status !== f.status) return false;
+    if (f.status === "_open" ? !isOpen(d) : f.status === "_done" ? !(d.status === "조치완료" || d.status === "확인완료") : f.status && d.status !== f.status) return false;
     if (f.overdue && !isOverdue(d, today)) return false;
     if (text) {
       const hay = `${d.dong} ${d.ho} ${d.floor ? floorLabel(d.floor) : ""} ${d.common || ""} ${d.locEtc || ""} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${(d.steps || []).map((x) => x.trade).join(" ")} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
@@ -331,6 +332,8 @@ export const stepsText = (d) => (hasSteps(d) ? d.steps.map((s) => `${s.trade}(${
 /** 지금 차례인 업체(공정이 없으면 하자 업체) */
 export const turnVendorId = (d) => (hasSteps(d) ? curStep(d)?.vendorId || "" : d.vendorId || "");
 /** 이 업체 차례로 기다리는 미조치 하자 */
+/** 내 차례 대기: 앞 공정이 끝나 다음 공정 업체에 보낼 차례(아직 ‘대기’)인 하자 */
+export const isMyTurn = (d) => isOpen(d) && hasSteps(d) && curStepIdx(d) > 0 && curStep(d)?.status === "대기";
 export const isTurnOf = (d, vid) => isOpen(d) && turnVendorId(d) === vid && (!hasSteps(d) || curStep(d)?.status !== "완료");
 /** 이 업체가 뒤 공정에 있어 앞 공정을 기다리는 하자 */
 export const isLaterOf = (d, vid) => hasSteps(d) && isOpen(d) && turnVendorId(d) !== vid && d.steps.slice(curStepIdx(d) + 1).some((s) => s.vendorId === vid);

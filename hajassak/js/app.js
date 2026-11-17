@@ -253,30 +253,44 @@ ROUTES.home = async () => {
   const done = list.filter((d) => d.status === "조치완료" || d.status === "확인완료").length;
   const todayN = list.filter((d) => (d.createdAt || "").slice(0, 10) === today).length;
   setHeader(p.name, { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span><button type="button" class="hdr-btn" id="btn-proj" aria-label="현장 전환">현장 ▾</button>` });
-  const recent = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 5);
-  view().innerHTML = `
+  const recent = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 3);
+  const doing = list.filter((d) => d.status === "조치중").length; const mine = list.filter(M.isMyTurn).length;
+  const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
+  const rate = list.length ? Math.round((done / list.length) * 100) : 0;
+  view().innerHTML = `<div class="home2">
     <form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="예: ${esc(exampleQuery(p))}  ·  동/호/내용 검색" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>
-    <div class="kpis">
-      <button type="button" class="kpi" data-f='{"status":"_open"}'><b>${n(open.length)}</b><span>미조치</span></button>
-      <button type="button" class="kpi warn" data-f='{"overdue":true}'><b>${n(od.length)}</b><span>기한초과</span></button>
-      <button type="button" class="kpi" data-f='{"status":"업체전달"}'><b>${n(list.filter((d) => d.status === "업체전달").length)}</b><span>업체전달</span></button>
-      <button type="button" class="kpi ok" data-go="#/dash"><b>${list.length ? Math.round((done / list.length) * 100) : 0}%</b><span>조치율</span></button>
-    </div>
+    <section class="card home-stat">
+      <div class="kpis">
+        <button type="button" class="kpi" data-f='{"status":"_open"}'><b>${n(open.length)}</b><span>미조치</span></button>
+        <button type="button" class="kpi doing" data-f='{"status":"조치중"}'><b>${n(doing)}</b><span>조치중</span></button>
+        <button type="button" class="kpi ok" data-f='{"status":"_done"}'><b>${n(done)}</b><span>완료</span></button>
+        <button type="button" class="kpi mine" data-f='{"mine":"1"}'><b>${n(mine)}</b><span>내 차례 대기</span></button>
+      </div>
+      <button type="button" class="rate" data-go="#/dash" aria-label="조치율 ${rate}% · 대시보드"><span class="rate-bar"><i style="width:${rate}%"></i></span><span class="rate-t">조치율 <b>${rate}%</b> · 전체 ${n(list.length)}건 · 오늘 ${todayN}건</span></button>
+      ${od.length ? `<button type="button" class="od-alert" data-f='{"overdue":true}'>⏰ 기한초과 <b>${n(od.length)}건</b> 보기 ›</button>` : ""}
+    </section>
     <button type="button" class="btn btn-primary btn-xl" data-go="#/new">＋ 하자 등록</button>
-    <div class="quick">
-      <button type="button" class="qbtn" data-go="#/grid">🏢<span>동 현황</span></button>
-      <button type="button" class="qbtn" data-go="#/vendors">📲<span>업체 전달</span></button>
-      <button type="button" class="qbtn" data-go="#/dash">📊<span>대시보드</span></button>
-      <button type="button" class="qbtn" data-go="#/import">📥<span>엑셀 가져오기</span></button>
+    <div class="actions4">
+      <button type="button" class="act" data-go="#/list"><span class="act-i">📋</span><b>목록</b><small>${n(open.length)}건 미조치</small></button>
+      <button type="button" class="act" data-go="#/grid"><span class="act-i">🏢</span><b>동현황</b><small>세대별 한눈에</small></button>
+      <button type="button" class="act" data-go="#/vendors"><span class="act-i">📲</span><b>보내기</b><small>${unsent ? `미전달 ${n(unsent)}건` : "업체에 카톡·문자"}</small></button>
     </div>
+    <details class="more card" id="home-more"><summary>더보기 <small>대시보드 · 엑셀 · 현장 전환 · 사용법</small></summary>
+      <div class="more-list">
+        <button type="button" class="sitem" data-go="#/dash"><span class="si-ico">📊</span><span><b>대시보드</b><small>상태·업체·경과일 통계</small></span><span class="chev">›</span></button>
+        <button type="button" class="sitem" data-go="#/import"><span class="si-ico">📥</span><span><b>엑셀 가져오기</b><small>다른 시스템·엑셀 목록</small></span><span class="chev">›</span></button>
+        <button type="button" class="sitem" data-a="switch"><span class="si-ico">🔁</span><span><b>현장 전환 / 새 현장</b><small>${S.projects.length}개 현장</small></span><span class="chev">›</span></button>
+        <button type="button" class="sitem" data-go="#/help"><span class="si-ico">📘</span><span><b>사용법 보기</b><small>처음이라면 여기부터</small></span><span class="chev">›</span></button>
+      </div></details>
     <h3 class="sec">최근 기록 <small>오늘 등록 ${todayN}건 · 전체 ${n(list.length)}건</small></h3>
-    ${recent.length ? recent.map((d) => defectCard(d)).join("") : `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p></div>`}
+    ${recent.length ? recent.map((d) => defectCard(d)).join("") : `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-sm" data-go="#/help?s=add">등록하는 법 보기</button></div>`}
     ${recent.length ? `<button type="button" class="btn btn-block" data-go="#/list">전체 목록 보기</button>` : ""}
-    ${verFoot()}`;
+    ${verFoot()}</div>`;
   bindCards(); bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
   $("#btn-proj").addEventListener("click", switchProject);
+  $("[data-a=switch]", view())?.addEventListener("click", switchProject);
   $("#qsearch").addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#qs").value); });
 };
 function exampleQuery(p) { const d = p.dongs[0]; if (!d) return "1203"; const f = Math.min(12, d.floors || 1); return `${d.alias ? d.alias + "동" : d.name} ${f * 100 + 3}`; }
@@ -301,15 +315,16 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
+const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
 function filterChipText(k, v) {
-  if (k === "status") return v === "_open" ? "미조치" : v;
+  if (k === "status") return v === "_open" ? "미조치" : v === "_done" ? "완료(조치·확인)" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
   if (k === "overdue") return "기한초과";
   if (k === "ho") return v + "호";
   if (k === "common") return v === "_any" ? "공용부·세대 외 전체" : v === "_bare" ? "공용부 미지정(동·층만)" : v;
   if (k === "turn") return vLabel(v);
   if (k === "chain") return "있는 하자";
+  if (k === "mine") return "다음 공정 보낼 차례";
   if (k === "floor") return v === "_none" ? "층 미지정" : M.floorLabel(v);
   if (k === "text") return `“${v}”`;
   return v;
@@ -349,12 +364,13 @@ function filterSheet() {
       <label class="fld"><span>호</span><input class="inp" data-k="ho" inputmode="numeric" value="${esc(f.ho || "")}" placeholder="예: 1203"></label>
       ${sel("common", [["_any", "공용부·세대 외 전체"], ["_bare", "공용부 미지정(동·층만)"], ...[...new Set([...M.dongCommonsOf(p), ...p.commons, ...PD().map((d) => d.common).filter(Boolean)])].map((x) => [x, x])], "공용부")}
       ${sel("floor", [["_none", "층 미지정"], ...[...new Set([f.floor, ...PD().map((d) => d.floor || M.floorOfHo(d.ho))].filter((x) => x && x !== "_none"))].sort((a, b) => (Number(b) || -99) - (Number(a) || -99)).map((x) => [x, M.floorLabel(x)])], "층")}
-      ${sel("status", [["_open", "미조치 전체"], ...M.STATUSES.map((x) => [x, x])], "상태")}
+      ${sel("status", [["_open", "미조치 전체"], ["_done", "완료(조치·확인)"], ...M.STATUSES.map((x) => [x, x])], "상태")}
       ${sel("category", [...new Set([...M.catsOf(p), ...PD().map((d) => d.category).filter(Boolean)])].map((x) => [x, x]), "구분")}
       ${sel("trade", usedTrades.map((x) => [x, x]), "공종")}
       ${sel("vendorId", [["_none", "업체 미지정"], ...S.vendors.map((v) => [v.id, v.name])], "업체")}
       ${sel("turn", S.vendors.map((v) => [v.id, v.name]), "내 차례 대기(업체)")}
       ${sel("chain", [["1", "후속 공정 있는 하자"]], "후속 공정")}
+      ${sel("mine", [["1", "다음 공정 보낼 차례"]], "내 차례 대기")}
       ${sel("type", usedTypes.map((x) => [x, x]), "유형")}
       ${sel("severity", M.SEVERITIES.map((x) => [x, x]), "중요도")}</div>
       <label class="check"><input type="checkbox" data-k="overdue" ${f.overdue ? "checked" : ""}> 기한초과만</label>
@@ -634,27 +650,37 @@ function renderForm() {
   const loc = M.locText(dr);
   const plans = matchPlans(dr);
   const prevPhotos = editing ? photoCount({ id: dr._editId }) : { before: 0, after: 0 };
-  view().innerHTML = `<form id="dform" class="form" novalidate>
-    <label class="fld"><span>위치 <em>*</em></span>
-      <button type="button" class="inp loc-btn ${loc ? "" : "ph"}" id="btn-loc">${esc(loc || "동·층·호·실 선택")}<span>›</span></button></label>
-    ${plans.length ? `<button type="button" class="btn btn-sm" id="btn-pin">🗺 도면에 위치 표시${dr.pin ? " ✓" : ""}</button>` : ""}
+  view().innerHTML = `<nav class="fstep" id="fstep" aria-label="등록 단계">${[["loc", "위치"], ["ph", "사진"], ["what", "공종·내용"], ["save", "저장"]].map(([k, t], i) => `<button type="button" class="fs-i" data-fs="${k}"><span class="n">${i + 1}</span>${t}</button>`).join('<span class="fs-ln"></span>')}</nav>
+    <form id="dform" class="form fsteps" novalidate>
+    <section class="fsec" id="fs-loc"><h3 class="fsec-h"><span class="n">1</span>위치 <em>*</em></h3>
+    <label class="fld"><span class="sr-only">위치</span>
+      <button type="button" class="inp loc-btn ${loc ? "" : "is-empty"}" id="btn-loc">${esc(loc || "동·층·호·실 선택")}<span>›</span></button></label>
+    ${plans.length ? `<button type="button" class="btn btn-sm" id="btn-pin">🗺 도면에 위치 표시${dr.pin ? " ✓" : ""}</button>` : ""}</section>
+    <section class="fsec" id="fs-ph"><h3 class="fsec-h"><span class="n">2</span>사진 <small>조치 전 ${prevPhotos.before ? `· 저장됨 ${prevPhotos.before}장` : ""}</small></h3>
+      <div class="photos" id="ph-list">${dr.photos.map((ph, i) => `<div class="ph"><img src="${ph.url}" alt="사진 ${i + 1}"><button type="button" class="ph-x" data-rmph="${i}" aria-label="사진 삭제">✕</button></div>`).join("")}
+        <button type="button" class="ph-add" id="btn-cam">📷<span>촬영</span></button><button type="button" class="ph-add" id="btn-alb">🖼<span>앨범</span></button></div></section>
+    <section class="fsec" id="fs-what"><h3 class="fsec-h"><span class="n">3</span>공종·내용</h3>
     <div class="fld"><span>구분</span>${chipRow("category", M.catsOf(p), dr.category, { allowAdd: true, ua: (o) => isUserItem("categories", o) })}</div>
     <div class="fld"><span>공종 <em>*</em></span>${chipRow("trade", p.trades.map((t) => t.name), dr.trade, { allowAdd: true, ua: (o) => isUserItem("trades", o) })}</div>
     ${trade?.subs?.length ? `<div class="fld"><span>세부공종</span>${chipRow("subTrade", trade.subs, dr.subTrade, { allowAdd: true })}</div>` : ""}
     <div class="fld"><span>유형</span>${chipRow("type", p.types, dr.type, { allowAdd: true, ua: (o) => isUserItem("types", o) })}</div>
     <div class="fld"><span>중요도</span>${chipRow("severity", M.SEVERITIES, dr.severity)}</div>
     <label class="fld"><span>내용 <em>*</em></span><div class="ta-wrap"><textarea class="inp" id="f-content" rows="3" placeholder="예: 거실 창호 하부 실리콘 미시공">${esc(dr.content)}</textarea>
-      ${speechSupported() ? `<button type="button" class="mic" id="btn-mic" aria-label="음성으로 입력">🎤</button>` : ""}</div></label>
-    <div class="fld"><span>조치 전 사진 ${prevPhotos.before ? `<small>(저장됨 ${prevPhotos.before}장)</small>` : ""}</span>
-      <div class="photos" id="ph-list">${dr.photos.map((ph, i) => `<div class="ph"><img src="${ph.url}" alt="사진 ${i + 1}"><button type="button" class="ph-x" data-rmph="${i}" aria-label="사진 삭제">✕</button></div>`).join("")}
-        <button type="button" class="ph-add" id="btn-cam">📷<span>촬영</span></button><button type="button" class="ph-add" id="btn-alb">🖼<span>앨범</span></button></div></div>
+      ${speechSupported() ? `<button type="button" class="mic" id="btn-mic" aria-label="음성으로 입력">🎤</button>` : ""}</div></label></section>
+    <section class="fsec" id="fs-save"><h3 class="fsec-h"><span class="n">4</span>업체·기한 · 저장</h3>
     <label class="fld"><span>담당업체 ${sug && dr.vendorId === sug.id ? '<small class="sugg">공종 추천</small>' : ""}</span>
       <select class="inp" id="f-vendor"><option value="">업체 미지정</option>${S.vendors.map((v) => `<option value="${v.id}" ${v.id === dr.vendorId ? "selected" : ""}>${esc(v.name)}${(v.trades || []).length ? " · " + esc(v.trades.slice(0, 2).join(",")) : ""}</option>`).join("")}<option value="_new">＋ 새 업체 등록…</option></select></label>
     <label class="fld"><span>조치기한</span><div class="row"><input class="inp" type="date" id="f-due" value="${esc(dr.due || "")}">
-      ${[3, 7, 14].map((d) => `<button type="button" class="chip" data-due="${d}">+${d}일</button>`).join("")}</div></label>
+      ${[3, 7, 14].map((d) => `<button type="button" class="chip" data-due="${d}">+${d}일</button>`).join("")}</div></label></section>
     <div class="form-act">${editing ? `<button type="button" class="btn btn-lg" id="btn-cancel">취소</button>` : `<button type="button" class="btn btn-lg" id="btn-save-next">저장 후 계속</button>`}
       <button type="submit" class="btn btn-primary btn-lg">${editing ? "수정 저장" : "저장"}</button></div>
     <p class="help" id="form-err" role="alert"></p></form>`;
+  const stepState = () => { const c = ($("#f-content")?.value || dr.content || "").trim();
+    const st = { loc: !!M.locText(dr), ph: dr.photos.length > 0 || prevPhotos.before > 0, what: !!dr.trade && !!(c || dr.type), save: false };
+    $$(".fs-i", view()).forEach((b) => b.classList.toggle("done", !!st[b.dataset.fs]));
+    const cur = ["loc", "ph", "what", "save"].find((k) => !st[k]) || "save"; $$(".fs-i", view()).forEach((b) => b.classList.toggle("cur", b.dataset.fs === cur)); };
+  stepState(); $("#f-content").addEventListener("input", stepState);
+  $$(".fs-i", view()).forEach((b) => b.addEventListener("click", () => $("#fs-" + b.dataset.fs)?.scrollIntoView({ block: "start", behavior: "smooth" })));
   const sync = () => { dr.content = $("#f-content").value; dr.due = $("#f-due").value; };
   $$("[data-chips]", view()).forEach((row) => row.addEventListener("click", async (e) => {
     const b = e.target.closest("button"); if (!b) return; sync();
@@ -1452,13 +1478,14 @@ ROUTES["vendor-edit"] = async (qq) => {
   const isNew = !V(qq.id);
   setTab(null); setHeader(isNew ? "업체 등록" : "업체 수정", { backBtn: true });
   const trades = [...new Set([...p.trades.map((t) => t.name), ...(v.trades || [])])];
-  view().innerHTML = `<form id="vform" class="form">
+  view().innerHTML = `<form id="vform" class="form fsteps">
+    <section class="fsec"><h3 class="fsec-h">🏢 업체</h3>
     <label class="fld"><span>업체명 <em>*</em></span><input class="inp" id="v-name" value="${esc(v.name)}" placeholder="예: ○○타일" required></label>
-    <div class="fld"><span>담당자 <small>(여러 명 가능 · 소장·반장 등)</small></span><div id="v-contacts"></div>
+    <div class="fld"><span>담당 공종 <small>(이 공종 하자 등록 시 자동 지정)</small></span><div class="chips wrap" id="v-trades">${trades.map((t) => `<button type="button" class="chip ${(v.trades || []).includes(t) ? "on" : ""}" data-t="${esc(t)}">${esc(t)}</button>`).join("")}</div></div></section>
+    <section class="fsec"><h3 class="fsec-h">👤 담당자 <small>여러 명 가능 · 소장·반장 등</small></h3><div id="v-contacts"></div>
       <div class="row wrap"><button type="button" class="btn btn-sm" id="v-addc">＋ 담당자 추가</button><button type="button" class="btn btn-sm" id="v-pick">📇 연락처에서</button></div>
-      <datalist id="v-roles">${M.CONTACT_ROLES.map((r) => `<option value="${r}">`).join("")}</datalist></div>
-    <div class="fld"><span>담당 공종 <small>(이 공종 하자 등록 시 자동 지정)</small></span><div class="chips wrap" id="v-trades">${trades.map((t) => `<button type="button" class="chip ${(v.trades || []).includes(t) ? "on" : ""}" data-t="${esc(t)}">${esc(t)}</button>`).join("")}</div></div>
-    <label class="fld"><span>메모</span><input class="inp" id="v-memo" value="${esc(v.memo || "")}" placeholder="예: 오전 현장 상주"></label>
+      <datalist id="v-roles">${M.CONTACT_ROLES.map((r) => `<option value="${r}">`).join("")}</datalist></section>
+    <section class="fsec"><h3 class="fsec-h">📝 메모</h3><label class="fld"><span class="sr-only">메모</span><input class="inp" id="v-memo" value="${esc(v.memo || "")}" placeholder="예: 오전 현장 상주"></label></section>
     <div class="form-act">${isNew ? "" : `<button type="button" class="btn btn-danger" id="v-del">삭제</button>`}<button type="submit" class="btn btn-primary btn-lg">저장</button></div></form>`;
   const phRow = (val = "") => `<div class="row vc-ph"><input class="inp" type="tel" inputmode="tel" data-c="phone" value="${esc(val)}" placeholder="010-0000-0000"><button type="button" class="btn btn-sm" data-rmp aria-label="번호 삭제">✕</button></div>`;
   const addContact = (c = { name: "", role: "", phones: [""] }) => {
@@ -1536,10 +1563,12 @@ ROUTES.settings = async () => {
     <h3 class="sec">현장</h3><div class="slist">
       ${p ? item("#/project", "🏗", esc(p.name), `${p.dongs.length}개 동 · 공종 ${p.trades.length} · 유형 ${p.types.length} · 도면 ${S.plans.filter((x) => x.projectId === p.id).length}`) : ""}
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장${Pro.isPro() ? "" : " · 무료판 1개"}`, 'data-a="switch"')}
+      ${item("", "🧪", "샘플 현장 불러오기", "기능을 둘러볼 수 있는 가상 데이터", 'data-a="sample"')}</div>
+    <h3 class="sec">사진·표시</h3><div class="slist">
       ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
       ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
-      ${item("", "🧪", "샘플 현장 불러오기", "기능을 둘러볼 수 있는 가상 데이터", 'data-a="sample"')}</div>
-    <h3 class="sec">동기화</h3><div class="slist">
+      ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}</div>
+    <h3 class="sec">동기화·팀</h3><div class="slist">
       ${item("#/sync", "👥", "동기화·팀 현장", Sync.attached() ? `${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""} · ${esc(Sync.status().label)}` : "꺼짐 · 팀원·PC·폰이 같은 현장을 실시간으로 공유", 'id="si-sync"')}</div>
     <h3 class="sec">데이터</h3><div class="slist">
       ${p ? item("#/import", "📥", "엑셀·CSV 가져오기", "다른 시스템 하자 목록 → 열 매핑 후 가져오기") : ""}
@@ -1547,12 +1576,12 @@ ROUTES.settings = async () => {
       ${item("", "💾", "백업 파일 만들기 (zip)", "데이터+사진 전체 · 기기 변경 시 필수", 'data-a="backup"')}
       ${item("#/restore", "♻️", "백업에서 복원", "")}
       ${item("", "🛡", "저장공간 보호", persisted ? "켜짐 · 브라우저가 데이터를 지우지 않아요" : `꺼짐 · 눌러서 요청${est ? " · " + est : ""}`, 'data-a="persist"')}</div>
-    <h3 class="sec">일반</h3><div class="slist">
-      ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}
-      ${item("#/pro", "⭐", Pro.isPro() ? "하자싹 프로 (사용 중)" : "하자싹 프로", Pro.isPro() ? "모든 기능 사용 중" : "현장 무제한 · 요청서 워터마크 제거")}
+    <h3 class="sec">도움말·정보</h3><div class="slist">
       ${item("#/help", "📘", "사용법 보기", "등록·도면·보내기·팀 공유·자주 묻는 질문", 'id="si-help"')}
       ${item("#/about", "ℹ️", "앱 정보", `버전 ${APP_VERSION}`)}
       ${item("#/privacy", "🔒", "개인정보처리방침", Sync.attached() ? "동기화 중: 데이터가 Google Firebase에 저장돼요" : "동기화를 켜기 전에는 기기에만 저장")}
+      ${item("#/pro", "⭐", Pro.isPro() ? "하자싹 프로 (사용 중)" : "하자싹 프로", Pro.isPro() ? "모든 기능 사용 중" : "현장 무제한 · 요청서 워터마크 제거")}</div>
+    <h3 class="sec">주의</h3><div class="slist">
       ${item("", "🗑", "모든 데이터 삭제", Sync.attached() ? "현장·하자·사진·업체 · 팀 현장 전체(모든 팀원 기기·클라우드)에서도 삭제" : "이 기기의 현장·하자·사진·업체", 'data-a="wipe"')}</div>`;
   bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
