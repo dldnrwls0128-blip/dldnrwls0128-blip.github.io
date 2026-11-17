@@ -2,7 +2,7 @@
 import * as db from "./db.js";
 import * as M from "./model.js";
 import { $, $$, esc, n, toast, busy, initNav, go, replace, back, rerender, navDepth, pushLayer, closeLayer, unwind, openSheet, ask, prompt2, choose, pickFile } from "./ui.js";
-import { compressImage, downloadBlob, shareOrDownload } from "./photo.js";
+import { compressImage, downloadBlob, shareOrDownload, stampBlob } from "./photo.js";
 import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactPickerSupported, pickContacts, canShareFiles } from "./share.js";
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
@@ -78,14 +78,23 @@ async function addPhotos(defectId, files, kind, stampBase) {
   for (const f of files) {
     try {
       const at = new Date().toISOString();
-      const { blob, thumb, w, h } = await compressImage(f, { stamp: `${stampBase}\n${fmtDT(at)} · ${kind === "after" ? "조치후" : "조치전"}` });
-      await db.put("photos", { id: M.uid("ph"), defectId, kind, blob, thumb, w, h, at });
+      const on = stampOn();
+      const { blob, thumb, w, h } = await compressImage(f, { stamp: on ? stampInfo(stampBase, kind, at) : null });
+      await db.put("photos", { id: M.uid("ph"), defectId, kind, blob, thumb, w, h, at, stamp: on ? "1" : "0" });
       const m = S.pidx.get(defectId) || { before: 0, after: 0 }; m[kind === "after" ? "after" : "before"]++; S.pidx.set(defectId, m); ok++;
     } catch (e) { toast(e.message || "사진 처리 실패"); }
   }
   return ok;
 }
-const stampOf = (d) => `${P()?.name || ""} · ${M.locText(d)}\n${M.tradeText(d)}${d.type ? " · " + d.type : ""}`;
+/** 사진 스탬프: 설정(기본 켬)·내용. stampOf(d)는 하자 기준 정보, stampInfo로 조치 전/후·일시를 붙인다 */
+const stampOn = () => LS.get("stampPhotos", true) !== false;
+const stampOf = (d) => ({ project: P()?.name || "", loc: M.locText(d) || "위치 미지정", work: [M.tradeText(d), d.type].filter(Boolean).join(" · ") });
+const stampInfo = (base, kind, at) => ({ ...base, tag: kind === "after" ? "조치 후" : "조치 전", at: fmtDT(at) });
+/** 보내기·내보내기용 사진: 스탬프 없이 찍은 사진은(설정이 켜져 있으면) 이때 새긴 사본을 쓴다 */
+async function photoOut(ph, d) {
+  if (ph.stamp !== "0" || !stampOn()) return ph.blob;
+  try { return await stampBlob(ph.blob, stampInfo(stampOf(d), ph.kind, ph.at)); } catch { return ph.blob; }
+}
 
 /* ---------- 라우터 ---------- */
 const ROUTES = {};
@@ -287,12 +296,14 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { dong: "동", ho: "호", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
+const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
 function filterChipText(k, v) {
   if (k === "status") return v === "_open" ? "미조치" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
   if (k === "overdue") return "기한초과";
   if (k === "ho") return v + "호";
+  if (k === "common") return v === "_any" ? "공용부·세대 외 전체" : v === "_bare" ? "공용부 미지정(동·층만)" : v;
+  if (k === "floor") return v === "_none" ? "층 미지정" : M.floorLabel(v);
   if (k === "text") return `“${v}”`;
   return v;
 }
@@ -329,6 +340,8 @@ function filterSheet() {
     html: `<div class="grid2">
       ${sel("dong", p.dongs.map((d) => [d.name, d.name]), "동")}
       <label class="fld"><span>호</span><input class="inp" data-k="ho" inputmode="numeric" value="${esc(f.ho || "")}" placeholder="예: 1203"></label>
+      ${sel("common", [["_any", "공용부·세대 외 전체"], ["_bare", "공용부 미지정(동·층만)"], ...[...new Set([...M.dongCommonsOf(p), ...p.commons, ...PD().map((d) => d.common).filter(Boolean)])].map((x) => [x, x])], "공용부")}
+      ${sel("floor", [["_none", "층 미지정"], ...[...new Set([f.floor, ...PD().map((d) => d.floor || M.floorOfHo(d.ho))].filter((x) => x && x !== "_none"))].sort((a, b) => (Number(b) || -99) - (Number(a) || -99)).map((x) => [x, M.floorLabel(x)])], "층")}
       ${sel("status", [["_open", "미조치 전체"], ...M.STATUSES.map((x) => [x, x])], "상태")}
       ${sel("category", [...new Set([...M.catsOf(p), ...PD().map((d) => d.category).filter(Boolean)])].map((x) => [x, x]), "구분")}
       ${sel("trade", usedTrades.map((x) => [x, x]), "공종")}
@@ -373,6 +386,20 @@ ROUTES.unit = async (qq) => {
 };
 
 /* ---------- 동 현황(히트맵) ---------- */
+/** 동 공용부를 세부위치별로 묶기(층은 무시하고 세부위치 기준, 세부위치 없는 건 ‘층·기타’) */
+function commonGroups(list) {
+  const m = new Map(); const fl = (d) => d.floor || "";
+  for (const d of list) {
+    const key = d.common ? "c|" + d.common : "f|" + fl(d);
+    const g = m.get(key) || (d.common ? { common: d.common, floor: "", label: d.common, floors: new Map() } : { common: "", floor: fl(d) || "_none", label: fl(d) ? `${M.floorLabel(fl(d))} (공용부 미지정)` : "동 전체 (층·공용부 미지정)", floors: null });
+    g.all = (g.all || 0) + 1; if (M.isOpen(d)) g.open = (g.open || 0) + 1; if (M.isOverdue(d)) g.od = (g.od || 0) + 1;
+    if (g.floors) g.floors.set(fl(d), (g.floors.get(fl(d)) || 0) + 1);
+    m.set(key, g);
+  }
+  const fsort = (a, b) => (Number(b) || -99) - (Number(a) || -99);
+  return [...m.values()].map((g) => ({ open: 0, od: 0, ...g, sub: g.floors && [...g.floors.keys()].some(Boolean) ? [...g.floors.entries()].sort((a, b) => fsort(a[0], b[0])).slice(0, 4).map(([f, n]) => `${f ? M.floorLabel(f) : "층 없음"} ${n}`).join(" · ") : "" }))
+    .sort((a, b) => (a.common ? 0 : 1) - (b.common ? 0 : 1) || b.all - a.all || fsort(a.floor, b.floor));
+}
 ROUTES.grid = async (qq) => {
   setTab("list");
   const p = P(); const dong = p.dongs.find((d) => d.name === qq.dong) || p.dongs[0];
@@ -393,11 +420,14 @@ ROUTES.grid = async (qq) => {
       const m = by.get(ho) || { open: 0, all: 0, od: 0 }; const n = cnt(m); const lv = M.heatLevel(n, th);
       return `<button type="button" class="hc h${lv} ${m.od ? "od" : ""} ${m.all && !m.open && th.basis !== "all" ? "done" : ""}" data-ho="${ho}" data-n="${n}" data-lv="${lv}" aria-label="${ho}호 ${th.basis === "all" ? "전체" : "미조치"} ${n}건"><span>${ho}</span>${m.all ? `<b>${n}</b>` : ""}</button>`;
     }).join(""); }).join("")}</div>
-    <h3 class="sec">공용부·세대 외 <small>${common.filter(M.isOpen).length} / ${common.length}건</small></h3>
-    ${common.slice(0, 30).map((d) => defectCard(d)).join("") || '<p class="help">없음</p>'}`;
+    <h3 class="sec">공용부·세대 외 <small>${esc(dong.name)} · ${th.basis === "all" ? "전체" : "미조치"} ${common.filter(M.isOpen).length} / ${common.length}건</small></h3>
+    <div class="cgrid" id="cgrid">${commonGroups(common).map((g) => { const n = th.basis === "all" ? g.all : g.open; const lv = M.heatLevel(n, th);
+      return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""}" data-cm="${esc(g.common)}" data-cf="${esc(g.floor)}" aria-label="${esc(g.label)} ${n}건"><span>${esc(g.label)}</span><b>${n}</b><small>${g.all}건${g.sub ? " · " + esc(g.sub) : ""}</small></button>`; }).join("") || '<p class="help">공용부 하자 없음 — 등록할 때 위치에서 동을 고른 뒤 ‘공용부’를 선택하세요.</p>'}</div>
+    ${common.slice(0, 30).map((d) => defectCard(d)).join("")}`;
   bindCards();
   $$("[data-d]", view()).forEach((b) => b.addEventListener("click", () => replace(`#/grid?dong=${encodeURIComponent(b.dataset.d)}`)));
   $$("[data-ho]", view()).forEach((b) => b.addEventListener("click", () => go(`#/unit?dong=${encodeURIComponent(dong.name)}&ho=${b.dataset.ho}`)));
+  $$("[data-cm]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = { dong: dong.name, common: b.dataset.cm || "_bare", ...(b.dataset.cm ? {} : { floor: b.dataset.cf || "_none" }), ...(th.basis === "all" ? {} : { status: "_open" }) }; LS.set("filter", S.filter); go("#/list"); }));
   $("#heat-cfg", view())?.addEventListener("click", () => heatSheet());
 };
 function heatLegendHtml(th, { gear = true } = {}) {
@@ -518,15 +548,15 @@ function formSheet({ title, fields, ok = "추가", hint = "", validate = () => "
   });
 }
 /** 하자 필드 ↔ 현장 목록 키 */
-const LIST_FIELD = { commons: "common", rooms: "room", parts: "part", types: "type", categories: "category", trades: "trade" };
-const LIST_NAME = { commons: "공용부", rooms: "실", parts: "부위", types: "유형", categories: "구분", trades: "공종", subTrade: "세부공종" };
-const listArr = (p, k) => { if (k === "categories" && !Array.isArray(p.categories)) p.categories = [...M.catsOf(p)]; return k === "trades" ? p.trades.map((t) => t.name) : p[k]; };
+const LIST_FIELD = { commons: "common", dongCommons: "common", rooms: "room", parts: "part", types: "type", categories: "category", trades: "trade" };
+const LIST_NAME = { commons: "단지 공용", dongCommons: "동 공용부", rooms: "실", parts: "부위", types: "유형", categories: "구분", trades: "공종", subTrade: "세부공종" };
+const listArr = (p, k) => { if (k === "dongCommons" && !Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS]; if (k === "categories" && !Array.isArray(p.categories)) p.categories = [...M.catsOf(p)]; return k === "trades" ? p.trades.map((t) => t.name) : p[k]; };
 const isUserItem = (k, v) => !M.defaultsOf(k).includes(v);
 /** 목록(공용부·실·부위·유형·구분·공종)에 새 항목 추가 → 이름 또는 null */
 async function addListItem(k) {
   const p = P(); const arr = listArr(p, k); const nm = LIST_NAME[k];
   const r = await formSheet({ title: `${nm} 직접 추가`, ok: "추가하고 선택", hint: "현장 설정에 저장돼서 다음부터 바로 고를 수 있어요.",
-    fields: [{ k: "v", label: `${nm} 이름`, placeholder: { commons: "예: 경비실", rooms: "예: 알파룸", parts: "예: 걸레받이", types: "예: 결로", categories: "예: 준공검사", trades: "예: 방음" }[k] }],
+    fields: [{ k: "v", label: `${nm} 이름`, placeholder: { commons: "예: 경비실", dongCommons: "예: 쓰레기 분리수거장", rooms: "예: 알파룸", parts: "예: 걸레받이", types: "예: 결로", categories: "예: 준공검사", trades: "예: 방음" }[k] }],
     validate: ({ v }) => (!v ? "이름을 입력하세요" : v.length > 20 ? "20자 이내로 입력하세요" : M.hasSame(arr, v) ? `이미 있는 ${nm}이에요: ${arr.find((x) => M.sameKey(x) === M.sameKey(v))}` : "") });
   if (!r) return null;
   if (k === "trades") p.trades.push({ name: r.v, subs: [] }); else p[k].push(r.v);
@@ -633,7 +663,7 @@ function renderForm() {
     sync(); const files = await pickFile("image/*", { capture, multiple: !capture }); if (!files.length) return;
     busy(true, "사진 압축 중…");
     for (const f of files) {
-      try { const at = new Date().toISOString(); const c = await compressImage(f, { stamp: `${stampOf(dr)}\n${fmtDT(at)} · 조치전` }); dr.photos.push({ ...c, at, url: URL.createObjectURL(c.thumb) }); }
+      try { const at = new Date().toISOString(); const on = stampOn(); const c = await compressImage(f, { stamp: on ? stampInfo(stampOf(dr), "before", at) : null }); dr.photos.push({ ...c, at, stamp: on ? "1" : "0", url: URL.createObjectURL(c.thumb) }); }
       catch (e) { toast(e.message); }
     }
     busy(false); renderForm();
@@ -650,7 +680,7 @@ function renderForm() {
   $("#btn-cancel")?.addEventListener("click", () => { S.draft = null; back(); });
   const save = async (next) => {
     sync();
-    const err = !dr.dong && !dr.common && !dr.locEtc?.trim() ? "위치를 선택하세요" : !dr.trade ? "공종을 선택하세요" : !dr.content.trim() && !dr.type ? "내용 또는 유형을 입력하세요" : "";
+    const err = !dr.dong && !dr.common && !dr.locEtc?.trim() && !dr.room && !dr.part ? "위치를 선택하세요" : !dr.trade ? "공종을 선택하세요" : !dr.content.trim() && !dr.type ? "내용 또는 유형을 입력하세요" : "";
     if (err) { $("#form-err").textContent = err; toast(err); return; }
     busy(true, "저장 중…");
     const now = new Date().toISOString();
@@ -660,7 +690,7 @@ function renderForm() {
     else { d = { id: M.uid("h"), projectId: p.id, createdAt: now, status: "접수", memo: "", origin: "local", history: [{ at: now, status: "접수", note: "등록" }] }; for (const k of fields) d[k] = dr[k]; d.content = d.content.trim(); }
     await saveDefect(d);
     for (const ph of dr.photos) {
-      await db.put("photos", { id: M.uid("ph"), defectId: d.id, kind: "before", blob: ph.blob, thumb: ph.thumb, w: ph.w, h: ph.h, at: ph.at });
+      await db.put("photos", { id: M.uid("ph"), defectId: d.id, kind: "before", blob: ph.blob, thumb: ph.thumb, w: ph.w, h: ph.h, at: ph.at, stamp: ph.stamp || "1" });
       const m = S.pidx.get(d.id) || { before: 0, after: 0 }; m.before++; S.pidx.set(d.id, m); URL.revokeObjectURL(ph.url);
     }
     busy(false);
@@ -678,11 +708,11 @@ function renderForm() {
  * 단계마다 '＋ 직접 추가'(현장 설정에 저장 → 선택 → 다음 단계), 직접 추가한 항목은 ✎/길게 눌러 이름 변경·삭제(미사용 시),
  * '기타 위치 직접 입력'은 저장하지 않는 1회용 위치 */
 function locationPicker(dr, onDone) {
-  const p = P();
+  const p = P(); if (!Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS];
   const sel = { dong: dr.dong, floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part, locEtc: dr.locEtc || "" };
   const STEPS = ["dong", "floor", "ho", "room", "part"];
   let step = 0; const stepLayers = [];
-  const s = openSheet({ title: "위치 선택", full: true, html: `<div id="lp"></div>`, footer: `<div class="lp-sum" id="lp-sum"></div><button type="button" class="btn btn-primary btn-lg" id="lp-ok">확인</button>`,
+  const s = openSheet({ title: "위치 선택", full: true, cls: "lp-sheet", html: `<div id="lp"></div>`, footer: `<div class="lp-sum" id="lp-sum"></div><button type="button" class="btn btn-primary btn-lg" id="lp-ok">확인</button>`,
     onBack: () => (step > 0 ? history.back() : s.close()) });
   const dongObj = () => p.dongs.find((d) => d.name === sel.dong);
   const setStep = (i, push = true) => {
@@ -690,56 +720,77 @@ function locationPicker(dr, onDone) {
     step = i; draw();
   };
   const tile = (v, label, on, cls = "", ua = false) => `<button type="button" class="tile ${on ? "on" : ""} ${cls} ${ua ? "ua" : ""}" data-v="${esc(v)}"${ua ? ' data-ua="1"' : ""}>${esc(label)}${ua ? '<span class="ua-ed" data-ed="1" title="이름 변경·삭제">✎</span>' : ""}</button>`;
-  const addTile = (what, key = "_add") => tile(key, "＋ 직접 추가", false, "add").replace("<button ", `<button aria-label="${esc(what)} 직접 추가" `);
+  const addTile = (what, key = "_add") => tile(key, "＋ 추가", false, "add").replace("<button ", `<button aria-label="${esc(what)} 직접 추가" `);
   const isNumFloor = (f) => /^\d+$/.test(String(f || ""));
   const nextAfterFloor = (d, f) => (d && (M.unitsOf(d, f).length || isNumFloor(f)) ? 2 : 3);
   const used = (pred) => PD().filter(pred).length;
   const sortDongs = () => p.dongs.sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true }));
+  /** 동 공용부 타일(층을 골랐으면 그 층의 공용부: 예) 301동 12층 계단실) */
+  function dongCommonHtml() {
+    if (!sel.dong) return "";
+    const where = `${sel.dong}${sel.floor ? " " + M.floorLabel(sel.floor) : ""}`;
+    return `<h4>${esc(where)} 공용부 <small class="help">계단실·EV홀 등 — 층은 골라도 되고 건너뛰어도 돼요</small></h4><div class="tiles cm">${p.dongCommons.map((c) => tile("dc:" + c, c, !sel.ho && c === sel.common, "common", isUserItem("dongCommons", c))).join("")}${addTile("동 공용부", "_adddc")}</div>`;
+  }
+  const canSave = () => !!(sel.dong || sel.common || sel.locEtc?.trim() || sel.room || sel.part);
   function draw() {
     s.setBackVisible(step > 0);
     const box = $("#lp", s.el); const d = dongObj();
-    const crumbs = [sel.dong || sel.common, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.room, sel.part, sel.locEtc && `(${sel.locEtc})`].filter(Boolean);
-    let h = `<ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}">${t}</li>`).join("")}</ol>`;
+    const crumbs = [sel.dong, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.common, sel.room, sel.part, sel.locEtc && `(${sel.locEtc})`].filter(Boolean);
+    const K = STEPS[step]; const has = K === "dong" ? !!sel.dong : K === "floor" ? !!(sel.floor || sel.common) : !!sel[K];
+    const skipLabel = K === "part" ? (has ? "완료 ✓" : "건너뛰고 완료 ✓") : has ? "다음 ›" : { dong: "동 건너뛰기 ›", floor: "층 건너뛰기 ›", ho: "호 건너뛰기 ›", room: "실 건너뛰기 ›" }[K];
+    let h = `<div class="lp-top"><ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}" data-go="${i}">${t}</li>`).join("")}</ol><button type="button" class="btn btn-sm lp-skip" data-skip="1">${skipLabel}</button></div>`;
     if (STEPS[step] === "dong") {
       h += `<h4>동</h4><div class="tiles">${p.dongs.map((x) => tile(x.name, x.name, x.name === sel.dong, "", !!x.userAdded)).join("")}${addTile("동", "_add")}</div>
-        <h4>공용부</h4><div class="tiles">${p.commons.map((c) => tile("c:" + c, c, c === sel.common, "common", isUserItem("commons", c))).join("")}${addTile("공용부", "_addc")}</div>`;
+        <h4>단지 공용 <small class="help">동과 상관없는 곳 — 누르면 바로 선택</small></h4><div class="tiles cm">${p.commons.map((c) => tile("c:" + c, c, !sel.dong && c === sel.common, "common", isUserItem("commons", c))).join("")}${addTile("단지 공용", "_addc")}</div>
+        <p class="help">동 안의 공용부(계단실·EV홀·피트실·옥상 등)는 동을 고르면 나와요.</p>`;
     } else if (STEPS[step] === "floor") {
       const fl = d ? M.floorsOf(d) : []; const ex = new Set(d?.extraFloors || []);
-      h += `<h4>${esc(sel.dong || sel.common)} · 층</h4><div class="tiles small">${[...fl].reverse().map((f) => tile(f, M.floorLabel(f), f === sel.floor, "", ex.has(f))).join("")}${addTile("층")}</div>
-        <button type="button" class="btn btn-block" data-skip="1">층 지정 안 함 (동 전체)</button>`;
+      h += `<h4>${esc(sel.dong || sel.common)} · 층</h4><div class="tiles small">${[...fl].reverse().map((f) => tile(f, M.floorLabel(f), f === sel.floor, "", ex.has(f))).join("")}${addTile("층")}</div>`;
+      h += dongCommonHtml();
     } else if (STEPS[step] === "ho") {
       const us = d ? M.unitsOf(d, sel.floor) : []; const ex = new Set(d?.extraUnits || []);
       h += `<h4>${esc(sel.dong)} ${esc(M.floorLabel(sel.floor))} · 호</h4><div class="tiles">${us.map((u) => tile(u, u + "호", u === sel.ho, "", ex.has(u))).join("")}${addTile("호")}</div>
         ${us.length ? "" : '<p class="help">이 층에 등록된 세대가 없어요. 필요하면 ＋ 직접 추가로 호수를 넣으세요.</p>'}
-        <button type="button" class="btn btn-block" data-skip="1">세대 외 (복도·계단·EV홀 등)</button>`;
+`;
+      h += dongCommonHtml();
     } else if (STEPS[step] === "room") {
-      h += `<h4>실</h4><div class="tiles">${p.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r))).join("")}${addTile("실")}</div><button type="button" class="btn btn-block" data-skip="1">건너뛰기</button>`;
+      h += `<h4>실</h4><div class="tiles">${p.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r))).join("")}${addTile("실")}</div>`;
     } else {
       h += `<h4>부위</h4><div class="tiles">${p.parts.map((r) => tile(r, r, r === sel.part, "", isUserItem("parts", r))).join("")}${addTile("부위")}</div>`;
     }
     h += `<button type="button" class="btn btn-block btn-etc" id="lp-etc">✎ ${sel.locEtc ? `기타 위치: ${esc(sel.locEtc)} (수정)` : "기타 위치 직접 입력 (저장 안 함)"}</button>`;
     box.innerHTML = h;
     $("#lp-sum", s.el).textContent = crumbs.length ? "선택: " + crumbs.join(" · ") : "동 또는 공용부를 먼저 고르세요";
-    const ok = $("#lp-ok", s.el); ok.disabled = !(sel.dong || sel.common || sel.locEtc);
+    const ok = $("#lp-ok", s.el); ok.disabled = !canSave();
     $$(".tile", box).forEach((b) => b.addEventListener("click", async (e) => {
       let v = b.dataset.v; const k = STEPS[step];
       if (b.dataset.ua && e.target.closest("[data-ed]")) return editTile(b);
+      if (v === "_adddc") { const nv = await addListItem("dongCommons"); if (nv == null) return; v = "dc:" + nv; }
       if (v === "_add" || v === "_addc") { v = await addHere(k, v === "_addc"); if (v == null) return; }
+      if (v.startsWith("dc:")) {
+        const c = v.slice(3); sel.ho = "";
+        if (k === "floor" && !sel.floor) { sel.common = sel.common === c ? "" : c; return draw(); } // 층을 안 골랐으면 같은 화면에서 층을 더 고를 수 있게(선택)
+        sel.common = c; return setStep(3);
+      }
       if (k === "dong") {
         if (v.startsWith("c:")) { sel.common = v.slice(2); sel.dong = ""; sel.floor = ""; sel.ho = ""; return setStep(3); }
-        if (sel.dong !== v) { sel.floor = ""; sel.ho = ""; } sel.dong = v; sel.common = ""; return setStep(1);
+        sel.floor = ""; sel.ho = ""; sel.dong = v; sel.common = ""; return setStep(1); // 동을 (다시) 누르면 층·호·공용부를 새로 고름
       }
-      if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(nextAfterFloor(dongObj(), v)); }
-      if (k === "ho") { sel.ho = v; return setStep(3); }
+      if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(sel.common ? 3 : nextAfterFloor(dongObj(), v)); }
+      if (k === "ho") { sel.ho = v; sel.common = ""; return setStep(3); }
       if (k === "room") { sel.room = v; return setStep(4); }
       sel.part = v; draw();
     }));
     $("[data-skip]", box)?.addEventListener("click", () => {
       const k = STEPS[step];
-      if (k === "floor") { sel.floor = ""; sel.ho = ""; return setStep(3); }
-      if (k === "ho") { sel.ho = ""; return setStep(3); }
-      if (k === "room") { sel.room = ""; return setStep(4); }
+      if (k === "dong") { if (sel.dong) return setStep(1); sel.floor = ""; sel.ho = ""; return setStep(3); }
+      if (k === "floor") { if (sel.floor && !sel.common) return setStep(nextAfterFloor(dongObj(), sel.floor)); sel.ho = ""; return setStep(3); }
+      if (k === "ho") return setStep(3);
+      if (k === "room") return setStep(4);
+      if (!canSave()) return toast("동·공용부·실·부위 중 하나는 고르거나 기타 위치를 입력하세요");
+      $("#lp-ok", s.el).click();
     });
+    $$("[data-go]", box).forEach((li) => li.addEventListener("click", () => { if (Number(li.dataset.go) < step) history.back(); }));
     $("#lp-etc", box).addEventListener("click", async () => {
       const r = await formSheet({ title: "기타 위치 직접 입력", ok: "적용", hint: "이번 하자에만 쓰이고 목록에는 저장되지 않아요. 비우면 지워져요.",
         fields: [{ k: "v", label: "위치 설명", value: sel.locEtc, placeholder: "예: 101동 뒤 화단 배수구 옆" }], validate: ({ v }) => (v.length > 40 ? "40자 이내로 입력하세요" : "") });
@@ -794,6 +845,12 @@ function locationPicker(dr, onDone) {
   /** 직접 추가한 타일 편집(✎ 또는 길게 누르기) */
   async function editTile(b) {
     const k = STEPS[step]; const v = b.dataset.v; const d = dongObj();
+    if (v.startsWith("dc:")) {
+      const c = v.slice(3); const before = [...p.dongCommons]; const r = await editListItem("dongCommons", c);
+      if (r === "del" && sel.common === c) sel.common = "";
+      if (r === "ren" && sel.common === c) sel.common = p.dongCommons.find((x) => !before.includes(x)) || "";
+      return draw();
+    }
     if (k === "dong" && v.startsWith("c:")) {
       const c = v.slice(2); const before = [...p.commons]; const r = await editListItem("commons", c);
       if (r === "del" && sel.common === c) sel.common = "";
@@ -850,12 +907,14 @@ function locationPicker(dr, onDone) {
   }
   onLongPress(s.el, ".tile[data-ua]", (b) => editTile(b));
   $("#lp-ok", s.el).addEventListener("click", async () => {
-    if (!(sel.dong || sel.common || sel.locEtc)) return;
+    if (!canSave()) return;
     Object.assign(dr, sel); if (sel.ho && !sel.floor) dr.floor = M.floorOfHo(sel.ho);
     await s.close(); onDone();
   });
-  const start = dr.part ? 4 : dr.room ? 4 : dr.ho ? 3 : dr.floor ? 2 : dr.dong ? 1 : dr.common ? 3 : 0;
-  step = 0; draw(); if (start) setStep(start);
+  const start = dr.part ? 4 : dr.room ? 4 : dr.ho ? 3 : dr.common ? 3 : dr.floor ? 2 : dr.dong ? 1 : 0;
+  // 바로 앞 단계에서 시작한 것처럼(뒤로 가면 동 공용부·호 고르는 화면으로)
+  const prev = start === 4 ? 3 : start === 3 ? (sel.dong ? (sel.floor && !sel.common ? 2 : 1) : 0) : start === 2 ? 1 : 0;
+  step = 0; draw(); if (prev) setStep(prev); if (start) setStep(start); // 뒤로 가기로 동 단계까지 차례로
 }
 
 /* 도면 핀 */
@@ -921,7 +980,7 @@ ROUTES.item = async (qq) => {
     const files = await pickFile("image/*", { capture: false, multiple: true }); if (!files.length) return;
     busy(true, "사진 저장 중…"); await addPhotos(d.id, files, b.dataset.add, stampOf(d)); busy(false); rerender();
   }));
-  $$("[data-ph]", view()).forEach((b) => b.addEventListener("click", () => photoViewer(photos, b.dataset.ph, () => rerender())));
+  $$("[data-ph]", view()).forEach((b) => b.addEventListener("click", () => photoViewer(photos, b.dataset.ph, () => rerender(), d)));
   $("#memo").addEventListener("change", async (e) => { d.memo = e.target.value; await saveDefect(d); toast("메모 저장"); });
   $("#btn-del").addEventListener("click", async () => {
     if (!(await ask("이 하자와 사진을 삭제할까요? 되돌릴 수 없어요.", { ok: "삭제", danger: true }))) return;
@@ -948,14 +1007,14 @@ async function changeStatus(d, st) {
   const prev = d.status; setStatus(d, st, note); await saveDefect(d); rerender();
   toast(`‘${st}’(으)로 변경`, { action: "되돌리기", onAction: async () => { setStatus(d, prev, "되돌리기"); await saveDefect(d); rerender(); } });
 }
-function photoViewer(photos, id, onChange) {
+function photoViewer(photos, id, onChange, d = null) {
   let i = Math.max(0, photos.findIndex((p) => p.id === id)); let url = "";
   const s = openSheet({ title: "사진", full: true, cls: "viewer", html: `<div class="pv"><img id="pv-img" alt="사진"></div><div class="pv-nav"><button type="button" class="btn" data-n="-1">‹ 이전</button><span id="pv-i"></span><button type="button" class="btn" data-n="1">다음 ›</button></div>`,
     footer: `<button type="button" class="btn" data-a="share">공유</button><button type="button" class="btn btn-danger" data-a="del">삭제</button>` });
   const show = () => { if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(photos[i].blob); $("#pv-img", s.el).src = url; $("#pv-i", s.el).textContent = `${i + 1} / ${photos.length} · ${photos[i].kind === "after" ? "조치 후" : "조치 전"}`; };
   show();
   $$("[data-n]", s.el).forEach((b) => b.addEventListener("click", () => { i = (i + Number(b.dataset.n) + photos.length) % photos.length; show(); }));
-  $("[data-a=share]", s.el).addEventListener("click", () => shareOrDownload(photos[i].blob, `하자사진_${i + 1}.jpg`));
+  $("[data-a=share]", s.el).addEventListener("click", () => (async () => shareOrDownload(d ? await photoOut(photos[i], d) : photos[i].blob, `하자사진_${i + 1}.jpg`))());
   $("[data-a=del]", s.el).addEventListener("click", async () => {
     if (!(await ask("이 사진을 삭제할까요?", { ok: "삭제", danger: true }))) return;
     const ph = photos[i]; await db.del("photos", ph.id); const m = S.pidx.get(ph.defectId); if (m) m[ph.kind === "after" ? "after" : "before"]--;
@@ -1055,7 +1114,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
       let files = [];
       if ($("#withph", el).checked) {
         busy(true, "사진 준비 중…");
-        for (const d of sel()) { if (!phOn.has(d.id)) continue; for (const ph of (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 2)) if (files.length < 10) files.push(new File([ph.blob], `${M.locText(d).replace(/\s+/g, "_")}_${files.length + 1}.jpg`, { type: "image/jpeg" })); }
+        for (const d of sel()) { if (!phOn.has(d.id)) continue; for (const ph of (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 2)) if (files.length < 10) files.push(new File([await photoOut(ph, d)], `${M.locText(d).replace(/\s+/g, "_")}_${files.length + 1}.jpg`, { type: "image/jpeg" })); }
         busy(false);
       }
       if (k === "kakao" && !isMobileDevice()) files = []; // PC: 공유창 대신 복사
@@ -1091,7 +1150,7 @@ async function printRequest({ vendor, items }) {
   busy(true, "요청서 만드는 중…");
   const { requestDocHtml } = await import("./exporter.js");
   const urls = new Map(); const all = [];
-  for (const d of items) { const ph = (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 2); const u = ph.map((x) => URL.createObjectURL(x.blob)); all.push(...u); urls.set(d.id, u); }
+  for (const d of items) { const ph = (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 2); const u = []; for (const x of ph) u.push(URL.createObjectURL(await photoOut(x, d))); all.push(...u); urls.set(d.id, u); }
   const root = $("#print-root");
   root.innerHTML = requestDocHtml({ project: P(), vendor, items, photoUrls: urls, watermark: !Pro.can("pdfNoWatermark"), issuer: S.issuer, today: M.todayStr() });
   await Promise.all($$("img", root).map((im) => (im.complete ? 0 : new Promise((r) => { im.onload = im.onerror = r; }))));
@@ -1221,6 +1280,7 @@ ROUTES.settings = async () => {
     <h3 class="sec">현장</h3><div class="slist">
       ${p ? item("#/project", "🏗", esc(p.name), `${p.dongs.length}개 동 · 공종 ${p.trades.length} · 유형 ${p.types.length} · 도면 ${S.plans.filter((x) => x.projectId === p.id).length}`) : ""}
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장${Pro.isPro() ? "" : " · 무료판 1개"}`, 'data-a="switch"')}
+      ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
       ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "🧪", "샘플 현장 불러오기", "기능을 둘러볼 수 있는 가상 데이터", 'data-a="sample"')}</div>
     <h3 class="sec">동기화</h3><div class="slist">
@@ -1245,6 +1305,7 @@ ROUTES.settings = async () => {
     if (a === "switch") return switchProject();
     if (a === "sample") return loadSample();
     if (a === "heat") return heatSheet();
+    if (a === "stamp") { LS.set("stampPhotos", !stampOn()); toast(stampOn() ? "사진에 위치·일시를 새겨요" : "사진을 원본 그대로 저장해요"); return rerender(); }
     if (a === "export") return exportSheet(PD(), "전체");
     if (a === "backup") return doBackup();
     if (a === "persist") { const ok = await navigator.storage?.persist?.(); toast(ok ? "저장공간 보호가 켜졌어요" : "브라우저가 거절했어요. 앱을 홈 화면에 설치하면 보통 허용돼요"); return rerender(); }
@@ -1294,7 +1355,7 @@ ROUTES.project = async () => {
     <div class="slist">${p.dongs.map((d) => `<button type="button" class="sitem" data-dong="${d.id}"><span class="si-ico">🏢</span><span><b>${esc(d.name)}${d.alias ? ` <small class="tag">줄임 ${esc(d.alias)}</small>` : ""}</b><small>지하${d.basement || 0} · ${d.floors}층 · ${d.lines}호 라인 · 세대 ${d.unitStart || 1}층부터${d.units?.length ? ` · 실제 세대 ${d.units.length}개(데이터 기준)` : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <div class="row"><button type="button" class="btn" id="btn-adddong">＋ 동 추가</button><button type="button" class="btn" id="btn-bulkdong">＋ 여러 동 한 번에</button></div>
     <h3 class="sec">목록 편집</h3><div class="slist">
-      ${[["commons", "🅿", "공용부", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["categories", "🗂", "구분", M.catsOf(p)], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
+      ${[["dongCommons", "🏢", "동 공용부(계단실·EV홀 등)", M.dongCommonsOf(p)], ["commons", "🅿", "단지 공용", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["categories", "🗂", "구분", M.catsOf(p)], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
         .map(([k, ico, t, arr]) => `<button type="button" class="sitem" data-list="${k}"><span class="si-ico">${ico}</span><span><b>${t}</b><small>${esc(arr.slice(0, 6).join(", "))}${arr.length > 6 ? " …" : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <h3 class="sec">도면 <small>동·층별 평면도 이미지 → 하자 위치를 도면에 찍기</small></h3>
     <div class="slist">${plans.map((pl) => `<button type="button" class="sitem" data-plan="${pl.id}"><span class="si-ico">🗺</span><span><b>${esc(pl.name)}</b><small>${esc(pl.dongs?.length ? pl.dongs.join(", ") : "전체 동")} · ${esc(pl.floors || "전체 층")}</small></span><span class="chev">›</span></button>`).join("") || '<p class="help">등록된 도면이 없어요</p>'}</div>
@@ -1373,8 +1434,9 @@ ROUTES.dong = async (qq) => {
 };
 ROUTES.lists = async (qq) => {
   const p = P(); const k = qq.k;
-  const title = { commons: "공용부", trades: "공종", types: "하자 유형", categories: "구분", rooms: "실", parts: "부위" }[k] || "목록";
+  const title = { dongCommons: "동 공용부", commons: "단지 공용", trades: "공종", types: "하자 유형", categories: "구분", rooms: "실", parts: "부위" }[k] || "목록";
   if (k === "categories" && !Array.isArray(p.categories)) p.categories = [...M.catsOf(p)];
+  if (k === "dongCommons" && !Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS];
   setTab(null); setHeader(title, { backBtn: true });
   const arr = k === "trades" ? p.trades.map((t) => t.name) : p[k];
   view().innerHTML = `<p class="help">항목을 누르면 이름 변경·삭제${k === "trades" ? "·세부공종 편집" : ""}을 할 수 있어요. ↑↓로 순서를 바꿔요.</p>
@@ -1386,7 +1448,7 @@ ROUTES.lists = async (qq) => {
   $("#l-add").addEventListener("click", async () => { if (LIST_NAME[k]) { if (await addListItem(k)) rerender(); return; } const v = await prompt2(`${title} 추가`); if (!v) return; if (!p[k].includes(v)) p[k].push(v); save(); });
   $("#l-reset").addEventListener("click", async () => {
     if (!(await ask(`${title} 목록을 기본값으로 되돌릴까요? 직접 추가한 항목이 사라져요.`))) return;
-    const D = { commons: M.DEFAULT_COMMONS, types: M.DEFAULT_TYPES, rooms: M.DEFAULT_ROOMS, parts: M.DEFAULT_PARTS, categories: M.CATEGORIES };
+    const D = { dongCommons: M.DEFAULT_DONG_COMMONS, commons: M.DEFAULT_COMMONS, types: M.DEFAULT_TYPES, rooms: M.DEFAULT_ROOMS, parts: M.DEFAULT_PARTS, categories: M.CATEGORIES };
     if (k === "trades") p.trades = M.DEFAULT_TRADES.map((t) => ({ name: t.name, subs: [...t.subs] })); else p[k] = [...D[k]]; save();
   });
   $$("[data-up],[data-dn]", view()).forEach((b) => b.addEventListener("click", () => {
@@ -1522,7 +1584,7 @@ async function runImport(addDongs) {
   for (const d of res.toPut) { const o = byId.get(d.id); if (o) undo.prev.push(o); else undo.added.push(d.id); }
   await db.setMeta("importUndo", undo);
   await db.putMany("defects", res.toPut); for (const v of res.newVendors) await saveVendor(v);
-  Object.assign(p, { dongs: pcopy.dongs }); await saveProject(p);
+  Object.assign(p, { dongs: pcopy.dongs, dongCommons: pcopy.dongCommons, commons: pcopy.commons }); await saveProject(p);
   const maps = await db.getMeta("importMaps", {}); maps[imp.sig] = { map: imp.map, defCat: imp.defCat, at: new Date().toISOString() }; await db.setMeta("importMaps", maps);
   hist.push({ at: undo.at, file: imp.file, projectId: p.id, sig: imp.sig, ...st }); await db.setMeta("imports", hist.slice(-20));
   S.defects = await db.getAll("defects"); busy(false); S.imp = null; requestPersist();

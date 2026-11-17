@@ -282,4 +282,29 @@ body.has-selbar #view{padding-bottom:132px}
 .opt.cur{opacity:.75;cursor:default}
 .who{color:var(--brand)}
 @media (prefers-color-scheme:dark){.who{color:var(--brand-2)}}
+
+/* 동현황 공용부 칸 */
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:6px;margin:6px 0 12px}
+.cc{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:56px;padding:8px 10px;border-radius:10px;border:1px solid var(--line,#e5e7eb);background:var(--card,#fff);text-align:left;cursor:pointer;font:inherit;color:inherit}
+.cc span{font-size:12px;font-weight:600;line-height:1.25;word-break:keep-all}.cc b{font-size:18px}.cc small{font-size:11px;color:var(--sub)}
+.cc.od{box-shadow:inset 0 0 0 2px var(--danger,#dc2626)}
+.cc:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.cc.h3,.cc.h3 small,.cc.h3 b{color:#fff}
 @media (hover:hover) and (pointer:fine){.chips.scroll{flex-wrap:wrap;overflow-x:visible}}
+
+/* 1.0.7 위치 선택기: 촘촘한 칩(한 화면에 동·단지 공용, 동 고르면 층·호·동 공용부) */
+#lp .lp-top{display:flex;align-items:center;gap:8px;margin:0 0 6px;position:sticky;top:0;z-index:2;background:var(--card,#fff);padding:2px 0}
+#lp .lp-top .steps{flex:1;margin:0}
+#lp .steps li{padding:3px 0;font-size:11.5px;border-bottom-width:2px;cursor:pointer}
+#lp .lp-skip{flex:none;min-height:34px;padding:4px 10px;font-size:13px;font-weight:700;white-space:nowrap}
+#lp h4{margin:8px 0 4px;font-size:13px}
+#lp h4 small{font-weight:400}
+#lp .help{margin:2px 0 6px;font-size:12px}
+#lp .tiles{grid-template-columns:repeat(auto-fill,minmax(62px,1fr));gap:5px;margin:0 0 6px}
+#lp .tiles.small{grid-template-columns:repeat(auto-fill,minmax(46px,1fr))}
+#lp .tiles.cm{grid-template-columns:repeat(auto-fill,minmax(86px,1fr))}
+#lp .tile{min-height:38px;border-radius:8px;font-size:13px;padding:2px 4px;line-height:1.15;word-break:keep-all;overflow-wrap:anywhere}
+#lp .tile.ua .ua-ed{top:0;right:0;font-size:10px}
+#lp .btn-etc{min-height:36px;font-size:13px;padding:4px 10px;margin-top:4px}
+@media (min-width:700px){#lp .tiles{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}#lp .tiles.cm{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}}
+@media (min-width:700px){.sheet-wrap.full.lp-sheet .sheet{height:auto;min-height:min(460px,94vh)}}

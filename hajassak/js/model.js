@@ -31,12 +31,18 @@ export const DEFAULT_TYPES = ["미시공", "파손", "들뜸", "틈새", "오염
 export const DEFAULT_ROOMS = ["현관", "거실", "주방", "침실1", "침실2", "침실3", "드레스룸", "욕실1", "욕실2",
   "다용도실", "발코니", "실외기실", "복도", "전체"];
 export const DEFAULT_PARTS = ["바닥", "벽", "천장", "문", "창", "가구", "기구", "기타"];
-export const DEFAULT_COMMONS = ["지하주차장", "주출입구", "코어(계단·EV홀)", "옥상", "외벽", "커뮤니티", "관리동", "단지 외부"];
+/** 단지 공용(동 없이): 새 현장 기본값. 예전 현장은 저장된 목록 그대로 */
+export const DEFAULT_COMMONS = ["지하주차장", "부대복리시설", "조경", "기계/전기실", "주출입구", "관리동", "단지 외부", "기타"];
+/** 동별 공용부(동 + 선택 층 + 세부위치): 예) 301동 12층 계단실 */
+export const DEFAULT_DONG_COMMONS = ["계단실", "복도/세대현관 앞", "EV홀", "피트(PIT)실", "옥상", "지하층/필로티", "출입구/로비", "외벽", "기타"];
+export const dongCommonsOf = (p) => (Array.isArray(p?.dongCommons) ? p.dongCommons : DEFAULT_DONG_COMMONS);
+/** 동 공용부 하자: 동이 있고 호가 없으며 공용부(세부위치)가 있는 건 */
+export const isDongCommon = (d) => !!(d.dong && !d.ho && d.common);
 export const CATEGORIES = ["시공불량", "사전점검", "입주자하자", "AS"];
 /** 현장별 구분 목록(직접 추가 포함). 예전 현장은 기본 4개 */
 export const catsOf = (p) => (Array.isArray(p?.categories) && p.categories.length ? p.categories : CATEGORIES);
 /** 기본 제공 목록(직접 추가 항목 판별용) */
-export const defaultsOf = (k) => ({ commons: DEFAULT_COMMONS, types: DEFAULT_TYPES, rooms: DEFAULT_ROOMS, parts: DEFAULT_PARTS, categories: CATEGORIES, trades: DEFAULT_TRADES.map((t) => t.name) }[k] || []);
+export const defaultsOf = (k) => ({ commons: [...DEFAULT_COMMONS, "코어(계단·EV홀)", "옥상", "외벽", "커뮤니티"], dongCommons: DEFAULT_DONG_COMMONS, types: DEFAULT_TYPES, rooms: DEFAULT_ROOMS, parts: DEFAULT_PARTS, categories: CATEGORIES, trades: DEFAULT_TRADES.map((t) => t.name) }[k] || []);
 /** 목록 중복 검사용 키(공백·대소문자 무시) */
 export const sameKey = (s) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
 export const hasSame = (arr, v, except = null) => arr.some((x) => x !== except && sameKey(x) === sameKey(v));
@@ -135,7 +141,7 @@ export const aliasOf = (num) => { const n = Number(num); return Number.isFinite(
 export function newProject(name = "새 현장") {
   return {
     id: uid("p"), name, createdAt: new Date().toISOString(),
-    dongs: [], commons: [...DEFAULT_COMMONS],
+    dongs: [], commons: [...DEFAULT_COMMONS], dongCommons: [...DEFAULT_DONG_COMMONS],
     trades: DEFAULT_TRADES.map((t) => ({ name: t.name, subs: [...t.subs] })),
     types: [...DEFAULT_TYPES], rooms: [...DEFAULT_ROOMS], parts: [...DEFAULT_PARTS], categories: [...CATEGORIES],
     dueDays: 7,
@@ -171,6 +177,8 @@ export function applyFilter(list, f = {}, ctx = {}) {
   return list.filter((d) => {
     if (f.dong && d.dong !== f.dong) return false;
     if (f.ho && d.ho !== f.ho) return false;
+    if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || d.common : d.common !== f.common)) return false;
+    if (f.floor && (f.floor === "_none" ? d.floor || d.ho : (d.floor || floorOfHo(d.ho)) !== f.floor)) return false;
     if (f.trade && d.trade !== f.trade) return false;
     if (f.vendorId && (f.vendorId === "_none" ? d.vendorId : d.vendorId !== f.vendorId)) return false;
     if (f.type && d.type !== f.type) return false;
@@ -179,13 +187,13 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.status === "_open" ? !isOpen(d) : f.status && d.status !== f.status) return false;
     if (f.overdue && !isOverdue(d, today)) return false;
     if (text) {
-      const hay = `${d.dong} ${d.ho} ${d.common || ""} ${d.locEtc || ""} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
+      const hay = `${d.dong} ${d.ho} ${d.floor ? floorLabel(d.floor) : ""} ${d.common || ""} ${d.locEtc || ""} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
       if (!hay.includes(text)) return false;
     }
     return true;
   });
 }
-export const filterCount = (f) => ["dong", "ho", "trade", "vendorId", "type", "category", "severity", "status", "overdue", "text"].filter((k) => f[k]).length;
+export const filterCount = (f) => ["dong", "ho", "common", "floor", "trade", "vendorId", "type", "category", "severity", "status", "overdue", "text"].filter((k) => f[k]).length;
 
 export function countBy(list, key) {
   const m = new Map();
@@ -214,7 +222,7 @@ export function shareMessage({ project, vendor, items, appName = "하자싹" }) 
   const head = `[${project?.name || "현장"}] ${vendor ? vendor.name + " " : ""}하자 조치 요청 ${items.length}건`;
   const byLoc = new Map();
   for (const d of [...items].sort(sortDefects)) {
-    const k = [d.dong, d.ho ? d.ho + "호" : floorLabel(d.floor) || d.common].filter(Boolean).join(" ") || "위치 미지정";
+    const k = [d.dong, d.ho ? d.ho + "호" : [floorLabel(d.floor), d.common].filter(Boolean).join(" ")].filter(Boolean).join(" ") || "위치 미지정";
     if (!byLoc.has(k)) byLoc.set(k, []);
     byLoc.get(k).push(d);
   }

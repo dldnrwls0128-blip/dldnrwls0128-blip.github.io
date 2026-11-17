@@ -1,11 +1,12 @@
 /** 범용 엑셀/CSV 가져오기: 열 매핑(자동 추정 + 저장), 외부ID 기준 병합(내 수정 유지) */
-import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong } from "./model.js";
+import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong, DEFAULT_DONG_COMMONS } from "./model.js";
 
 export const FIELDS = [
   { key: "extId", label: "외부 ID(순번·접수번호)", syn: ["순번", "번호", "접수번호", "id", "no", "하자번호", "관리번호"] },
   { key: "dong", label: "동", req: true, syn: ["동", "동명", "동번호", "building"] },
   { key: "ho", label: "호수", syn: ["호", "호수", "세대", "unit"] },
   { key: "floor", label: "층", syn: ["층", "floor"] },
+  { key: "common", label: "공용부(세부위치)", syn: ["공용부", "공용위치", "세부위치", "공용"] },
   { key: "room", label: "실(위치)", syn: ["위치", "실", "실명", "공간", "room"] },
   { key: "part", label: "부위", syn: ["부위", "부위명"] },
   { key: "trade", label: "공종", syn: ["공종", "대공종", "공사종류", "trade"] },
@@ -73,6 +74,16 @@ export function normDongName(v) {
   const m = s.match(/(\d{2,4})/);
   return m ? `${Number(m[1])}동` : s.endsWith("동") ? s : s;
 }
+/** 공용부 낱말 → 표준 세부위치. dong: 동 공용부(동 안), site: 단지 공용 */
+const COMMON_RULES = [
+  [/계단/, "계단실", "dong"], [/복도|세대\s*현관\s*앞|현관\s*앞|홀\s*복도/, "복도/세대현관 앞", "dong"], [/E\/?V|엘리베이터|엘레베이터|승강기|엘베/i, "EV홀", "dong"],
+  [/피트|PIT|덕트\s*실|AD실|PD실/i, "피트(PIT)실", "dong"], [/옥상|지붕|옥탑|RF\b/i, "옥상", "dong"], [/필로티|지하층/, "지하층/필로티", "dong"],
+  [/출입구|로비|공동\s*현관|주\s*현관/, "출입구/로비", "dong"], [/외벽|외부\s*벽|외부\s*도장/, "외벽", "dong"],
+  [/지하\s*주차|주차장/, "지하주차장", "site"], [/조경|화단|놀이터|산책로|수목/, "조경", "site"], [/기계실|전기실|발전기|펌프실|저수조/, "기계/전기실", "site"],
+  [/커뮤니티|부대|경로당|어린이집|관리\s*사무소|관리동|피트니스|독서실/, "부대복리시설", "site"],
+];
+export function detectCommon(text) { const t = String(text || ""); for (const [re, name, kind] of COMMON_RULES) if (re.test(t)) return { name, kind }; return /공용/.test(t) ? { name: "", kind: "dong" } : null; }
+const floorFromText = (t) => { const m = String(t || "").match(/(?:B|지하)\s*(\d)\s*층?|(\d{1,2})\s*(?:층|F\b)/i); return m ? (m[1] ? "B" + m[1] : m[2]) : ""; };
 /** 시트 행을 하자 레코드로 */
 export function rowsToRecords(rows, headerRow, map, { project, defaultCategory = "입주자하자" }) {
   const out = []; const g = (r, k) => (map[k] == null || map[k] === "" ? "" : String(r[map[k]] ?? "").trim());
@@ -82,11 +93,18 @@ export function rowsToRecords(rows, headerRow, map, { project, defaultCategory =
     if (!dongRaw && !content) continue;
     let dong = normDongName(dongRaw);
     const dd = findDong(project, dongNum(dong)); if (dd) dong = dd.name;
-    const ho = normHo(g(r, "ho"));
+    const hoRaw = g(r, "ho"); let ho = normHo(hoRaw); let common = g(r, "common"); let floor = g(r, "floor").replace(/층$/, "");
+    // 호 칸이 비었거나 공용 낱말이면 공용부로: 예) 호="12층 계단실" → 12층 · 계단실, 실="EV홀"(호 없음) → EV홀
+    const hoIsCommon = hoRaw && detectCommon(hoRaw) && !/^\s*\d{3,4}\s*호?\s*$/.test(hoRaw);
+    if (hoIsCommon || (!ho && !common)) {
+      const c = detectCommon(common || hoRaw) || (!ho ? detectCommon(`${g(r, "room")} ${g(r, "part")}`) : null);
+      if (hoIsCommon) { ho = ""; if (!floor) floor = floorFromText(hoRaw); }
+      if (c && !common) { common = c.name || (hoIsCommon ? hoRaw.replace(/\d+\s*층/, "").trim() : ""); if (!common || /^공용$/.test(common)) common = "공용부"; }
+    }
     const created = toDate(g(r, "createdAt"));
     out.push({
-      extId: g(r, "extId"), dong, ho, floor: g(r, "floor").replace(/층$/, "") || floorOfHo(ho),
-      room: g(r, "room"), part: g(r, "part"), trade: g(r, "trade"), subTrade: g(r, "subTrade"), type: g(r, "type"),
+      extId: g(r, "extId"), dong, ho, floor: floor || floorOfHo(ho), common,
+      room: common && g(r, "room") === common ? "" : g(r, "room"), part: g(r, "part"), trade: g(r, "trade"), subTrade: g(r, "subTrade"), type: g(r, "type"),
       content, vendorName: g(r, "vendorName"), status: mapStatus(g(r, "status")),
       createdAt: created ? new Date(created + "T09:00:00").toISOString() : new Date().toISOString(),
       due: toDate(g(r, "due")), category: mapCategory(g(r, "category"), defaultCategory),
@@ -114,7 +132,7 @@ export function mergeRecords({ project, existing, records, vendors, addMissingDo
       vendorId = v.id;
     }
     if (r.dong && !findDong(project, dongNum(r.dong))) newDongs.add(r.dong);
-    const src = { dong: r.dong, ho: r.ho, floor: r.floor, room: r.room, part: r.part, trade: r.trade, subTrade: r.subTrade, type: r.type, content: r.content, category: r.category };
+    const src = { dong: r.dong, ho: r.ho, floor: r.floor, common: r.common || "", room: r.room, part: r.part, trade: r.trade, subTrade: r.subTrade, type: r.type, content: r.content, category: r.category };
     const o = old.get(key(r));
     if (!o) {
       toPut.push({ id: uid("h"), projectId: project.id, extId: r.extId, ...src, severity: "보통", vendorId, status: r.status, due: r.due,
@@ -139,6 +157,14 @@ export function mergeRecords({ project, existing, records, vendors, addMissingDo
       if (dv) { const cells = (dv.floors - dv.unitStart + 1) * (dv.lines - (dv.skipLines ? dv.skipLines.split(",").length : 0)); if (dv.units.length < 0.7 * cells) delete dv.units; }
       project.dongs.push({ id: uid("d"), name, alias: Number.isFinite(num) ? aliasOf(num) : "", floors: 15, lines: 4, basement: 2, unitStart: 1, roof: true, skipLines: "", ...(dv || {}) }); delete project.dongs.at(-1).dropped;
     }
+  }
+  // 가져온 공용부 이름을 현장 목록에 추가(동 있는 건 → 동 공용부, 동 없는 건 → 단지 공용)
+  if (!Array.isArray(project.dongCommons)) project.dongCommons = [...DEFAULT_DONG_COMMONS];
+  if (!Array.isArray(project.commons)) project.commons = [];
+  for (const r of records) {
+    if (!r.common) continue;
+    const arr = r.dong ? project.dongCommons : project.commons;
+    if (!arr.includes(r.common) && !(r.dong ? project.commons : project.dongCommons).includes(r.common)) arr.push(r.common);
   }
   // 동 구조를 실제 데이터(이번 파일 + 이 현장의 기존 하자)에서 찾은 층·세대로 맞춤 → 없는 층/세대(예: 27층 이상, 1층 필로티) 자동 제거
   const fitted = [];
