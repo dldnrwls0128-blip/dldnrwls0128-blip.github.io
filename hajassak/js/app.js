@@ -1,7 +1,7 @@
 /** 하자싹 — 현장 시공불량·하자 관리 (오프라인 PWA) */
 import * as db from "./db.js";
 import * as M from "./model.js";
-import { $, $$, esc, n, toast, busy, initNav, go, replace, back, rerender, navDepth, pushLayer, closeLayer, unwind, openSheet, ask, prompt2, choose, pickFile } from "./ui.js";
+import { $, $$, esc, n, toast, busy, initNav, go, replace, back, rerender, navDepth, navKind, pushLayer, closeLayer, unwind, openSheet, ask, prompt2, choose, pickFile } from "./ui.js";
 import { compressImage, downloadBlob, shareOrDownload, stampBlob } from "./photo.js";
 import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactPickerSupported, contactPickerInfo, pickContacts, canShareFiles } from "./share.js";
 import * as Pro from "./pro.js";
@@ -102,8 +102,29 @@ async function photoOut(ph, d) {
 
 /* ---------- 라우터 ---------- */
 const ROUTES = {};
+/* 1.2.3 보던 자리 유지: 같은 화면 다시 그리기(상태변경·보내기·이관 후)와 뒤로가기는 스크롤 위치를 되살림.
+ * 높이가 바뀌어도 맞도록 ‘화면 맨 위에 보이던 하자 카드’ 기준(없으면 scrollY). 열린 <details>도 유지 */
+const scrollMem = new Map(); let curHash = "";
+function captureView() {
+  const top = (document.querySelector(".app-header")?.getBoundingClientRect().bottom || 0) + 2;
+  let anchor = "", off = 0;
+  for (const el of $$("[data-id]", view())) { const r = el.getBoundingClientRect(); if (r.height && r.bottom > top) { anchor = el.dataset.id; off = r.top; break; } }
+  return { y: window.scrollY, anchor, off, open: $$("details[id]", view()).filter((x) => x.open).map((x) => x.id), limit: S.listLimit };
+}
+function restoreView(m) {
+  for (const id of m.open || []) { const dd = document.getElementById(id); if (dd && dd.tagName === "DETAILS") dd.open = true; }
+  const apply = () => { const el = m.anchor && $(`[data-id="${CSS.escape(m.anchor)}"]`, view()); if (el) window.scrollTo(0, window.scrollY + el.getBoundingClientRect().top - m.off); else window.scrollTo(0, m.y); };
+  apply(); requestAnimationFrame(apply); setTimeout(apply, 120);
+  window.__scrollRestored = (window.__scrollRestored || 0) + 1;
+}
 async function route() {
   const path = (location.hash.split("?")[0] || "#/home").slice(2) || "home";
+  const kind = navKind(); const hash = location.hash;
+  if (curHash && view().childElementCount) scrollMem.set(curHash, captureView());
+  if (scrollMem.size > 40) scrollMem.delete(scrollMem.keys().next().value);
+  const mem = !S.noRestore && (kind === "re" || kind === "pop" || hash === curHash) ? scrollMem.get(hash) : null; S.noRestore = false;
+  if (kind === "pop" && mem?.limit && mem.limit > S.listLimit) S.listLimit = mem.limit; // 목록 ‘더 보기’로 늘린 만큼 유지
+  curHash = hash;
   document.body.classList.remove("printing");
   view().oninput = null;
   if (!LS.get("onboarded", false) && !["onboard", "privacy", "help"].includes(path)) return replace("#/onboard");
@@ -117,7 +138,8 @@ async function route() {
   const fn = ROUTES[path] || ROUTES.home;
   let keep = false;
   try { keep = (await fn(q())) === "keep-scroll"; } catch (e) { console.error(e); view().innerHTML = `<div class="card"><p>화면 오류: ${esc(e.message)}</p></div>`; }
-  if (!keep) window.scrollTo(0, 0);
+  if (keep) return;
+  if (mem && !["new", "edit"].includes(path)) restoreView(mem); else window.scrollTo(0, 0);
 }
 function noProject() {
   return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>첫 현장을 만들어 주세요</h2>
@@ -197,7 +219,7 @@ const selItems = () => S.defects.filter((d) => S.select.has(d.id));
 function selBarHtml({ all = false } = {}) {
   return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자"><span id="selcount"></span>
     ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
-    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
+    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
 }
 /** 체크 상태를 화면(카드·그룹 전체칸·그룹 보내기 버튼·하단 바)에 반영 */
 function syncChecks() {
@@ -224,6 +246,7 @@ function bindSelBar(pool = []) {
     if (!sel.length) return toast("먼저 하자를 체크하세요");
     if (a === "send") return sendChecked(sel);
     if (a === "req") return requestImageFor(sel);
+    if (a === "move") return transferSheet(sel);
     const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((x) => ({ label: x, value: x })));
     if (!st) return;
     for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
@@ -346,9 +369,9 @@ ROUTES.list = async () => {
     ${list.length > S.listLimit ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
-  $("#lsearch").addEventListener("submit", (e) => { e.preventDefault(); S.filter = { ...S.filter, text: $("#ls").value.trim() }; LS.set("filter", S.filter); rerender(); });
+  $("#lsearch").addEventListener("submit", (e) => { e.preventDefault(); S.filter = { ...S.filter, text: $("#ls").value.trim() }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
   $("#btn-filter").addEventListener("click", () => filterSheet());
-  $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { if (b.dataset.rm === "_all") S.filter = {}; else delete S.filter[b.dataset.rm]; LS.set("filter", S.filter); rerender(); }));
+  $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { if (b.dataset.rm === "_all") S.filter = {}; else delete S.filter[b.dataset.rm]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
   $("#btn-more")?.addEventListener("click", () => { S.listLimit += 120; rerender(); });
   $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
   $("#btn-sendlist").addEventListener("click", () => sendSheet({ items: list }));
@@ -381,7 +404,7 @@ function filterSheet() {
   $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => {
     const nf = {};
     if (b.dataset.a === "apply") $$("[data-k]", s.el).forEach((i) => { const v = i.type === "checkbox" ? i.checked : i.value.trim(); if (v) nf[i.dataset.k] = v; });
-    S.filter = nf; LS.set("filter", nf); S.listLimit = 60; await s.close(); rerender();
+    S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; await s.close(); rerender();
   }));
 }
 
@@ -394,6 +417,10 @@ ROUTES.unit = async (qq) => {
   const onlyOpen = LS.get("unitOpen", true);
   const list = onlyOpen ? all.filter(M.isOpen) : all;
   const groups = M.groupByTradeVendor(list, vName);
+  // 제자리 다시 그리기·뒤로가기 때는 묶음 순서를 그대로(상태가 바뀌어 미조치 수가 달라져도 묶음이 자리를 바꾸지 않게)
+  const gKey = (g) => `${g.trade}|${g.vendorId}`; S.grpOrder ||= new Map(); const prevOrder = S.grpOrder.get(location.hash);
+  if (prevOrder && (navKind() === "re" || navKind() === "pop")) { const ix = (g) => { const i = prevOrder.indexOf(gKey(g)); return i < 0 ? 1e6 : i; }; groups.sort((a, b) => ix(a) - ix(b)); }
+  S.grpOrder.set(location.hash, [...groups.map(gKey), ...(prevOrder || []).filter((k) => !groups.some((g) => gKey(g) === k))]);
   view().innerHTML = `
     <div class="unit-hd"><div><b>${n(all.filter(M.isOpen).length)}</b> 미조치 / ${n(all.length)}건 · 기한초과 ${all.filter((d) => M.isOverdue(d)).length}</div>
       <div class="chips"><button type="button" class="chip ${onlyOpen ? "on" : ""}" data-o="1">미조치</button><button type="button" class="chip ${!onlyOpen ? "on" : ""}" data-o="0">전체</button></div></div>
@@ -583,8 +610,9 @@ async function addListItem(k) {
   const p = P(); const arr = listArr(p, k); const nm = LIST_NAME[k];
   const r = await formSheet({ title: `${nm} 직접 추가`, ok: "추가하고 선택", hint: "현장 설정에 저장돼서 다음부터 바로 고를 수 있어요.",
     fields: [{ k: "v", label: `${nm} 이름`, placeholder: { commons: "예: 경비실", dongCommons: "예: 쓰레기 분리수거장", rooms: "예: 알파룸", parts: "예: 걸레받이", types: "예: 결로", categories: "예: 준공검사", trades: "예: 방음" }[k] }],
-    validate: ({ v }) => (!v ? "이름을 입력하세요" : v.length > 20 ? "20자 이내로 입력하세요" : M.hasSame(arr, v) ? `이미 있는 ${nm}이에요: ${arr.find((x) => M.sameKey(x) === M.sameKey(v))}` : "") });
+    validate: ({ v }) => (!v ? "이름을 입력하세요" : v.length > 20 ? "20자 이내로 입력하세요" : k !== "trades" && M.hasSame(arr, v) ? `이미 있는 ${nm}이에요: ${arr.find((x) => M.sameKey(x) === M.sameKey(v))}` : "") });
   if (!r) return null;
+  if (k === "trades") { const ex = p.trades.find((t) => M.sameTrade(t.name, r.v)); if (ex) { toast(`‘${r.v}’은(는) ‘${ex.name}’과 같은 공종이라 ‘${ex.name}’을(를) 골랐어요`, { ms: 4000 }); return ex.name; } }
   if (k === "trades") p.trades.push({ name: r.v, subs: [] }); else p[k].push(r.v);
   await saveProject(p); toast(`${nm} ‘${r.v}’ 추가했어요`); return r.v;
 }
@@ -646,7 +674,7 @@ function renderForm() {
   const p = P(); const dr = S.draft; const editing = !!dr._editId;
   setTab(editing ? null : "new"); setHeader(editing ? "하자 수정" : "하자 등록", { backBtn: navDepth() > 1 || editing });
   const trade = p.trades.find((t) => t.name === dr.trade);
-  const sug = M.suggestVendor(S.vendors, dr.trade, p.id);
+  const cands = M.vendorsForTrade(S.vendors, dr.trade, p.id, PD()); const sug = cands[0] || null;
   if (dr.vendorAuto && sug) dr.vendorId = sug.id;
   const loc = M.locText(dr);
   const plans = matchPlans(dr);
@@ -659,7 +687,8 @@ function renderForm() {
     ${plans.length ? `<button type="button" class="btn btn-sm" id="btn-pin">🗺 도면에 위치 표시${dr.pin ? " ✓" : ""}</button>` : ""}</section>
     <section class="fsec" id="fs-ph"><h3 class="fsec-h"><span class="n">2</span>사진 <small>조치 전 ${prevPhotos.before ? `· 저장됨 ${prevPhotos.before}장` : ""}</small></h3>
       <div class="photos" id="ph-list">${dr.photos.map((ph, i) => `<div class="ph"><img src="${ph.url}" alt="사진 ${i + 1}"><button type="button" class="ph-x" data-rmph="${i}" aria-label="사진 삭제">✕</button></div>`).join("")}
-        <button type="button" class="ph-add" id="btn-cam">📷<span>촬영</span></button><button type="button" class="ph-add" id="btn-alb">🖼<span>앨범</span></button></div></section>
+        <button type="button" class="ph-add cam" id="btn-cam" aria-label="카메라로 바로 촬영">📷<span>${dr.photos.length ? "한 장 더" : "촬영"}</span></button></div>
+      <div class="ph-more"><button type="button" class="btn btn-sm" id="btn-alb">🖼 앨범</button><small class="help">📷를 누르면 카메라가 바로 열려요</small></div></section>
     <section class="fsec" id="fs-what"><h3 class="fsec-h"><span class="n">3</span>공종·내용</h3>
     <div class="fld"><span>구분</span>${chipRow("category", M.catsOf(p), dr.category, { allowAdd: true, ua: (o) => isUserItem("categories", o) })}</div>
     <div class="fld"><span>공종 <em>*</em></span>${chipRow("trade", p.trades.map((t) => t.name), dr.trade, { allowAdd: true, ua: (o) => isUserItem("trades", o) })}</div>
@@ -671,6 +700,7 @@ function renderForm() {
     <section class="fsec" id="fs-save"><h3 class="fsec-h"><span class="n">4</span>업체·기한 · 저장</h3>
     <label class="fld"><span>담당업체 ${sug && dr.vendorId === sug.id ? '<small class="sugg">공종 추천</small>' : ""}</span>
       <select class="inp" id="f-vendor"><option value="">업체 미지정</option>${S.vendors.map((v) => `<option value="${v.id}" ${v.id === dr.vendorId ? "selected" : ""}>${esc(v.name)}${(v.trades || []).length ? " · " + esc(v.trades.slice(0, 2).join(",")) : ""}</option>`).join("")}<option value="_new">＋ 새 업체 등록…</option></select></label>
+    ${cands.length > 1 ? `<div class="chips vsw" id="v-switch"><small class="help">‘${esc(dr.trade)}’ 다른 업체:</small>${cands.filter((v) => v.id !== dr.vendorId).map((v) => `<button type="button" class="chip" data-vsw="${v.id}">${esc(v.name)}</button>`).join("")}</div>` : ""}
     <label class="fld"><span>조치기한</span><div class="row"><input class="inp" type="date" id="f-due" value="${esc(dr.due || "")}">
       ${[3, 7, 14].map((d) => `<button type="button" class="chip" data-due="${d}">+${d}일</button>`).join("")}</div></label></section>
     <div class="form-act">${editing ? `<button type="button" class="btn btn-lg" id="btn-cancel">취소</button>` : `<button type="button" class="btn btn-lg" id="btn-save-next">저장 후 계속</button>`}
@@ -718,10 +748,12 @@ function renderForm() {
       catch (e) { toast(e.message); }
     }
     busy(false); renderForm();
+    if (capture) toast(`사진 ${dr.photos.length}장`, { ms: 6000, action: "📷 한 장 더", onAction: () => addPh(true) });
   };
   $("#btn-cam").addEventListener("click", () => addPh(true));
   $("#btn-alb").addEventListener("click", () => addPh(false));
   $$("[data-rmph]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.photos.splice(+b.dataset.rmph, 1); renderForm(); }));
+  $$("[data-vsw]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.vendorId = b.dataset.vsw; dr.vendorAuto = false; renderForm(); }));
   $("#f-vendor").addEventListener("change", async (e) => {
     sync();
     if (e.target.value === "_new") { const v = await quickVendor(dr.trade); if (v) { dr.vendorId = v.id; dr.vendorAuto = false; } renderForm(); return; }
@@ -737,7 +769,9 @@ function renderForm() {
     const now = new Date().toISOString();
     const fields = ["dong", "floor", "ho", "common", "room", "part", "locEtc", "trade", "subTrade", "type", "category", "severity", "content", "vendorId", "due", "pin"];
     let d;
-    if (editing) { d = S.defects.find((x) => x.id === dr._editId); for (const k of fields) d[k] = dr[k]; d.history = [...(d.history || []), { at: now, status: d.status, note: "내용 수정" }]; }
+    if (editing) { d = S.defects.find((x) => x.id === dr._editId); const v0 = d.vendorId || ""; for (const k of fields) d[k] = dr[k]; const moved = (dr.vendorId || "") !== v0;
+      d.history = [...(d.history || []), { at: now, status: d.status, note: moved ? `내용 수정 · 업체 변경: ${v0 ? vLabel(v0) : "업체 미지정"} → ${d.vendorId ? vLabel(d.vendorId) : "업체 미지정"}` : "내용 수정", ...(moved ? { kind: "transfer" } : {}), ...(Sync.attached() && Sync.signedIn() ? { by: Sync.actorName() } : {}) }];
+      if (moved && M.hasSteps(d)) { const own = d.steps.find((x) => x.own); if (own) own.vendorId = d.vendorId || ""; } }
     else { d = { id: M.uid("h"), projectId: p.id, createdAt: now, status: "접수", memo: "", origin: "local", history: [{ at: now, status: "접수", note: "등록" }] }; for (const k of fields) d[k] = dr[k]; d.content = d.content.trim(); }
     await saveDefect(d);
     for (const ph of dr.photos) {
@@ -1025,7 +1059,7 @@ ROUTES.item = async (qq) => {
   view().innerHTML = `
     <section class="card item-hd ${od ? "overdue" : ""}"><div class="row">${pill(d.status)}${sevBadge(d)}<span class="tbadge">${esc(d.category || "")}</span>${od ? '<span class="od">기한초과</span>' : ""}</div>
       <h2>${esc(M.tradeText(d))}${d.type ? ` · ${esc(d.type)}` : ""}</h2><p class="content">${esc(d.content || "")}</p>
-      <dl class="kv"><dt>위치</dt><dd>${esc(M.locText(d))}</dd><dt>업체</dt><dd>${v ? `<a href="#/vendor?id=${v.id}">${esc(v.name)}</a>` : "미지정"}</dd>
+      <dl class="kv"><dt>위치</dt><dd>${esc(M.locText(d))}</dd><dt>업체</dt><dd class="dd-v">${v ? `<a href="#/vendor?id=${v.id}">${esc(v.name)}</a>` : "미지정"}<button type="button" class="btn btn-sm btn-ghost dd-act" id="btn-move-kv" aria-label="업체 이관">🔁 이관</button></dd>
         <dt>조치기한</dt><dd>${esc(d.due || "-")}</dd>${d.reqAt ? `<dt>요청서</dt><dd id="req-at">${esc(d.reqNo || "")} · ${fmtDT(d.reqAt)} 발송</dd>` : ""}<dt>등록</dt><dd>${fmtDT(d.createdAt)}${d.createdBy ? ` · <b class="who">${esc(d.createdBy)}</b>` : ""}${d.extId ? ` · 외부ID ${esc(d.extId)}` : ""}</dd>
          ${d.updatedBy ? `<dt>최근 수정</dt><dd id="who-upd"><b class="who">${esc(d.updatedBy)}</b> · ${fmtDT(d.updatedByAt || d.updatedAt)}</dd>` : ""}</dl></section>
     <ol class="flow" aria-label="상태 바로 바꾸기">${["접수", "업체전달", "조치중", "조치완료", "확인완료", ...(["재접수", "조치완료", "확인완료"].includes(d.status) ? ["재접수"] : [])].map((s2, i) => `<li class="${s2 === d.status ? "on" : i < idx && d.status !== "재접수" ? "done" : ""}${s2 === "재접수" ? " re" : ""}"><button type="button" class="flow-b" data-flow="${s2}" ${s2 === d.status ? 'aria-current="step"' : ""} aria-label="상태를 ${s2}(으)로">${s2}</button></li>`).join("")}</ol>
@@ -1034,15 +1068,17 @@ ROUTES.item = async (qq) => {
       <button type="button" class="btn btn-lg" id="btn-stany">상태 선택</button></div>
     ${v ? `<div class="contact-row">${(() => { const vp = M.vendorPhones(v); if (!vp.length) return ""; if (vp.length === 1) { const ph = vp[0].phone; return `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`; } return `<button type="button" class="btn" id="btn-dtel">📞 전화 ▾</button><button type="button" class="btn" id="btn-dsms">💬 문자 ▾</button>`; })()}
       <button type="button" class="btn btn-kakao" id="btn-kakao">카톡으로 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 보내기</button>`}
-    <button type="button" class="btn btn-block btn-req" id="btn-reqimg">🧾 요청서 만들기 <small>이미지 → 카톡</small></button>
+    <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-reqimg">🧾 요청서 만들기</button><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button></div>
     ${stepsHtml(d, photos)}
     <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
-      <button type="button" class="ph-add" data-add="before">📷<span>추가</span></button></div></section>
+      <button type="button" class="ph-add cam" data-add="before" aria-label="조치 전 사진 바로 촬영">📷<span>${before.length ? "한 장 더" : "촬영"}</span></button></div>
+      <div class="ph-more"><button type="button" class="btn btn-sm" data-alb="before">🖼 앨범</button></div></section>
     <section class="card"><h3>조치 후 사진 <small>${after.length}</small></h3><div class="photos">${after.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 후"></button>`).join("")}
-      <button type="button" class="ph-add" data-add="after">📷<span>추가</span></button></div></section>
+      <button type="button" class="ph-add cam" data-add="after" aria-label="조치 후 사진 바로 촬영">📷<span>${after.length ? "한 장 더" : "촬영"}</span></button></div>
+      <div class="ph-more"><button type="button" class="btn btn-sm" data-alb="after">🖼 앨범</button></div></section>
     ${plan ? `<section class="card"><h3>도면 위치 <small>${esc(plan.name)}</small></h3><div class="plan mini"><img src="${(() => { const u = URL.createObjectURL(plan.blob); urls.push(u); return u; })()}" alt="도면"><i class="pin" style="left:${d.pin.x * 100}%;top:${d.pin.y * 100}%"></i></div></section>` : ""}
     <section class="card"><h3>메모</h3><textarea class="inp" id="memo" rows="2" placeholder="현장 메모(업체 전달 문구에는 포함되지 않음)">${esc(d.memo || "")}</textarea></section>
-    <section class="card"><h3>처리 이력</h3><ol class="hist">${[...(d.history || [])].reverse().map((h) => `<li><time>${fmtDT(h.at)}</time> ${pill(h.status)} ${esc(h.note || "")}${h.by ? ` <small class="who">· ${esc(h.by)}</small>` : ""}</li>`).join("")}</ol></section>
+    <section class="card"><h3>처리 이력</h3><ol class="hist">${[...(d.history || [])].reverse().map((h) => `<li${h.kind === "transfer" ? ' class="h-move"' : ""}><time>${fmtDT(h.at)}</time> ${h.kind === "transfer" ? `<span class="pill pmove">🔁 이관</span>${h.from && h.from !== h.status ? " " + pill(h.status) : ""}` : pill(h.status)} ${esc(h.kind === "transfer" ? String(h.note || "").replace(/^업체 이관: /, "") : h.note || "")}${h.by ? ` <small class="who">· ${esc(h.by)}</small>` : ""}</li>`).join("")}</ol></section>
     <button type="button" class="btn btn-danger btn-block" id="btn-del">이 하자 삭제</button>`;
   ROUTES._cleanup = () => urls.forEach((u) => URL.revokeObjectURL(u));
   $("#btn-edit").addEventListener("click", () => { startDraft({}, d); go(`#/edit?id=${d.id}`); });
@@ -1051,13 +1087,18 @@ ROUTES.item = async (qq) => {
   $("#btn-stany").addEventListener("click", async () => { const st = await choose("상태 선택", M.STATUSES.map((s2) => ({ label: s2, value: s2, sub: s2 === d.status ? "현재" : "" }))); if (st) changeStatus(d, st); });
   $("#btn-kakao").addEventListener("click", () => sendSheet({ items: [d], vendor: v }));
   $("#btn-reqimg").addEventListener("click", () => requestImageFor([d], v || null));
+  $("#btn-move").addEventListener("click", () => transferSheet([d])); $("#btn-move-kv").addEventListener("click", () => transferSheet([d]));
   $("[data-sms]", view())?.addEventListener("click", () => setTimeout(() => markSent([d], "문자"), 300));
   $("#btn-dtel", view())?.addEventListener("click", async () => { const ph = await pickPhone(V(d.vendorId), "전화"); if (ph) location.href = M.telHref(ph); });
   $("#btn-dsms", view())?.addEventListener("click", async () => { const ph = await pickPhone(V(d.vendorId), "문자"); if (!ph) return; location.href = M.smsHref(ph, M.shareMessage({ project: P(), vendor: V(d.vendorId), items: [d] })); setTimeout(() => markSent([d], "문자"), 300); });
-  $$("[data-add]", view()).forEach((b) => b.addEventListener("click", async () => {
-    const files = await pickFile("image/*", { capture: false, multiple: true }); if (!files.length) return;
-    busy(true, "사진 저장 중…"); await addPhotos(d.id, files, b.dataset.add, stampOf(d)); busy(false); rerender();
-  }));
+  // 1.2.3 📷 = 카메라 바로(capture) · 🖼 앨범 = 여러 장 고르기 · 찍은 뒤 ‘한 장 더’
+  const addDPh = async (kind, capture) => {
+    const files = await pickFile("image/*", { capture, multiple: !capture }); if (!files.length) return;
+    busy(true, "사진 저장 중…"); await addPhotos(d.id, files, kind, stampOf(d)); busy(false); rerender();
+    if (capture) { const m = photoCount(d); toast(`${kind === "after" ? "조치 후" : "조치 전"} 사진 ${kind === "after" ? m.after : m.before}장`, { ms: 6000, action: "📷 한 장 더", onAction: () => addDPh(kind, true) }); }
+  };
+  $$("[data-add]", view()).forEach((b) => b.addEventListener("click", () => addDPh(b.dataset.add, true)));
+  $$("[data-alb]", view()).forEach((b) => b.addEventListener("click", () => addDPh(b.dataset.alb, false)));
   $$("[data-ph]", view()).forEach((b) => b.addEventListener("click", () => photoViewer(photos, b.dataset.ph, () => rerender(), d)));
   $("#memo").addEventListener("change", async (e) => { d.memo = e.target.value; await saveDefect(d); toast("메모 저장"); });
   bindSteps(d);
@@ -1102,7 +1143,7 @@ function stepsHtml(d, photos) {
     ${has ? `<ol class="stp-list">${d.steps.map((st, i) => `<li class="stp ${i === cur ? "cur" : ""} ${st.status === "완료" ? "done" : ""}" data-si="${i}">
       <span class="stp-n">${i + 1}</span><span class="stp-t"><b>${esc(st.trade)}</b><small>${esc(st.vendorId ? vLabel(st.vendorId) : "업체 미지정")}${st.due ? ` · 기한 ${shortDate(st.due)}` : ""}${i === cur ? " · 지금 차례" : ""}</small></span>
       <button type="button" class="pill ${M.STEP_CLS[st.status] || ""} stp-st" data-sst="${i}" aria-label="${i + 1}단계 상태 ${st.status} 바꾸기">${st.status}</button>
-      <button type="button" class="btn btn-sm stp-ph" data-sph="${i}" aria-label="${i + 1}단계 사진">📷${pc(st) || ""}</button>
+      <button type="button" class="btn btn-sm stp-ph" data-sph="${i}" aria-label="${i + 1}단계 사진 바로 촬영">📷${pc(st) || ""}</button><button type="button" class="btn btn-sm stp-ph" data-salb="${i}" aria-label="${i + 1}단계 사진 앨범">🖼</button>
       <button type="button" class="btn btn-sm stp-ed" data-sed="${i}" aria-label="${i + 1}단계 수정">✎</button></li>`).join("")}</ol>`
       : '<p class="help">예: 도배가 찢겨 석고보드를 갈고 다시 도배 → 석고보드 교체 → 도배. 모든 단계가 끝나야 조치완료가 돼요.</p>'}
     <div class="row"><button type="button" class="btn" id="btn-addstep">＋ 후속 공정 추가</button><button type="button" class="btn" id="btn-tpl">📋 템플릿</button></div></section>`;
@@ -1114,19 +1155,19 @@ function bindSteps(d) {
     const i = Number(b.dataset.sst); const st = d.steps[i];
     const v = await choose(`${i + 1}단계 · ${st.trade}`, M.STEP_STATUSES.map((x) => ({ label: x, value: x, sub: x === st.status ? "현재" : "" }))); if (v) setStepStatus(d, i, v);
   }));
-  $$("[data-sph]", view()).forEach((b) => b.addEventListener("click", async () => {
-    const st = d.steps[Number(b.dataset.sph)]; const files = await pickFile("image/*", { capture: false, multiple: true }); if (!files.length) return;
+  $$("[data-sph],[data-salb]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const cap = b.dataset.sph != null; const st = d.steps[Number(cap ? b.dataset.sph : b.dataset.salb)]; const files = await pickFile("image/*", { capture: cap, multiple: !cap }); if (!files.length) return;
     busy(true, "사진 저장 중…"); await addPhotos(d.id, files, "after", { ...stampOf(d), work: `${st.trade} · ${stampOf(d).work}` }, { stepId: st.id }); busy(false); rerender();
   }));
   $$("[data-sed]", view()).forEach((b) => b.addEventListener("click", () => editStep(d, Number(b.dataset.sed))));
 }
 /** 업체 고르기(그 공종을 맡은 업체 먼저) */
 async function pickVendorFor(trade, cur = "") {
-  const t = String(trade || ""); const fit = (v) => (v.trades || []).some((x) => x && (t.includes(x) || x.includes(t)));
+  const t = String(trade || ""); const fit = (v) => (v.trades || []).some((x) => x && (M.sameTrade(x, t) || t.includes(x) || x.includes(t)));
   const vs = [...S.vendors].sort((a, b) => (fit(b) ? 1 : 0) - (fit(a) ? 1 : 0) || a.name.localeCompare(b.name, "ko"));
   return choose(`‘${trade}’ 업체`, [...vs.map((v) => ({ label: v.name, value: v.id, sub: [fit(v) ? "이 공종 담당" : "", v.id === cur ? "현재" : ""].filter(Boolean).join(" · ") })), { label: "업체 미지정", value: "_none", icon: "—" }]);
 }
-const autoVendor = (trade) => { const t = String(trade || ""); return S.vendors.find((v) => (v.trades || []).some((x) => x && (t.includes(x) || x.includes(t))))?.id || ""; };
+const autoVendor = (trade) => { const t = String(trade || ""); return M.suggestVendor(S.vendors, t, P()?.id, PD())?.id || S.vendors.find((v) => (v.trades || []).some((x) => x && (t.includes(x) || x.includes(t))))?.id || ""; };
 async function addStep(d) {
   const r = await formSheet({ title: "후속 공정 추가", ok: "다음: 업체 고르기", hint: "앞 공정이 끝나면 이 공정 업체에 보내라고 알려 드려요.",
     fields: [{ k: "trade", label: "공종", placeholder: "예: 석고보드 교체, 도배, 미장" }, { k: "due", label: "기한 (선택)", type: "date" }], validate: ({ trade }) => (!trade ? "공종을 입력하세요" : trade.length > 20 ? "20자 이내로" : "") });
@@ -1375,6 +1416,159 @@ async function printRequest({ vendor, items }) {
   S.lastPrintHtml = root.innerHTML.length;
   if (window.__noPrint) return; // 테스트용
   setTimeout(() => window.print(), 50);
+}
+
+/* ---------- 1.2.3 공종 이름 합치기: ‘도장’·‘도장공사’ 같은 이름을 하나로(현장 목록·하자·공정 단계·업체 담당 공종·템플릿·필터) ---------- */
+function tradeUsage(p = P()) {
+  const cnt = new Map(); const add = (t, k = 1) => { if (t) cnt.set(t, (cnt.get(t) || 0) + k); };
+  for (const d of S.defects) if (d.projectId === p.id) { add(d.trade); for (const st of d.steps || []) if (st.trade !== d.trade) add(st.trade); }
+  for (const v of S.vendors) for (const t of v.trades || []) add(t, 0.5);
+  for (const t of p.trades || []) add(t.name, 0);
+  return cnt;
+}
+function tradeDupesNow(p = P()) { const cnt = tradeUsage(p); return M.tradeDuplicates([...cnt.keys()], (n0) => cnt.get(n0) || 0).map((g) => ({ ...g, counts: Object.fromEntries(g.names.map((n0) => [n0, Math.round(cnt.get(n0) || 0)])) })); }
+/** map: Map(원래 이름 → 합칠 이름). 바뀐 하자·업체만 저장(동기화는 평소 수정과 같이 올라감) */
+async function mergeTrades(map) {
+  const p = P(); const to = (t) => (t && map.has(t) ? map.get(t) : t); const res = { defects: 0, vendors: 0, steps: 0, pairs: [...map.entries()].filter(([a, b]) => a !== b) };
+  if (!res.pairs.length) return res;
+  const nt = [];
+  for (const t of p.trades || []) { const name = to(t.name); const ex = nt.find((x) => x.name === name); if (ex) { for (const s2 of t.subs || []) if (!ex.subs.includes(s2)) ex.subs.push(s2); } else nt.push({ ...t, name, subs: [...(t.subs || [])] }); }
+  for (const v of new Set(map.values())) if (v && !nt.some((x) => x.name === v)) nt.push({ name: v, subs: [] });
+  p.trades = nt;
+  if (Array.isArray(p.stepTemplates)) p.stepTemplates = p.stepTemplates.map((tp) => ({ ...tp, steps: tp.steps.map(to) }));
+  await saveProject(p);
+  for (const d of S.defects) {
+    if (d.projectId !== p.id) continue; let ch = false;
+    if (map.has(d.trade) && to(d.trade) !== d.trade) { d.trade = to(d.trade); ch = true; }
+    for (const st of d.steps || []) if (map.has(st.trade) && to(st.trade) !== st.trade) { st.trade = to(st.trade); ch = true; res.steps++; }
+    if (ch) { await saveDefect(d); res.defects++; }
+  }
+  for (const v of S.vendors) {
+    const nv = [...new Set((v.trades || []).map(to))];
+    if (nv.length !== (v.trades || []).length || nv.some((x, i) => x !== v.trades[i])) { v.trades = nv; await saveVendor(v); res.vendors++; }
+  }
+  if (S.filter.trade && map.has(S.filter.trade)) { S.filter.trade = to(S.filter.trade); LS.set("filter", S.filter); }
+  db.setVendorNames?.(S.vendors);
+  return res;
+}
+const mergeText = (r) => `${r.pairs.map(([a, b]) => `${a} → ${b}`).join(", ")} (하자 ${r.defects}건${r.vendors ? ` · 업체 ${r.vendors}곳` : ""})`;
+/** 한 번만 자동 정리(현장마다). 보기 전용·동기화 중이면 나중에 */
+async function autoMergeTrades(tries = 0) {
+  const p = P(); if (!p || isViewerNow()) return;
+  const key = `tradeMerged:${p.id}`; if (LS.get(key, "")) return;
+  if (Sync.attached() && Sync.status().key !== "ok") { if (tries < 6) setTimeout(() => autoMergeTrades(tries + 1), 10000); return; }
+  const dupes = tradeDupesNow(p);
+  const map = new Map(); for (const g of dupes) for (const n0 of g.names) if (n0 !== g.to) map.set(n0, g.to);
+  if (map.size) {
+    try { const r = await mergeTrades(map); LS.set("tradeMergeLog", [...LS.get("tradeMergeLog", []), { at: new Date().toISOString(), pid: p.id, auto: true, pairs: r.pairs, defects: r.defects, vendors: r.vendors }].slice(-20)); window.__tradeMerge = r;
+      rerender(); toast(`같은 공종 이름을 합쳤어요: ${mergeText(r)}`, { ms: 9000, action: "자세히", onAction: () => tradeMergeSheet() }); }
+    catch (e) { console.warn(e); return; }
+  }
+  LS.set(key, APP_VERSION);
+}
+async function tradeMergeSheet() {
+  const p = P(); if (!p) return;
+  const ro = isViewerNow(); const cnt = tradeUsage(p); const all = [...cnt.keys()].sort((a, b) => a.localeCompare(b, "ko")); const dupes = tradeDupesNow(p);
+  const log = LS.get("tradeMergeLog", []).filter((x) => x.pid === p.id).slice(-5).reverse();
+  const n0 = (t) => Math.round(cnt.get(t) || 0);
+  const s = openSheet({ title: "공종 이름 정리/합치기", full: true, cls: "tm-sheet",
+    html: `${ro ? '<p class="warnbox help">보기 전용 멤버라 바꿀 수 없어요.</p>' : ""}
+      <p class="help">띄어쓰기나 끝의 ‘공사’만 다른 이름(예: 도장 · 도장공사)은 같은 공종이에요. 합치면 이 현장의 하자·공정 단계·업체 담당 공종·필터가 모두 한 이름으로 바뀌고, 팀 현장이면 팀원에게도 동기화돼요.</p>
+      <h4 class="sec">비슷한 이름 ${dupes.length}묶음</h4>
+      <div id="tm-dupes">${dupes.map((g, i) => `<div class="tm-row" data-g="${i}"><div class="tm-names">${g.names.map((x) => `<span class="chip">${esc(x)} <small>${g.counts[x]}건</small></span>`).join("")}</div>
+        <div class="row"><label class="fld"><span>대표 이름</span><select class="inp" data-to="${i}">${g.names.map((x) => `<option ${x === g.to ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label><button type="button" class="btn btn-primary" data-merge="${i}" ${ro ? "disabled" : ""}>합치기</button></div></div>`).join("") || '<p class="help" id="tm-none">겹치는 공종 이름이 없어요 👍</p>'}</div>
+      <h4 class="sec">직접 합치기</h4>
+      <p class="help small">이름이 많이 달라도 같은 공종이면(예: 실리콘 → 코킹공사) 직접 골라 합쳐요.</p>
+      <div class="grid2"><label class="fld"><span>이 공종을</span><select class="inp" id="tm-from"><option value="">선택…</option>${all.map((x) => `<option value="${esc(x)}">${esc(x)} (${n0(x)})</option>`).join("")}</select></label>
+        <label class="fld"><span>여기로 합치기</span><select class="inp" id="tm-into"><option value="">선택…</option>${all.map((x) => `<option value="${esc(x)}">${esc(x)} (${n0(x)})</option>`).join("")}</select></label></div>
+      <button type="button" class="btn btn-block" id="tm-manual" ${ro ? "disabled" : ""}>합치기</button>
+      ${log.length ? `<h4 class="sec">최근 합친 기록</h4><ul class="help small" id="tm-log">${log.map((x) => `<li>${fmtDT(x.at)} ${x.auto ? "(자동)" : ""} ${esc(x.pairs.map(([a, b]) => `${a} → ${b}`).join(", "))} · 하자 ${x.defects}건${x.vendors ? ` · 업체 ${x.vendors}곳` : ""}</li>`).join("")}</ul>` : ""}` });
+  const run = async (map) => {
+    busy(true, "공종 합치는 중…"); let r;
+    try { r = await mergeTrades(map); } catch (e) { busy(false); return toast(e.readOnly ? e.message : "합치지 못했어요: " + e.message); }
+    busy(false); LS.set("tradeMergeLog", [...LS.get("tradeMergeLog", []), { at: new Date().toISOString(), pid: p.id, pairs: r.pairs, defects: r.defects, vendors: r.vendors }].slice(-20)); window.__tradeMerge = r;
+    await s.close(); rerender(); toast(`합쳤어요: ${mergeText(r)}`, { ms: 7000 }); tradeMergeSheet();
+  };
+  $$("[data-merge]", s.el).forEach((b) => b.addEventListener("click", async () => { const g = dupes[+b.dataset.merge]; const to = $(`[data-to="${b.dataset.merge}"]`, s.el).value;
+    const from = g.names.filter((x) => x !== to); if (!(await ask(`${from.join(", ")} → ‘${to}’로 합칠까요?\n하자 ${from.reduce((a, x) => a + g.counts[x], 0)}건의 공종 이름이 바뀌어요.`, { ok: "합치기" }))) return;
+    run(new Map(from.map((x) => [x, to]))); }));
+  $("#tm-manual", s.el).addEventListener("click", async () => { const a = $("#tm-from", s.el).value, b = $("#tm-into", s.el).value;
+    if (!a || !b) return toast("합칠 두 공종을 고르세요"); if (a === b) return toast("서로 다른 공종을 고르세요");
+    if (!(await ask(`‘${a}’ → ‘${b}’로 합칠까요? 하자 ${n0(a)}건의 공종 이름이 바뀌어요.`, { ok: "합치기" }))) return; run(new Map([[a, b]])); });
+  return s;
+}
+
+/* ---------- 1.2.3 업체 이관: 다른 업체로 넘기기(공종 변경·사유·접수로 되돌리기) + 이력 ---------- */
+const isViewerNow = () => !!(Sync.attached() && Sync.state.ws?.role === "viewer");
+async function transferSheet(items) {
+  items = items.filter(Boolean); if (!items.length) return toast("이관할 하자를 고르세요");
+  if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+  const p = P(); const curV = [...new Set(items.map((d) => d.vendorId || ""))];
+  const curTrades = [...new Set(items.map((d) => d.trade).filter(Boolean))];
+  const resetDef = items.some((d) => d.status === "업체전달" || d.status === "조치중");
+  let to = null, q = "", tf = "", tradeSel = "", subSel = "", tradeTouched = false;
+  const tradeNames = () => [...new Set([...p.trades.map((t) => t.name), ...items.map((d) => d.trade).filter(Boolean)])];
+  const fitTrade = (v) => { if (!v) return ""; const names = tradeNames(); const vts = [...(v.trades || [])].sort((a, b) => (b === tf) - (a === tf)); for (const vt of vts) { const hit = names.find((n0) => n0 === vt) || names.find((n0) => vt && (n0.includes(vt) || vt.includes(n0))); if (hit) return hit; } return ""; };
+  const vTrades = [...new Set(S.vendors.flatMap((v) => v.trades || []).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko"));
+  const vlist = () => S.vendors.filter((v) => (!q || M.sameKey(v.name + (v.trades || []).join("") + M.contactsText(v)).includes(M.sameKey(q))) && (!tf || (v.trades || []).includes(tf)))
+    .sort((a, b) => (curV.includes(a.id) - curV.includes(b.id)) || a.name.localeCompare(b.name, "ko"));
+  const optHtml = () => vlist().map((v) => `<button type="button" class="tv-opt ${to === v.id ? "on" : ""}" data-v="${v.id}" ${curV.length === 1 && curV[0] === v.id ? "disabled" : ""} aria-pressed="${to === v.id}"><b>${esc(v.name)}</b><small>${esc([(v.trades || []).join(", ") || "공종 미지정", M.contactSummary ? M.contactSummary(v) : ""].filter(Boolean).join(" · "))}${curV.length === 1 && curV[0] === v.id ? " · 현재 업체" : ""}</small></button>`).join("") || '<p class="help">맞는 업체가 없어요. 아래 ‘＋ 새 업체 등록’</p>';
+  const subsOf = (t) => p.trades.find((x) => x.name === t)?.subs || [];
+  const s = openSheet({ title: `🔁 업체 이관 · ${items.length}건`, full: true, cls: "tv-sheet",
+    html: `<p class="tv-cur">지금: <b>${esc(curV.map((id) => (id ? vLabel(id) : "업체 미지정")).join(", "))}</b>${curTrades.length ? ` · ${esc(curTrades.join(", "))}` : ""}${items.length === 1 ? ` · ${esc(M.locText(items[0]))}` : ""}</p>
+      <h4 class="sec">1. 넘길 업체</h4>
+      <input class="inp" id="tv-q" type="search" placeholder="업체·공종·담당자 검색" aria-label="업체 검색">
+      <div class="chips scroll" id="tv-tf"><button type="button" class="chip on" data-tf="">전체</button>${vTrades.map((t) => `<button type="button" class="chip" data-tf="${esc(t)}">${esc(t)}</button>`).join("")}</div>
+      <div class="tv-list" id="tv-list">${optHtml()}</div>
+      <button type="button" class="btn btn-block" id="tv-new">＋ 새 업체 등록</button>
+      <h4 class="sec">2. 공종 (선택)</h4>
+      <div class="grid2"><label class="fld"><span>공종 <small id="tv-sugg" class="sugg" hidden>업체 공종 추천</small></span><select class="inp" id="tv-trade"><option value="">그대로${curTrades.length === 1 ? ` (${esc(curTrades[0])})` : ""}</option>${tradeNames().map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("")}</select></label>
+        <label class="fld"><span>세부공종</span><select class="inp" id="tv-sub" disabled><option value="">-</option></select></label></div>
+      <label class="fld"><span>3. 사유 (선택)</span><input class="inp" id="tv-reason" maxlength="80" placeholder="예: 코킹 하자라 코킹업체로"></label>
+      <label class="check"><input type="checkbox" id="tv-reset" ${resetDef ? "checked" : ""}> 상태를 ‘접수’로 되돌리기</label><p class="help small tv-hint">새 업체에 다시 보내야 할 때 켜 두세요(업체전달·조치중이던 건은 기본으로 켜져 있어요).</p>`,
+    footer: `<button type="button" class="btn" data-close>취소</button><button type="button" class="btn btn-primary" id="tv-ok" disabled>업체를 고르세요</button>` });
+  const el = s.el; const okB = $("#tv-ok", el);
+  const paintSub = () => { const t = $("#tv-trade", el).value; const subs = subsOf(t); const sb = $("#tv-sub", el); sb.innerHTML = `<option value="">${t ? "없음" : "-"}</option>${subs.map((x) => `<option ${x === subSel ? "selected" : ""}>${esc(x)}</option>`).join("")}`; sb.disabled = !t || !subs.length; };
+  const paint = () => {
+    $("#tv-list", el).innerHTML = optHtml();
+    const v = V(to); okB.disabled = !v; okB.textContent = v ? `${v.name}(으)로 이관` : "업체를 고르세요";
+  };
+  const choose2 = (id) => {
+    to = id; const v = V(id); const ft = fitTrade(v);
+    if (!tradeTouched) { tradeSel = ft && !curTrades.every((t) => t === ft) ? ft : ""; $("#tv-trade", el).value = tradeSel; subSel = ""; paintSub(); }
+    $("#tv-sugg", el).hidden = !(tradeSel && tradeSel === ft); paint();
+  };
+  $("#tv-q", el).addEventListener("input", (e) => { q = e.target.value.trim(); paint(); });
+  $("#tv-tf", el).addEventListener("click", (e) => { const b = e.target.closest("[data-tf]"); if (!b) return; tf = b.dataset.tf; $$("[data-tf]", el).forEach((x) => x.classList.toggle("on", x === b)); paint(); });
+  $("#tv-list", el).addEventListener("click", (e) => { const b = e.target.closest("[data-v]"); if (b && !b.disabled) choose2(b.dataset.v); });
+  $("#tv-trade", el).addEventListener("change", (e) => { tradeTouched = true; tradeSel = e.target.value; subSel = ""; $("#tv-sugg", el).hidden = true; paintSub(); });
+  $("#tv-sub", el).addEventListener("change", (e) => { subSel = e.target.value; });
+  $("#tv-new", el).addEventListener("click", async () => { const v = await quickVendor(tf || tradeSel || ""); if (v) { q = ""; $("#tv-q", el).value = ""; tf = ""; choose2(v.id); } });
+  okB.addEventListener("click", async () => {
+    const v = V(to); if (!v) return;
+    const reason = $("#tv-reason", el).value.trim(); const reset = $("#tv-reset", el).checked; const nt = $("#tv-trade", el).value; const ns = $("#tv-sub", el).value;
+    const who = Sync.attached() && Sync.signedIn?.() ? "" : S.issuer || "";
+    const prev = items.map((d) => JSON.parse(JSON.stringify(d)));
+    busy(true, "이관 중…");
+    try {
+      for (const d of items) {
+        const fromN = d.vendorId ? vLabel(d.vendorId) : "업체 미지정"; const fromT = M.tradeText(d);
+        d.vendorId = v.id;
+        if (nt) { d.trade = nt; d.subTrade = ns; }
+        if (M.hasSteps(d)) { const own = d.steps.find((x) => x.own) || d.steps[Math.max(0, M.curStepIdx(d))]; if (own) { own.vendorId = v.id; if (nt) own.trade = nt; if (reset && own.status !== "완료") own.status = "대기"; } }
+        const toT = M.tradeText(d);
+        const note = `업체 이관: ${fromN} → ${v.name}${nt && toT !== fromT ? ` · 공종 ${fromT || "-"} → ${toT}` : ""}${reason ? ` · 사유: ${reason}` : ""}`;
+        setStatus(d, reset ? "접수" : d.status, note);
+        const h = d.history[d.history.length - 1]; h.kind = "transfer"; h.fromVendor = fromN; h.toVendor = v.name; if (reason) h.reason = reason; if (!h.by && who) h.by = who;
+        if (reset) { delete d.reqAt; delete d.reqNo; }
+        d.transferAt = h.at;
+        await saveDefect(d);
+      }
+    } catch (e) { busy(false); if (e.readOnly) return toast(e.message); throw e; }
+    busy(false); await s.close(); S.select.clear(); rerender();
+    toast(`${items.length}건을 ${v.name}(으)로 이관했어요${reset ? " · ‘접수’로 되돌림" : ""}`, { ms: 7000, action: "되돌리기", onAction: async () => { for (const o of prev) { const d = S.defects.find((x) => x.id === o.id); if (!d) continue; Object.keys(d).forEach((k) => delete d[k]); Object.assign(d, o, { history: [...o.history, { at: new Date().toISOString(), status: o.status, note: "업체 이관 취소" }] }); await saveDefect(d); } rerender(); } });
+  });
+  return s;
 }
 
 /* ---------- 1.2.2 요청서 이미지: 만들기 → 미리보기 → 카톡 공유(이미지 첨부)·이미지 복사·저장·문자 (자동 발송 없음) ---------- */
@@ -1654,7 +1848,8 @@ ROUTES.settings = async () => {
     <h3 class="sec">사진·표시</h3><div class="slist">
       ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
       ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
-      ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}</div>
+      ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}
+      ${item("", "🧹", "공종 이름 정리/합치기", (() => { const n1 = P() ? tradeDupesNow().length : 0; return n1 ? `비슷한 이름 ${n1}묶음 — 합치기` : "도장 · 도장공사 같은 이름을 하나로"; })(), 'data-a="trade-merge" id="si-trademerge"')}</div>
     <h3 class="sec">동기화·팀</h3><div class="slist">
       ${item("#/sync", "👥", "동기화·팀 현장", Sync.attached() ? `${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""}${Sync.state.wsDoc ? ` · 팀원 ${Object.keys(Sync.state.wsDoc.members || {}).length}/${Sync.memberCap(Sync.state.wsDoc)} (${Sync.planOf(Sync.state.wsDoc) === "pro" ? "유료" : "무료"})` : ""} · ${esc(Sync.status().label)}` : `꺼짐 · 팀원·PC·폰이 같은 현장을 실시간으로 공유 (무료: 현장당 ${Sync.FREE_MEMBERS}명)`, 'id="si-sync"')}</div>
     <h3 class="sec">데이터</h3><div class="slist">
@@ -1681,6 +1876,7 @@ ROUTES.settings = async () => {
     if (a === "export") return exportSheet(PD(), "전체");
     if (a === "backup") return doBackup();
     if (a === "persist") { const ok = await navigator.storage?.persist?.(); toast(ok ? "저장공간 보호가 켜졌어요" : "브라우저가 거절했어요. 앱을 홈 화면에 설치하면 보통 허용돼요"); return rerender(); }
+    if (a === "trade-merge") return tradeMergeSheet();
     if (a === "issuer") { const v = await prompt2("요청자 이름(요청서 표시)", S.issuer); if (v !== null) { S.issuer = v; LS.set("issuer", v); rerender(); } return; }
     if (a === "wipe") {
       if (!(await ask(Sync.attached() ? "이 팀 현장의 모든 현장·하자·사진·업체를 삭제할까요?\n팀 현장이라 클라우드와 모든 팀원 기기에서도 지워져요. 이 기기만 비우려면 동기화·팀에서 ‘이 기기 전용으로 전환’하세요.\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요." : "이 기기의 모든 현장·하자·사진·업체를 삭제할까요?\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요.", { ok: "모두 삭제", danger: true }))) return;
@@ -2461,6 +2657,7 @@ async function main() {
   initNav(() => { ROUTES._cleanup?.(); ROUTES._cleanup = null; route(); });
   initUpdates();
   initSync();
+  setTimeout(() => autoMergeTrades().catch((e) => console.warn(e)), 1500);
   window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync }; // 테스트·디버그용
 }
 main();

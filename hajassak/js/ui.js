@@ -18,8 +18,10 @@ export function toast(msg, { ms = 2400, action, onAction } = {}) {
 export function busy(on, text = "처리 중…") { $("#busy").hidden = !on; $("#busy-text").textContent = text; }
 
 /* ---------- 히스토리 내비게이션 ---------- */
-const N = { depth: 0, layers: [], onRoute: null, exitArm: 0, waiters: [] };
+const N = { depth: 0, layers: [], onRoute: null, exitArm: 0, waiters: [], kind: "push" };
 export const navDepth = () => N.depth;
+/** 이번 화면 그리기가 어떤 이동인지: push(새 화면) · replace · re(제자리 다시 그리기) · pop(뒤로/앞으로) — 스크롤 위치 복원에 씀 */
+export const navKind = () => N.kind;
 export function initNav(onRoute) {
   N.onRoute = onRoute;
   const start = location.hash && location.hash !== "#" ? location.hash : "#/home";
@@ -28,6 +30,7 @@ export function initNav(onRoute) {
   N.depth = 1;
   window.addEventListener("popstate", (e) => {
     const st = e.state || { d: 0, guard: true };
+    N.kind = "pop";
     let popped = false;
     while (N.layers.length && N.layers[N.layers.length - 1].d > st.d) { const l = N.layers.pop(); try { l.undo(); } catch (err) { console.warn(err); } popped = true; }
     N.depth = st.d;
@@ -48,11 +51,11 @@ export function initNav(onRoute) {
 }
 function render() { N.lastRoute = location.hash; N.onRoute?.(); }
 export function go(hash) {
-  if (location.hash === hash) return render();
-  N.depth++; history.pushState({ d: N.depth }, "", hash); render();
+  if (location.hash === hash) { N.kind = "re"; return render(); }
+  N.kind = "push"; N.depth++; history.pushState({ d: N.depth }, "", hash); render();
 }
-export function replace(hash) { history.replaceState({ d: N.depth }, "", hash); render(); }
-export function rerender() { render(); }
+export function replace(hash) { N.kind = location.hash === hash ? "re" : "replace"; history.replaceState({ d: N.depth }, "", hash); render(); }
+export function rerender() { N.kind = "re"; render(); }
 export function back() {
   if (N.depth > 1) history.back();
   else replace("#/home");

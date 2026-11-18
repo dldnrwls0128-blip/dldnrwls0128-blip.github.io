@@ -179,7 +179,7 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.ho && d.ho !== f.ho) return false;
     if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || d.common : d.common !== f.common)) return false;
     if (f.floor && (f.floor === "_none" ? d.floor || d.ho : (d.floor || floorOfHo(d.ho)) !== f.floor)) return false;
-    if (f.trade && d.trade !== f.trade) return false;
+    if (f.trade && d.trade !== f.trade && !sameTrade(d.trade, f.trade)) return false;
     if (f.turn && !isTurnOf(d, f.turn)) return false;
     if (f.chain && !hasSteps(d)) return false;
     if (f.mine && !isMyTurn(d)) return false;
@@ -252,10 +252,32 @@ export const normPhone = (s) => {
   return String(s || "").trim();
 };
 /** 공종으로 담당업체 추천 */
-export function suggestVendor(vendors, trade, projectId) {
-  if (!trade) return null;
-  const c = vendors.filter((v) => (v.trades || []).includes(trade));
-  return c.find((v) => !v.projectIds?.length || v.projectIds.includes(projectId)) || c[0] || null;
+/* 1.2.3 공종 이름 같은 것으로 보기: ‘도장’ = ‘도장공사’ = ‘도장 공사’ (띄어쓰기·끝의 ‘공사’ 무시) */
+export const tradeKey = (s) => sameKey(s).replace(/[·・\-_/()（）]/g, "").replace(/(공사|공종)$/, "");
+export const sameTrade = (a, b) => !!a && !!b && tradeKey(a) === tradeKey(b) && tradeKey(a) !== "";
+/** 공종을 맡은 업체들 — 그 공종에 최근에 쓴 업체 먼저, 현장 지정 업체 우선 */
+export function vendorsForTrade(vendors, trade, projectId, defects = []) {
+  if (!trade) return [];
+  const c = vendors.filter((v) => (v.trades || []).some((t) => sameTrade(t, trade)));
+  if (c.length < 2) return c;
+  const last = new Map();
+  for (const d of defects) if (d.vendorId && sameTrade(d.trade, trade)) { const t = d.updatedAt || d.createdAt || ""; if (!last.has(d.vendorId) || last.get(d.vendorId) < t) last.set(d.vendorId, t); }
+  const inP = (v) => !v.projectIds?.length || v.projectIds.includes(projectId);
+  return [...c].sort((a, b) => (inP(b) - inP(a)) || String(last.get(b.id) || "").localeCompare(String(last.get(a.id) || "")) || a.name.localeCompare(b.name, "ko"));
+}
+export function suggestVendor(vendors, trade, projectId, defects = []) {
+  return vendorsForTrade(vendors, trade, projectId, defects)[0] || null;
+}
+/** 대표 이름 고르기: 이미 쓰는 ‘○○공사’ 꼴 중 가장 많이 쓴 것, 없으면 가장 많이 쓴 것 */
+export function canonicalTrade(variants, count = () => 0) {
+  const by = (a, b) => count(b) - count(a) || a.length - b.length || a.localeCompare(b, "ko");
+  const gong = variants.filter((v) => /공사$/.test(v.replace(/\s+/g, ""))).sort(by);
+  return (gong[0] || [...variants].sort(by)[0] || "").replace(/\s+/g, " ").trim();
+}
+/** 같은 공종으로 보이는 이름 묶음 [{ key, names:[...], to }] */
+export function tradeDuplicates(names, count = () => 0) {
+  const m = new Map(); for (const n0 of names) { if (!n0) continue; const k = tradeKey(n0); if (!k) continue; if (!m.has(k)) m.set(k, new Set()); m.get(k).add(n0); }
+  return [...m.entries()].filter(([, v]) => v.size > 1).map(([key, v]) => { const names2 = [...v]; return { key, names: names2, to: canonicalTrade(names2, count) }; });
 }
 /** 도면 매칭: plan.dongs(빈 배열=전체), plan.floors "3-25, B1" */
 export function planMatches(plan, dong, floor) {

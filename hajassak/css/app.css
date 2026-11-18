@@ -413,3 +413,27 @@ b.ui{display:inline-block;padding:0 6px;border-radius:6px;background:rgba(15,118
 .req-prev{display:flex;flex-direction:column;gap:12px;margin:8px 0 14px;max-height:62vh;overflow:auto;padding:8px;background:var(--chip);border-radius:14px}
 .req-prev figure{margin:0;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
 .req-prev img{width:100%;height:auto;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,.18);background:#fff}
+/* 1.2.3 업체 이관 */
+.btn-row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.btn-row2 .btn{margin:0}
+.dd-v{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+.dd-act{min-height:40px;padding:0 10px}
+.tv-cur{background:var(--chip);border-radius:12px;padding:10px 12px;margin:0 0 6px;line-height:1.45}
+.tv-list{display:flex;flex-direction:column;gap:6px;max-height:38vh;overflow:auto;margin:8px 0}
+.tv-opt{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;min-height:52px;padding:8px 12px;border:1.5px solid var(--line);border-radius:12px;background:var(--card);color:inherit;font:inherit;cursor:pointer}
+.tv-opt small{color:var(--sub)}
+.tv-opt.on{border-color:var(--brand,#0f766e);box-shadow:0 0 0 2px var(--brand,#0f766e) inset;background:color-mix(in srgb,var(--brand,#0f766e) 8%,var(--card))}
+.tv-opt[disabled]{opacity:.5;cursor:default}
+.tv-sheet .sec{margin:14px 0 4px}
+.pill.pmove{background:#ede9fe;color:#5b21b6}
+.hist li.h-move{font-weight:600}
+.selbar{overflow-x:auto;scrollbar-width:none}
+.selbar .btn{flex:none}
+.selbar span{min-width:max-content}
+/* 1.2.3 사진: 📷 바로 촬영(크게) + 🖼 앨범(작게) */
+.ph-add.cam{border:2px solid var(--brand);background:color-mix(in srgb,var(--brand) 8%,transparent);font-size:26px}
+.ph-add.cam span{color:var(--brand);font-weight:700}
+.ph-more{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.ph-more .btn{min-height:40px}
+body:has(.form .form-act) #toast{bottom:calc(136px + var(--safe-b))}
+.tm-row{padding:10px 12px;border:1px solid var(--line);border-radius:12px;margin:8px 0}.tm-names{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}.tm-row .row{align-items:flex-end;gap:8px}.tm-row .fld{flex:1;margin:0}.vsw{align-items:center;margin-top:6px}
