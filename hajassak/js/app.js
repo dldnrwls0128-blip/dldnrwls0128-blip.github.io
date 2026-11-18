@@ -109,7 +109,7 @@ function captureView() {
   const top = (document.querySelector(".app-header")?.getBoundingClientRect().bottom || 0) + 2;
   let anchor = "", off = 0;
   for (const el of $$("[data-id]", view())) { if (el.closest("details:not([open])")) continue; const r = el.getBoundingClientRect(); if (r.height && r.bottom > top) { anchor = el.dataset.id; off = r.top; break; } }
-  return { y: window.scrollY, anchor, off, open: $$("details[id]", view()).filter((x) => x.open).map((x) => x.id), limit: S.listLimit };
+  return { y: window.scrollY, anchor, off, open: $$("details[id]:not(.vgrp)", view()).filter((x) => x.open).map((x) => x.id), limit: S.listLimit };
 }
 function restoreView(m) {
   for (const id of m.open || []) { const dd = document.getElementById(id); if (dd && dd.tagName === "DETAILS") dd.open = true; }
@@ -216,16 +216,18 @@ function bindCards(root = view()) {
 }
 /* ---------- 체크 선택(세대·목록·업체 화면 공통) ---------- */
 const selItems = () => S.defects.filter((d) => S.select.has(d.id));
-function selBarHtml({ all = false } = {}) {
+function selBarHtml({ all = false, core = false } = {}) {
   return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자"><span id="selcount"></span>
     ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
-    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
+    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
 }
 /** 체크 상태를 화면(카드·그룹 전체칸·그룹 보내기 버튼·하단 바)에 반영 */
+/** 묶음 ‘전체’ 체크 대상: data-gall="@묶음키"면 목록 묶음 지도에서(큰 목록에서 HTML이 커지지 않게), 아니면 쉼표 목록 */
+const gallIds = (g) => (g.dataset.gall.startsWith("@") ? S.lgItems?.get(g.dataset.gall.slice(1)) || [] : g.dataset.gall.split(","));
 function syncChecks() {
   for (const cb of $$(".dsel", view())) { const on = S.select.has(cb.dataset.sel); cb.checked = on; cb.closest(".dcard")?.classList.toggle("checked", on); }
   for (const g of $$("[data-gall]", view())) {
-    const ids = g.dataset.gall.split(","); const k = ids.filter((x) => S.select.has(x)).length;
+    const ids = gallIds(g); let k = 0; for (const x of ids) if (S.select.has(x)) k++;
     g.checked = k > 0 && k === ids.length; g.indeterminate = k > 0 && k < ids.length;
     const btn = $(`[data-g="${g.dataset.gi}"]`, view()); if (btn) btn.textContent = k ? `선택 ${k}건 보내기` : "보내기";
   }
@@ -247,11 +249,25 @@ function bindSelBar(pool = []) {
     if (a === "send") return sendChecked(sel);
     if (a === "req") return requestImageFor(sel);
     if (a === "move") return transferSheet(sel);
+    if (a === "core") return coreAssign(sel);
     const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((x) => ({ label: x, value: x })));
     if (!st) return;
     for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
     toast(`${sel.length}건을 ‘${st}’(으)로 바꿨어요`); S.select.clear(); rerender();
   }));
+}
+/** 1.2.7 코어 지정: 동 공용부(호 없는) 하자에 코어를 한꺼번에(호 있는 하자는 라인으로 자동이라 건너뜀) */
+async function coreAssign(items) {
+  if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+  const p = P(); const tg = items.filter((d) => { const lp = M.locParts(d); return lp.dong && lp.line == null; });
+  if (!tg.length) return toast("코어는 동 공용부(방풍실·계단실 등 호 없는) 하자에 지정해요 — 호가 있으면 라인으로 자동");
+  const dongs = [...new Set(tg.map((d) => M.locParts(d).dong))]; const cs = [...new Set(dongs.flatMap((dn) => M.coresOf(p, dn, PD())))].sort((a, b) => a - b);
+  const skip = items.length - tg.length;
+  const v = await choose(`동 공용부 ${tg.length}건 코어 지정${skip ? ` (호 있는 ${skip}건은 자동이라 건너뜀)` : ""}`, [...cs.map((c) => ({ icon: "🏢", label: `${c}코어`, sub: dongs.slice(0, 4).join(", ") + (dongs.length > 4 ? ` 외 ${dongs.length - 4}` : ""), value: String(c) })), { icon: "↺", label: "코어 미지정으로", value: "_none" }]);
+  if (v == null) return;
+  const now = new Date().toISOString(); const c = v === "_none" ? "" : Number(v);
+  for (const d of tg) { if ((Number(d.core) || "") === c) continue; d.core = c; d.history = [...(d.history || []), { at: now, status: d.status, note: c ? `코어 지정: ${c}코어` : "코어 지정 해제", ...(Sync.attached() && Sync.signedIn() ? { by: Sync.actorName() } : {}) }]; await saveDefect(d); }
+  S.locIdx = null; toast(c ? `${tg.length}건을 ${c}코어로 지정했어요` : `${tg.length}건 코어를 지웠어요`); S.select.clear(); rerender();
 }
 /** 체크한 건 보내기: 업체가 여럿이면 어느 업체에 보낼지 고르고, 보낸 업체 건은 체크 해제(나머지는 남겨 차례로 보내기) */
 async function sendChecked(sel) {
@@ -364,6 +380,7 @@ function listGroupsHtml(list, grp, sorted = false) {
   const keyOf = grp === "type" ? (d) => (d.type ? M.typeKey(d.type) : "")
     : grp === "core" ? (d) => M.coreKey(P(), d)
     : grp === "tv" ? (d) => `${d.trade ? M.tradeKey(d.trade) : ""}|${d.vendorId || ""}`
+    : grp === "vendor" ? (d) => d.vendorId || "_none"
     : (d) => M.locParts(d).dong || (d.common ? "공용:" + d.common : d.locEtc ? "기타" : "");
   const m = new Map();
   for (const d of list) { const k = keyOf(d); if (!m.has(k)) m.set(k, []); m.get(k).push(d); }
@@ -371,6 +388,7 @@ function listGroupsHtml(list, grp, sorted = false) {
     if (grp === "type") return k ? M.typeCounts(items)[0].name : "유형 없음";
     if (grp === "tv") { const d = items[0]; return `${d.trade || "공종 미지정"} · ${vName(d) || "업체 미지정"}`; }
     if (grp === "core") return M.coreLabel(k);
+    if (grp === "vendor") return k === "_none" ? "업체 미지정" : vName(items[0]) || vLabel(k);
     return !k ? "위치 미지정" : k.startsWith("공용:") ? k.slice(3) : k;
   };
   const okey = `lg:${grp}:${sorted ? LS.get("listSort", {}).mode || "auto" : ""}`; S.grpOrder ||= new Map(); const prev = S.grpOrder.get(okey) || [];
@@ -379,11 +397,66 @@ function listGroupsHtml(list, grp, sorted = false) {
   if (navKind() === "re" || navKind() === "pop") keys = [...prev.filter((k) => m.has(k)), ...keys.filter((k) => !prev.includes(k))];
   S.grpOrder.set(okey, keys);
   const closed = new Set(LS.get("listGrpClosed", [])); let left = S.listLimit;
-  return keys.map((k, gi) => {
-    const items = m.get(k); const shown = items.slice(0, Math.max(0, left)); left -= shown.length; const gk = `${grp}:${k}`; const lb = label(k, items);
-    return `<details class="lgrp" id="lg-${grp}-${gi}" data-gk="${esc(gk)}" ${closed.has(gk) ? "" : "open"}><summary class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="${items.map((d) => d.id).join(",")}" aria-label="${esc(lb)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(lb)}</b> <span class="help">${n(items.length)}건 · 미조치 ${n(items.filter(M.isOpen).length)}</span></div></summary>
+  /* 1.2.7 업체별: 펼치고 접기(이번 실행 동안 기억). 묶음이 많으면(6개 넘게) 처음엔 접힘. 접힌 묶음은 카드를 그리지 않아 큰 목록도 빠름 */
+  const sess = grp === "vendor"; S.vgOpen ||= new Map(); const defOpen = keys.length <= 6;
+  const isOpen = (gk) => (sess ? (S.vgOpen.has(gk) ? S.vgOpen.get(gk) : defOpen) : !closed.has(gk));
+  S.lgItems = new Map();
+  const bar = sess ? `<div class="lg-bar" id="lg-bar"><span class="help">업체 ${n(keys.length)}곳</span><span class="sp"></span><button type="button" class="btn btn-sm" id="lg-openall">모두 펼치기</button><button type="button" class="btn btn-sm" id="lg-closeall">모두 접기</button></div>` : "";
+  return bar + keys.map((k, gi) => {
+    const items = m.get(k); const gk = `${grp}:${k}`; const op = isOpen(gk); const shown = op ? items.slice(0, Math.max(0, left)) : []; if (op) left -= shown.length; const lb = label(k, items);
+    S.lgItems.set(gk, items.map((d) => d.id)); const openN = items.filter(M.isOpen).length;
+    if (sess) return `<details class="lgrp vgrp" id="lg-${grp}-${gi}" data-gk="${esc(gk)}" ${op ? "open" : ""}><summary class="grp-hd"><label class="gchk" title="이 업체 전체 선택"><input type="checkbox" data-gall="@${esc(gk)}" aria-label="${esc(lb)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(lb)}</b> <span class="help">${n(items.length)}건 · 미조치 <b class="${openN ? "warn-t" : ""}">${n(openN)}</b></span></div></summary>
+      ${shown.map((d) => defectCard(d, { sel: true })).join("")}${op && shown.length < items.length ? `<p class="help small lg-more">+${n(items.length - shown.length)}건은 아래 ‘더 보기’</p>` : ""}</details>`;
+    return `<details class="lgrp" id="lg-${grp}-${gi}" data-gk="${esc(gk)}" ${closed.has(gk) ? "" : "open"}><summary class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="@${esc(gk)}" aria-label="${esc(lb)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(lb)}</b> <span class="help">${n(items.length)}건 · 미조치 ${n(items.filter(M.isOpen).length)}</span></div></summary>
       ${shown.map((d) => defectCard(d, { sel: true })).join("")}${shown.length < items.length ? `<p class="help small lg-more">+${n(items.length - shown.length)}건은 아래 ‘더 보기’</p>` : ""}</details>`;
   }).join("");
+}
+/** 1.2.7 위치 칸 글자·값: v1 = 위치(d:동 / _none / c:단지 공용 공간), v2 = 세부 위치(f:층 / h:층|호 / c:동 공용부 / r:세부실) */
+function locLabels(f) {
+  const dongs = M.fArr(f.dong), floors = M.fArr(f.floor); const com = f.common && f.common !== "_any" && f.common !== "_bare" ? f.common : "";
+  let v1 = "", l1 = "전체 위치", v2 = "", l2 = "전체", room3 = false, cs3 = false, v3 = "", l3 = "전체";
+  const cores = M.fArr(f.core);
+  if (dongs.length > 1) { v1 = "_multi"; l1 = `동 ${dongs.length}곳`; }
+  else if (dongs[0] === "_none") { if (com) { v1 = "c:" + com; l1 = com; if (f.room) { v2 = "r:" + f.room; l2 = f.room; } } else { v1 = "_none"; l1 = "단지 공용"; } }
+  else if (dongs[0] && cores.length === 1 && (cores[0] === "_none" || cores[0].startsWith(dongs[0] + "|"))) { v1 = "d:" + dongs[0]; l1 = dongs[0];
+    /* 1.2.7 코어를 골랐으면 [세부 위치]=코어, 셋째 칸 = 그 코어의 층·호·공용부 */
+    v2 = cores[0] === "_none" ? "k:_none" : "k:" + cores[0].split("|")[1]; l2 = cores[0] === "_none" ? "코어 미지정" : `${cores[0].split("|")[1]}코어`; cs3 = true;
+    if (f.ho) { v3 = `h:${floors[0] || M.floorOfHo(f.ho)}|${f.ho}`; l3 = `${f.ho}호`; room3 = true; }
+    else if (floors.length === 1) { v3 = "f:" + floors[0]; l3 = `${M.floorLabel(floors[0])} 전체`; room3 = true; }
+    else if (com) { v3 = "c:" + com; l3 = com; room3 = true; } }
+  else if (dongs[0]) { v1 = "d:" + dongs[0]; l1 = dongs[0];
+    if (f.ho) { v2 = `h:${floors[0] || M.floorOfHo(f.ho)}|${f.ho}`; l2 = `${f.ho}호`; room3 = true; }
+    else if (floors.length === 1) { v2 = "f:" + floors[0]; l2 = `${M.floorLabel(floors[0])} 전체`; room3 = true; }
+    else if (floors.length > 1) { v2 = "_multi"; l2 = `층 ${floors.length}개`; }
+    else if (com) { v2 = "c:" + com; l2 = com; room3 = true; } }
+  else if (com) { v1 = "c:" + com; l1 = com; }
+  else if (f.ho) { l1 = `${f.ho}호(모든 동)`; v1 = "_ho"; }
+  if (f.room && !room3 && !v2.startsWith("r:")) { room3 = true; }
+  return { v1, l1, v2, l2, room3, cs3, v3, l3 };
+}
+/** 1.2.7 펼침 목록(검색 가능): PC는 버튼 아래, 폰은 아래에서 올라옴. opts: [{v,label,n,sub}|{group}] */
+function ddPick(btn, { title, opts, value, onPick, hint = "" }) {
+  document.querySelector(".dd-pop")?.__close?.();
+  const wide = window.innerWidth >= 700; const many = opts.filter((o) => !o.group).length > 10;
+  const el = document.createElement("div"); el.className = "dd-pop" + (wide ? " wide" : " dd-sheet"); el.setAttribute("role", "dialog"); el.setAttribute("aria-label", title);
+  el.innerHTML = `${wide ? "" : '<div class="dd-dim"></div>'}<div class="dd-box"><div class="dd-hd"><b>${esc(title)}</b><button type="button" class="dd-x" aria-label="닫기">✕</button></div>
+    ${many ? `<input class="inp dd-q" type="search" placeholder="찾기 (예: 802, 휀룸)" aria-label="${esc(title)} 찾기">` : ""}
+    <div class="dd-list" role="listbox">${opts.map((o) => (o.group ? `<div class="dd-grp">${esc(o.group)}</div>` : `<button type="button" class="dd-opt ${o.v === value ? "on" : ""}" role="option" aria-selected="${o.v === value}" data-v="${esc(o.v)}"><span>${esc(o.label)}${o.sub ? ` <small class="help">${esc(o.sub)}</small>` : ""}</span><small class="fn">${n(o.n || 0)}</small></button>`)).join("")}</div>
+    ${hint ? `<p class="help small dd-hint">${esc(hint)}</p>` : ""}</div>`;
+  document.body.appendChild(el);
+  if (wide) { const r = btn.getBoundingClientRect(); const box = $(".dd-box", el); const w = Math.max(r.width, 280); box.style.width = w + "px"; box.style.left = Math.min(r.left, window.innerWidth - w - 8) + "px"; box.style.top = r.bottom + 4 + "px"; box.style.maxHeight = Math.max(240, window.innerHeight - r.bottom - 16) + "px"; }
+  const close = () => { el.remove(); document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", esc2, true); btn.focus?.(); };
+  const outside = (e) => { if (!$(".dd-box", el).contains(e.target) && !btn.contains(e.target)) close(); };
+  const esc2 = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
+  el.__close = close; setTimeout(() => document.addEventListener("pointerdown", outside, true), 0); document.addEventListener("keydown", esc2, true);
+  $(".dd-x", el).addEventListener("click", close); $(".dd-dim", el)?.addEventListener("click", close);
+  $$(".dd-opt", el).forEach((b) => b.addEventListener("click", () => { close(); onPick(b.dataset.v); }));
+  const q = $(".dd-q", el); if (q) { if (wide) q.focus();
+    q.addEventListener("input", () => { const t = M.sameKey(q.value); let lastG = null, shownInG = 0;
+      const items = [...$(".dd-list", el).children]; for (const c of items) { if (c.classList.contains("dd-grp")) { if (lastG) lastG.hidden = !shownInG; lastG = c; shownInG = 0; continue; } const ok = !t || M.sameKey(c.textContent).includes(t) || !c.dataset.v; c.hidden = !ok; if (ok) shownInG++; }
+      if (lastG) lastG.hidden = !shownInG; }); }
+  $(".dd-opt.on", el)?.scrollIntoView({ block: "nearest" });
+  window.__ddOpen = title; return el;
 }
 /** 1.2.6 위치 검색 색인(현장·건수 바뀔 때만 다시 만듦) */
 function locIndex() {
@@ -403,32 +476,68 @@ ROUTES.list = async () => {
   /* 1.2.4 유형 칩(건수: 유형 조건만 뺀 목록 기준) + 묶어 보기 */
   const tcs = M.typeCounts(M.applyFilter(all, { ...f, type: [] }, { vendorName: vName })); const fTypes = M.fArr(f.type);
   const tOn = (t) => fTypes.some((v) => (t.key ? M.sameType(v, t.name) || v === t.name : v === "_none"));
-  const typeChips = tcs.length > 1 || fTypes.length ? `<div class="chips scroll ty-chips" id="ty-chips" role="group" aria-label="하자 유형"><button type="button" class="chip ${fTypes.length ? "" : "on"}" data-ty="">유형 전체 <small>${n(tcs.reduce((a, t) => a + t.n, 0))}</small></button>${tcs.map((t) => `<button type="button" class="chip ${tOn(t) ? "on" : ""}" data-ty="${t.key ? esc(t.name) : "_none"}">${t.key ? esc(t.name) : "유형 없음"} <small>${n(t.n)}</small></button>`).join("")}</div>` : "";
+  const typeLabel = !fTypes.length ? "유형 전체" : fTypes.length > 1 ? `유형 ${fTypes.length}개` : fTypes[0] === "_none" ? "유형 없음" : (tcs.find((t) => t.key && M.sameType(t.name, fTypes[0]))?.name || fTypes[0]);
   const chips = activeChips(f);
   /* 1.2.6 위치 바로 고르기 */
   const fNoLoc = Object.fromEntries(Object.entries(f).filter(([k]) => !M.LOC_KEYS.includes(k)));
-  const lv = M.locLevel(M.applyFilter(all, fNoLoc, { vendorName: vName }), f); const hasLoc = lv.crumbs.length > 1;
+  /* 1.2.7 코어별로 볼 때: 코어 안 정한 동 공용부(방풍실·계단실 등) 바로 지정 */
+  const coreFix = grp === "core" || srt.mode === "core" ? list.filter((d) => { const lp = M.locParts(d); return lp.dong && lp.line == null && !lp.core; }) : [];
+  const lb = locLabels(f); const locBase = () => M.applyFilter(all, fNoLoc, { vendorName: vName });
   view().innerHTML = `
     <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="검색 · 312-802 · 지하주차장 휀룸" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
       <button type="button" class="btn" id="btn-filter">필터${M.filterCount(f) ? ` <b class="badge">${M.filterCount(f)}</b>` : ""}</button></form>
     <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
-    <div class="loc-pick" id="loc-pick"><div class="loc-crumbs" aria-label="위치">📍 ${lv.crumbs.map((c, i) => (i === lv.crumbs.length - 1 ? `<b class="crumb cur">${esc(c.label)}</b>` : `<button type="button" class="crumb" data-crumb="${i}">${esc(c.label)}</button>`)).join('<span class="sep">›</span>')}${hasLoc ? `<button type="button" class="crumb-x" id="loc-back" aria-label="한 단계 위로" title="한 단계 위로">✕</button>` : ""}</div>
-      ${lv.chips.length ? `<div class="chips scroll loc-chips" id="loc-chips">${lv.chips.slice(0, 300).map((c) => `<button type="button" class="chip lchip k-${c.kind}" data-lp="${esc(JSON.stringify(c.patch))}">${esc(c.label)} <small>${n(c.n)}</small></button>`).join("")}</div>` : ""}</div>
-    <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
-    <div class="ty-row">${typeChips}</div>
+    <div class="loc-row" id="loc-row">
+      <button type="button" class="dd-btn ${lb.v1 ? "on" : ""}" id="dd-loc" aria-haspopup="listbox"><small>위치</small><b>${esc(lb.l1)}</b></button>
+      <button type="button" class="dd-btn ${lb.v2 ? "on" : ""}" id="dd-sub" aria-haspopup="listbox" ${lb.v1 && lb.v1 !== "_none" ? "" : "disabled"}><small>세부 위치</small><b>${esc(lb.l2)}</b></button>
+      ${lb.cs3 ? `<button type="button" class="dd-btn ${lb.v3 ? "on" : ""}" id="dd-cs" aria-haspopup="listbox"><small>층·호·공용부</small><b>${esc(lb.l3)}</b></button>` : ""}
+      ${lb.room3 ? `<button type="button" class="dd-btn ${f.room ? "on" : ""}" id="dd-room" aria-haspopup="listbox"><small>실</small><b>${esc(f.room || "전체")}</b></button>` : ""}
+      <button type="button" class="dd-btn ${fTypes.length ? "on" : ""}" id="dd-type" aria-haspopup="listbox"><small>유형</small><b>${esc(typeLabel)}</b></button>
+    </div>
+    <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
     <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
+    ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
     <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
     ${list.length > S.listLimit ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(list.length - S.listLimit)}건 남음)</button>` : ""}
-    ${selBarHtml({ all: true })}`;
+    ${selBarHtml({ all: true, core: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
-  const setLoc = (patch, keep = null) => { const nf = { ...S.filter }; const order = ["dong", "floor", "ho", "common", "room"];
-    if (keep) { for (const k of order) if (!keep.includes(k)) delete nf[k]; }
-    else { const first = Math.min(...Object.keys(patch).map((k) => order.indexOf(k))); for (const k of order.slice(first)) delete nf[k]; Object.assign(nf, patch); }
+  /* 1.2.7 위치 고르기: [위치 ▾] → [세부 위치 ▾] (→ [실 ▾]) · 고르면 바로 걸림 · 목록이 길면 안에서 검색 */
+  const setLoc = (patch, from) => { const nf = { ...S.filter }; const order = ["dong", "core", "floor", "ho", "common", "room"];
+    for (const k of order.slice(order.indexOf(from))) delete nf[k]; Object.assign(nf, patch);
     S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); };
-  $$("[data-lp]", view()).forEach((b) => b.addEventListener("click", () => setLoc(JSON.parse(b.dataset.lp))));
-  $$("[data-crumb]", view()).forEach((b) => b.addEventListener("click", () => setLoc(null, lv.crumbs[+b.dataset.crumb].keep)));
-  $("#loc-back")?.addEventListener("click", () => setLoc(null, lv.crumbs[lv.crumbs.length - 2].keep));
+  $("#dd-loc").addEventListener("click", (e) => { const base = locBase(); const dong = new Map(), com = new Map(); let nc = 0;
+    for (const d of base) { const dg = M.locParts(d).dong; if (dg) dong.set(dg, (dong.get(dg) || 0) + 1); else { nc++; if (d.common) com.set(d.common, (com.get(d.common) || 0) + 1); } }
+    const dn = (x) => Number((x.match(/\d+/) || [])[0]) || 1e9;
+    ddPick(e.currentTarget, { title: "위치", value: lb.v1, opts: [{ v: "", label: "전체 위치", n: base.length },
+      ...(dong.size ? [{ group: "동" }] : []), ...[...dong.entries()].sort((a, b) => dn(a[0]) - dn(b[0]) || a[0].localeCompare(b[0], "ko")).map(([k, c]) => ({ v: "d:" + k, label: k, n: c })),
+      ...(nc ? [{ group: "단지 공용" }, { v: "_none", label: "단지 공용 전체", n: nc }] : []), ...[...com.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => ({ v: "c:" + k, label: k, n: c }))],
+      onPick: (v) => (!v ? setLoc({}, "dong") : v === "_none" ? setLoc({ dong: ["_none"] }, "dong") : v.startsWith("d:") ? setLoc({ dong: [v.slice(2)] }, "dong") : setLoc({ dong: ["_none"], common: v.slice(2) }, "dong")) }); });
+  /** 층·호(층별로 묶음)·동 공용부 고르기 목록 */
+  const hoOpts = (cur, allLabel) => { const fl = new Map(), cm = new Map();
+    for (const d of cur) { const lp = M.locParts(d); if (lp.floor) { const x = fl.get(lp.floor) || { n: 0, hos: new Map() }; x.n++; if (lp.ho) x.hos.set(lp.ho, (x.hos.get(lp.ho) || 0) + 1); fl.set(lp.floor, x); } if (!lp.ho && d.common) cm.set(d.common, (cm.get(d.common) || 0) + 1); }
+    const fnum = (x) => (/^B(\d+)$/i.test(x) ? -Number(x.slice(1)) : x === "옥상" ? 999 : Number(x) || 0);
+    const opts = [{ v: "", label: allLabel, n: cur.length }];
+    for (const [k, x] of [...fl.entries()].sort((a, b) => fnum(a[0]) - fnum(b[0]))) { opts.push({ group: M.floorLabel(k) }, { v: "f:" + k, label: `${M.floorLabel(k)} 전체`, n: x.n }); for (const [h, c] of [...x.hos.entries()].sort((a, b) => Number(a[0]) - Number(b[0]))) opts.push({ v: `h:${k}|${h}`, label: `${h}호`, n: c, sub: M.floorLabel(k) }); }
+    if (cm.size) { opts.push({ group: "동 공용부" }); for (const [k, c] of [...cm.entries()].sort((a, b) => b[1] - a[1])) opts.push({ v: "c:" + k, label: k, n: c }); }
+    return opts; };
+  const pickHo = (v, from) => (!v ? setLoc({}, from) : v.startsWith("f:") ? setLoc({ floor: [v.slice(2)] }, from) : v.startsWith("h:") ? setLoc({ floor: [v.slice(2).split("|")[0]], ho: v.split("|")[1] }, from) : setLoc({ common: v.slice(2) }, from));
+  $("#dd-sub").addEventListener("click", (e) => { const cur = M.applyFilter(locBase(), { dong: M.fArr(f.dong), common: lb.v1.startsWith("c:") ? f.common : "" });
+    if (lb.v1.startsWith("c:")) { const rm = new Map(); for (const d of cur) { const r = M.roomOf(d); if (r) rm.set(r, (rm.get(r) || 0) + 1); }
+      return ddPick(e.currentTarget, { title: `${f.common} 세부실`, value: lb.v2, opts: [{ v: "", label: "전체", n: cur.length }, ...[...rm.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ko")).map(([k, c]) => ({ v: "r:" + k, label: k, n: c }))],
+        onPick: (v) => setLoc(v ? { room: v.slice(2) } : {}, "room") }); }
+    /* 1.2.7 동 → 코어(호는 라인으로, 공용부는 지정한 코어) 또는 층·호 */
+    const dong = M.fArr(f.dong)[0]; const kc = new Map(); for (const d of cur) { const c = M.coreOf(P(), d) || 0; kc.set(c, (kc.get(c) || 0) + 1); }
+    const kOpts = [...kc.keys()].filter(Boolean).sort((a, b) => a - b).map((c) => ({ v: "k:" + c, label: `${c}코어`, n: kc.get(c) }));
+    const opts = hoOpts(cur, `${lb.l1} 전체`); if (kOpts.length) opts.splice(1, 0, { group: "코어" }, ...kOpts, ...(kc.get(0) ? [{ v: "k:_none", label: "코어 미지정", n: kc.get(0) }] : []));
+    ddPick(e.currentTarget, { title: `${lb.l1} 코어·층·호`, value: lb.v2, opts, onPick: (v) => (v.startsWith("k:") ? setLoc({ core: [v === "k:_none" ? "_none" : `${dong}|${v.slice(2)}`] }, "core") : pickHo(v, "core")) }); });
+  $("#dd-cs")?.addEventListener("click", (e) => { const cur = M.applyFilter(locBase(), { dong: M.fArr(f.dong), core: M.fArr(f.core) });
+    ddPick(e.currentTarget, { title: `${lb.l1} ${lb.l2} 층·호·공용부`, value: lb.v3, opts: hoOpts(cur, `${lb.l2} 전체`), onPick: (v) => pickHo(v, "floor") }); });
+  $("#dd-room")?.addEventListener("click", (e) => { const cur = M.applyFilter(locBase(), { dong: M.fArr(f.dong), core: M.fArr(f.core), floor: M.fArr(f.floor), ho: f.ho || "", common: f.common || "" }); const rm = new Map(); for (const d of cur) { const r = M.roomOf(d); if (r) rm.set(r, (rm.get(r) || 0) + 1); }
+    ddPick(e.currentTarget, { title: "실", value: f.room || "", opts: [{ v: "", label: "전체", n: cur.length }, ...[...rm.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ko")).map(([k, c]) => ({ v: k, label: k, n: c }))], onPick: (v) => setLoc(v ? { room: v } : {}, "room") }); });
+  $("#dd-type").addEventListener("click", (e) => { const tot = tcs.reduce((a, t) => a + t.n, 0);
+    ddPick(e.currentTarget, { title: "유형", value: fTypes.length === 1 ? fTypes[0] : fTypes.length ? "_multi" : "", opts: [{ v: "", label: "유형 전체", n: tot }, ...tcs.map((t) => ({ v: t.key ? t.name : "_none", label: t.key ? t.name : "유형 없음", n: t.n }))],
+      hint: "여러 유형을 함께 보려면 필터에서 골라요", onPick: (v) => { if (v) S.filter.type = [v]; else delete S.filter.type; LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; rerender(); } }); });
   /* 위치 검색: 312-802 · 312동 802 · 802호 · 휀룸 · 지하주차장 휀룸 → 위치 고르기 (색인 미리 만들어 두고 입력은 잠깐 기다렸다가) */
   const lsI = $("#ls"), sg = $("#ls-sugg"); let sgT = 0, sgList = [], sgAct = -1;
   const applySugg = (e) => { const nf = { ...S.filter }; for (const k of M.LOC_KEYS) delete nf[k]; delete nf.text; Object.assign(nf, JSON.parse(JSON.stringify(e.f))); S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); };
@@ -444,15 +553,18 @@ ROUTES.list = async () => {
     if (pick) return applySugg(pick);
     S.filter = { ...S.filter, text: q }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
   $("#btn-filter").addEventListener("click", () => filterSheet());
+  $("#core-fix")?.addEventListener("click", () => coreAssign(coreFix));
   $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (k === "_all") S.filter = {}; else if (b.dataset.rv != null && Array.isArray(S.filter[k])) { S.filter[k] = S.filter[k].filter((x) => x !== b.dataset.rv); if (!S.filter[k].length) delete S.filter[k]; } else delete S.filter[k]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
   $("#btn-more")?.addEventListener("click", () => { S.listLimit += 120; rerender(); });
-  $$("[data-ty]", view()).forEach((b) => b.addEventListener("click", () => { const v = b.dataset.ty; const cur = M.fArr(S.filter.type);
-    if (!v) delete S.filter.type; else if (b.classList.contains("on")) { const nx = cur.filter((x) => !(x === v || (v !== "_none" && M.sameType(x, v)))); if (nx.length) S.filter.type = nx; else delete S.filter.type; } else S.filter.type = [...cur, v]; LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; rerender(); }));
   $("#lgroup").addEventListener("change", (e) => { LS.set("listGroup", e.target.value); S.noRestore = true; rerender(); });
   $("#lsort").addEventListener("change", (e) => { LS.set("listSort", { mode: e.target.value, dir: M.sortDefaultDir(e.target.value) }); S.noRestore = true; rerender(); });
   $("#lsdir")?.addEventListener("click", () => { LS.set("listSort", { mode: srt.mode || effMode, dir: effDir === "desc" ? "asc" : "desc" }); S.noRestore = true; rerender(); });
-  $$("details.lgrp", view()).forEach((dd) => dd.addEventListener("toggle", () => { const c = new Set(LS.get("listGrpClosed", [])); if (dd.open) c.delete(dd.dataset.gk); else c.add(dd.dataset.gk); LS.set("listGrpClosed", [...c].slice(-200)); }));
-  $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = g.dataset.gall.split(","); for (const x of ids) S.select[g.checked ? "add" : "delete"](x); syncChecks(); }));
+  $$("details.vgrp", view()).forEach((dd) => dd.addEventListener("toggle", () => { if (dd.open === (dd.dataset.wasOpen === "1")) return; dd.dataset.wasOpen = dd.open ? "1" : "0"; S.vgOpen.set(dd.dataset.gk, dd.open); if (dd.open && !dd.querySelector(".dcard")) rerender(); }));
+  $$("details.vgrp", view()).forEach((dd) => { dd.dataset.wasOpen = dd.open ? "1" : "0"; });
+  const vgAll = (op) => { for (const dd of $$("details.vgrp", view())) S.vgOpen.set(dd.dataset.gk, op); rerender(); };
+  $("#lg-openall")?.addEventListener("click", () => vgAll(true)); $("#lg-closeall")?.addEventListener("click", () => vgAll(false));
+  $$("details.lgrp:not(.vgrp)", view()).forEach((dd) => dd.addEventListener("toggle", () => { const c = new Set(LS.get("listGrpClosed", [])); if (dd.open) c.delete(dd.dataset.gk); else c.add(dd.dataset.gk); LS.set("listGrpClosed", [...c].slice(-200)); }));
+  $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = gallIds(g); for (const x of ids) S.select[g.checked ? "add" : "delete"](x); syncChecks(); }));
   $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
   $("#btn-agg").addEventListener("click", () => aggSheet(list));
   if (S.openFilter) { S.openFilter = false; setTimeout(() => filterSheet(), 50); }
@@ -490,7 +602,8 @@ function facetOptions(p, all) {
 }
 function filterSheet() {
   const p = P(); const all = PD(); const ctx = { vendorName: vName };
-  const nf = JSON.parse(JSON.stringify(S.filter || {})); for (const k of M.FACET_KEYS) if (nf[k] && !Array.isArray(nf[k])) nf[k] = [nf[k]];
+  // 1.2.7 건수 찾기는 늘 초기화 상태로 열림(목록에 걸린 조건·지난번 고른 것 미리 넣지 않음) — 적용하면 목록 조건을 새로 바꿈
+  const nf = {};
   const facets = facetOptions(p, all);
   for (const fc of facets) for (const v of M.fArr(nf[fc.k])) if (!fc.o.some(([x]) => x === v)) fc.o.unshift([v, filterChipText(fc.k, v)]);
   const has = (k, v) => M.fArr(nf[k]).includes(v);
@@ -747,7 +860,7 @@ ROUTES.dash = async () => {
 function startDraft(loc = {}, base = null) {
   const p = P();
   S.draft = base ? { ...structuredClone({ ...base, history: undefined }), _editId: base.id, photos: [] } : {
-    dong: "", floor: "", ho: "", common: "", room: "", part: "", locEtc: "", trade: "", subTrade: "", type: "", category: LS.get("lastCat", "시공불량"),
+    dong: "", core: "", floor: "", ho: "", common: "", room: "", part: "", locEtc: "", trade: "", subTrade: "", type: "", category: LS.get("lastCat", "시공불량"),
     severity: "보통", content: "", vendorId: "", vendorAuto: true, due: M.addDays(p.dueDays ?? 7), pin: null, photos: [], ...loc,
   };
 }
@@ -947,7 +1060,7 @@ function renderForm() {
     if (err) { $("#form-err").textContent = err; toast(err); return; }
     busy(true, "저장 중…");
     const now = new Date().toISOString();
-    const fields = ["dong", "floor", "ho", "common", "room", "part", "locEtc", "trade", "subTrade", "type", "category", "severity", "content", "vendorId", "due", "pin"];
+    const fields = ["dong", "core", "floor", "ho", "common", "room", "part", "locEtc", "trade", "subTrade", "type", "category", "severity", "content", "vendorId", "due", "pin"];
     let d;
     if (editing) { d = S.defects.find((x) => x.id === dr._editId); const v0 = d.vendorId || ""; for (const k of fields) d[k] = dr[k]; const moved = (dr.vendorId || "") !== v0;
       d.history = [...(d.history || []), { at: now, status: d.status, note: moved ? `내용 수정 · 업체 변경: ${v0 ? vLabel(v0) : "업체 미지정"} → ${d.vendorId ? vLabel(d.vendorId) : "업체 미지정"}` : "내용 수정", ...(moved ? { kind: "transfer" } : {}), ...(Sync.attached() && Sync.signedIn() ? { by: Sync.actorName() } : {}) }];
@@ -959,7 +1072,7 @@ function renderForm() {
       const m = S.pidx.get(d.id) || { before: 0, after: 0 }; m.before++; S.pidx.set(d.id, m); URL.revokeObjectURL(ph.url);
     }
     busy(false);
-    const keep = { dong: d.dong, floor: d.floor, ho: d.ho, common: d.common, room: d.room, locEtc: d.locEtc || "" };
+    const keep = { dong: d.dong, core: d.core || "", floor: d.floor, ho: d.ho, common: d.common, room: d.room, locEtc: d.locEtc || "" };
     S.draft = null;
     if (editing) { toast("수정했어요"); back(); return; }
     if (next) { startDraft(keep); toast(`저장했어요 · ${M.locText(d)} 계속 등록`); renderForm(); window.scrollTo(0, 0); }
@@ -974,7 +1087,7 @@ function renderForm() {
  * '기타 위치 직접 입력'은 저장하지 않는 1회용 위치 */
 function locationPicker(dr, onDone) {
   const p = P(); if (!Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS];
-  const sel = { dong: dr.dong, floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part, locEtc: dr.locEtc || "", pin: dr.pin || null };
+  const sel = { dong: dr.dong, core: dr.core || "", floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part, locEtc: dr.locEtc || "", pin: dr.pin || null };
   /** 단지 공용 장소(지하주차장 등)에 도면 세부 위치가 있으면 층 → 세부 위치로 */
   const place = () => (!sel.dong && sel.common && M.placeSpots(p, S.plans, sel.common).length ? sel.common : "");
   const dropSpotPin = () => { if (sel.pin?.spot) sel.pin = null; };
@@ -996,14 +1109,20 @@ function locationPicker(dr, onDone) {
   /** 동 공용부 타일(층을 골랐으면 그 층의 공용부: 예) 301동 12층 계단실) */
   function dongCommonHtml() {
     if (!sel.dong) return "";
-    const where = `${sel.dong}${sel.floor ? " " + M.floorLabel(sel.floor) : ""}`;
-    return `<h4>${esc(where)} 공용부 <small class="help">계단실·EV홀 등 — 층은 골라도 되고 건너뛰어도 돼요</small></h4><div class="tiles cm">${p.dongCommons.map((c) => tile("dc:" + c, c, !sel.ho && c === sel.common, "common", isUserItem("dongCommons", c))).join("")}${addTile("동 공용부", "_adddc")}</div>`;
+    const where = `${sel.dong}${sel.core ? ` ${sel.core}코어` : ""}${sel.floor ? " " + M.floorLabel(sel.floor) : ""}`;
+    return `${coreRowHtml()}<h4>${esc(where)} 공용부 <small class="help">계단실·EV홀 등 — 층은 골라도 되고 건너뛰어도 돼요</small></h4><div class="tiles cm">${p.dongCommons.map((c) => tile("dc:" + c, c, !sel.ho && c === sel.common, "common", isUserItem("dongCommons", c))).join("")}${addTile("동 공용부", "_adddc")}</div>`;
+  }
+  /** 1.2.7 동 공용부(방풍실·계단실·EV홀 등)의 코어: 코어 설정 기준 목록 + 코어 미지정. 호는 라인으로 자동이라 안 물어봄 */
+  function coreRowHtml() {
+    if (!sel.dong || sel.ho) return "";
+    const cs = M.coresOf(p, sel.dong, PD());
+    return `<h4>${esc(sel.dong)} 코어 <small class="help">공용부가 어느 코어인지 — 모르면 미지정</small></h4><div class="tiles small co-tiles" id="lp-core">${tile("core:", "코어 미지정", !sel.core, "core")}${cs.map((c) => tile("core:" + c, `${c}코어`, Number(sel.core) === c, "core")).join("")}</div>`;
   }
   const canSave = () => !!(sel.dong || sel.common || sel.locEtc?.trim() || sel.room || sel.part);
   function draw() {
     s.setBackVisible(step > 0);
     const box = $("#lp", s.el); const d = dongObj();
-    const crumbs = [sel.dong, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.common, sel.room, sel.part, sel.locEtc && `(${sel.locEtc})`].filter(Boolean);
+    const crumbs = [sel.dong, !sel.ho && sel.core && `${sel.core}코어`, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.common, sel.room, sel.part, sel.locEtc && `(${sel.locEtc})`].filter(Boolean);
     const K = STEPS[step]; const has = K === "dong" ? !!sel.dong : K === "floor" ? !!(sel.floor || (sel.dong && sel.common)) : !!sel[K];
     const skipLabel = K === "part" ? (has ? "완료 ✓" : "건너뛰고 완료 ✓") : has ? "다음 ›" : { dong: "동 건너뛰기 ›", floor: "층 건너뛰기 ›", ho: "호 건너뛰기 ›", room: "실 건너뛰기 ›" }[K];
     let h = `<div class="lp-top"><ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}" data-go="${i}">${t}</li>`).join("")}</ol><button type="button" class="btn btn-sm lp-skip" data-skip="1">${skipLabel}</button></div>`;
@@ -1030,6 +1149,7 @@ function locationPicker(dr, onDone) {
           `<div class="tiles cm">${addTile("실")}</div>`;
       } else {
       const rf = M.roomsFor(p, sel.dong, sel.ho);
+      if (sel.dong && sel.common && !sel.ho) h += coreRowHtml();
       h += `<h4>실${rf.type ? ` <small class="help">${esc(rf.type)} 평형</small>` : ""}</h4><div class="tiles">${rf.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r) && !(p.roomsByType?.[rf.type] || []).includes(r))).join("")}${addTile("실")}</div>`;
       }
     } else {
@@ -1042,6 +1162,7 @@ function locationPicker(dr, onDone) {
     $$(".tile", box).forEach((b) => b.addEventListener("click", async (e) => {
       let v = b.dataset.v; const k = STEPS[step];
       if (b.dataset.ua && e.target.closest("[data-ed]")) return editTile(b);
+      if (v.startsWith("core:")) { sel.core = v.slice(5) ? Number(v.slice(5)) : ""; return draw(); }
       if (v === "_adddc") { const nv = await addListItem("dongCommons"); if (nv == null) return; v = "dc:" + nv; }
       if (v === "_add" || v === "_addc") { v = await addHere(k, v === "_addc"); if (v == null) return; }
       if (v.startsWith("dc:")) {
@@ -1051,8 +1172,8 @@ function locationPicker(dr, onDone) {
       }
       if (k === "dong") {
         dropSpotPin();
-        if (v.startsWith("c:")) { const c = v.slice(2); if (sel.common !== c || M.placeSpots(p, S.plans, c).length) sel.room = ""; sel.common = c; sel.dong = ""; sel.floor = ""; sel.ho = ""; return setStep(place() && M.placeFloors(p, S.plans, c).length ? 1 : 3); }
-        sel.floor = ""; sel.ho = ""; sel.dong = v; sel.common = ""; return setStep(1); // 동을 (다시) 누르면 층·호·공용부를 새로 고름
+        if (v.startsWith("c:")) { const c = v.slice(2); if (sel.common !== c || M.placeSpots(p, S.plans, c).length) sel.room = ""; sel.common = c; sel.dong = ""; sel.core = ""; sel.floor = ""; sel.ho = ""; return setStep(place() && M.placeFloors(p, S.plans, c).length ? 1 : 3); }
+        if (sel.dong !== v) sel.core = ""; sel.floor = ""; sel.ho = ""; sel.dong = v; sel.common = ""; return setStep(1); // 동을 (다시) 누르면 층·호·공용부를 새로 고름
       }
       if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(sel.common ? 3 : nextAfterFloor(dongObj(), v)); }
       if (k === "ho") { sel.ho = v; sel.common = ""; return setStep(3); }
@@ -1192,6 +1313,7 @@ function locationPicker(dr, onDone) {
   $("#lp-ok", s.el).addEventListener("click", async () => {
     if (!canSave()) return;
     Object.assign(dr, sel); if (sel.ho && !sel.floor) dr.floor = M.floorOfHo(sel.ho);
+    if (sel.ho || !sel.dong) dr.core = ""; // 호는 라인으로 코어 자동
     await s.close(); onDone();
   });
   const start = dr.part ? 4 : dr.room ? 4 : dr.ho ? 3 : dr.common ? 3 : dr.floor ? 2 : dr.dong ? 1 : 0;
@@ -1757,7 +1879,7 @@ async function coreSheet() {
       <p class="help small" id="co-sum">이 동: ${[...new Set(ls.map((l) => coreFor(dn, l)))].filter(Boolean).sort((a, b) => a - b).map((c) => `${c}코어 = ${ls.filter((l) => coreFor(dn, l) === c).map(pad).join("·")}호 (하자 ${cnt.get(c) || 0}건)`).join(" · ") || "코어 미지정"}</p>`; };
   const s = openSheet({ title: "코어 설정", full: true, cls: "co-sheet",
     html: `${ro ? '<p class="warnbox help">보기 전용 멤버라 바꿀 수 없어요.</p>' : ""}
-      <p class="help">호수 끝 두 자리(라인)로 코어를 정해요. 예: 01·02호 = 1코어, 03·04호 = 2코어. 동마다 다르면 아래에서 바꾸세요. 호가 없는 하자(공용부 등)는 ‘코어 미지정’이에요.</p>
+      <p class="help">호수 끝 두 자리(라인)로 코어를 정해요. 예: 01·02호 = 1코어, 03·04호 = 2코어. 동마다 다르면 아래에서 바꾸세요. 방풍실·계단실 같은 동 공용부는 등록할 때 코어를 고르거나, 목록에서 체크 후 ‘코어 지정’으로 정해요(안 정하면 ‘코어 미지정’).</p>
       <label class="fld"><span>기본 규칙: 라인 몇 개씩 한 코어 (0 = 기본 규칙 쓰지 않음)</span><input class="inp" id="co-per" type="number" min="0" max="10" value="${cfg.per}" ${ro ? "disabled" : ""}></label>
       <label class="fld"><span>동</span><select class="inp" id="co-dong">${p.dongs.map((d) => `<option ${d.name === dn ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select></label>
       <div id="co-body">${linesHtml()}</div>
@@ -1779,7 +1901,7 @@ async function coreSheet() {
   $("#co-save", el).addEventListener("click", async () => {
     if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
     p.coreCfg = { per: cfg.per, dongs: cfg.dongs }; try { await saveProject(p); } catch (e) { return toast(e.readOnly ? e.message : "저장하지 못했어요: " + e.message); }
-    await s.close(); toast("코어 설정을 저장했어요"); rerender();
+    S.locIdx = null; await s.close(); toast("코어 설정을 저장했어요"); rerender();
   });
   return s;
 }

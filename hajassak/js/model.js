@@ -34,7 +34,7 @@ export const DEFAULT_PARTS = ["바닥", "벽", "천장", "문", "창", "가구",
 /** 단지 공용(동 없이): 새 현장 기본값. 예전 현장은 저장된 목록 그대로 */
 export const DEFAULT_COMMONS = ["지하주차장", "부대복리시설", "조경", "기계/전기실", "주출입구", "관리동", "단지 외부", "기타"];
 /** 동별 공용부(동 + 선택 층 + 세부위치): 예) 301동 12층 계단실 */
-export const DEFAULT_DONG_COMMONS = ["계단실", "복도/세대현관 앞", "EV홀", "피트(PIT)실", "옥상", "지하층/필로티", "출입구/로비", "외벽", "기타"];
+export const DEFAULT_DONG_COMMONS = ["계단실", "복도/세대현관 앞", "EV홀", "피트(PIT)실", "옥상", "지하층/필로티", "출입구/로비", "방풍실", "외벽", "기타"];
 export const dongCommonsOf = (p) => (Array.isArray(p?.dongCommons) ? p.dongCommons : DEFAULT_DONG_COMMONS);
 /** 동 공용부 하자: 동이 있고 호가 없으며 공용부(세부위치)가 있는 건 */
 export const isDongCommon = (d) => !!(d.dong && !d.ho && d.common);
@@ -239,7 +239,7 @@ export const sortDefects = (a, b) =>
   (a.dong || "").localeCompare(b.dong || "", "ko", { numeric: true }) ||
   (Number(a.ho) || 0) - (Number(b.ho) || 0) || (a.trade || "").localeCompare(b.trade || "", "ko") || (a.createdAt < b.createdAt ? -1 : 1);
 
-export const locText = (d) => [d.dong, d.ho ? `${d.ho}호` : floorLabel(d.floor), d.common, d.room, d.part, d.locEtc].filter(Boolean).join(" ");
+export const locText = (d) => [d.dong, d.core && !d.ho ? `${d.core}코어` : "", d.ho ? `${d.ho}호` : floorLabel(d.floor), d.common, d.room, d.part, d.locEtc].filter(Boolean).join(" ");
 export const tradeText = (d) => [d.trade, d.subTrade].filter(Boolean).join("/");
 
 /** 업체 전달 문구(카톡·문자) */
@@ -346,7 +346,7 @@ export function typeCounts(list) {
 const LOC_CACHE = new WeakMap();
 /** 동·층·호·라인을 구조 필드에서, 없으면 위치 글자(예: ‘312동 2803호 부부욕실’, ‘지하2층’)에서 */
 export function locParts(d) {
-  const c0 = LOC_CACHE.get(d); if (c0 && c0.a === d.dong && c0.b === d.ho && c0.c === d.floor && c0.e === d.locEtc && c0.g === d.common) return c0.v;
+  const c0 = LOC_CACHE.get(d); if (c0 && c0.a === d.dong && c0.b === d.ho && c0.c === d.floor && c0.e === d.locEtc && c0.g === d.common && c0.h === d.core && c0.r === d.room) return c0.v;
   const txt = `${d.locEtc || ""} ${d.common || ""} ${d.room || ""}`;
   let dong = d.dong || (txt.match(/(\d{2,4})\s*동/) || [])[1] && `${txt.match(/(\d{2,4})\s*동/)[1]}동` || "";
   let ho = String(d.ho || (txt.match(/(\d{3,4})\s*호/) || [])[1] || "").trim();
@@ -355,19 +355,33 @@ export function locParts(d) {
   const dm = String(dong).match(/\d+/); const fm = String(floor).match(/^B(\d+)$/i);
   const floorNum = !floor ? null : fm ? -Number(fm[1]) : floor === "옥상" ? 999 : Number.isFinite(Number(floor)) ? Number(floor) : null;
   const hoNum = /^\d+$/.test(ho) ? Number(ho) : null;
-  const v = { dong, dongNum: dm ? Number(dm[0]) : null, floor, floorNum, ho, hoNum, line: hoNum != null && hoNum >= 100 ? hoNum % 100 : null };
-  LOC_CACHE.set(d, { a: d.dong, b: d.ho, c: d.floor, e: d.locEtc, g: d.common, v });
+  // 1.2.7 코어: 구조 필드(d.core) → 위치 글자의 ‘1코어’
+  const cm = !d.core && txt.match(/(\d{1,2})\s*코어/); const core = Number(d.core) || (cm ? Number(cm[1]) : null) || null;
+  const v = { dong, dongNum: dm ? Number(dm[0]) : null, floor, floorNum, ho, hoNum, line: hoNum != null && hoNum >= 100 ? hoNum % 100 : null, core };
+  LOC_CACHE.set(d, { a: d.dong, b: d.ho, c: d.floor, e: d.locEtc, g: d.common, h: d.core, r: d.room, v });
   return v;
 }
 /** 코어: 현장 설정(p.coreCfg.dongs[동][라인]) → 동 데이터의 cores([{core, lines:[..]}]) → 기본 규칙(라인 per개씩 한 코어, 기본 2) */
 export const coreRule = (p) => ({ per: 2, dongs: {}, ...(p?.coreCfg || {}) });
 export function coreOf(p, d) {
-  const lp = locParts(d); if (!lp.dong || lp.line == null) return null;
+  const lp = locParts(d); if (!lp.dong) return null;
+  if (lp.line == null) return lp.core || null; // 1.2.7 공용부(방풍실·계단실 등)는 지정한 코어(호는 라인으로 자동)
   const cfg = coreRule(p); const m = cfg.dongs?.[lp.dong];
   if (m && m[lp.line] != null && m[lp.line] !== "") return Number(m[lp.line]) || null;
   const dg = p?.dongs?.find((x) => x.name === lp.dong);
   const c = dg?.cores?.find?.((x) => (x.lines || []).map(Number).includes(lp.line)); if (c) return Number(c.core) || null;
   return cfg.per > 0 ? Math.ceil(lp.line / cfg.per) : null;
+}
+/** 1.2.7 그 동의 코어 번호 목록: 코어 설정·동 데이터·라인 수(라인 per개씩)·이미 지정된 하자에서. 없으면 1·2 */
+export function coresOf(p, dongName, list = []) {
+  const set = new Set(); const cfg = coreRule(p); const dg = p?.dongs?.find((x) => x.name === dongName);
+  for (const v of Object.values(cfg.dongs?.[dongName] || {})) if (Number(v)) set.add(Number(v));
+  for (const c of dg?.cores || []) if (Number(c.core)) set.add(Number(c.core));
+  const ls = dg ? linesOf(dg) : [];
+  if (cfg.per > 0) for (const l of ls) { const m = cfg.dongs?.[dongName]?.[l]; if (m == null || m === "") set.add(Math.ceil(l / cfg.per)); }
+  for (const d of list) { if (locParts(d).dong !== dongName) continue; const c = coreOf(p, d); if (c) set.add(c); }
+  if (!set.size) { set.add(1); set.add(2); }
+  return [...set].sort((a, b) => a - b);
 }
 export const coreKey = (p, d) => { const c = coreOf(p, d); return c ? `${locParts(d).dong}|${c}` : "_none"; };
 export const coreLabel = (k) => (k === "_none" || !k ? "코어 미지정" : `${k.split("|")[0]} ${k.split("|")[1]}코어`);
@@ -397,7 +411,7 @@ export function sortList(list, mode = "", dir = "", p = CORE_P) {
   return K.sort(cmp).map((x) => x.d);
 }
 /* ---------- 1.2.6 위치 바로 고르기(동 › 층 › 호 › 실 / 단지 공용 › 공간 › 세부실) + 위치 검색 ---------- */
-export const LOC_KEYS = ["dong", "floor", "ho", "common", "room"];
+export const LOC_KEYS = ["dong", "core", "floor", "ho", "common", "room"];
 /** 세부실: 실 이름(room), 없으면 위치 글자에서 동·호·층을 뺀 나머지 */
 export function roomOf(d) {
   if (d.room) return d.room;
@@ -450,6 +464,7 @@ export function buildLocIndex(list) {
       if (lp.floor) add(`f|${lp.dong}|${lp.floor}`, `${lp.dong} ${floorLabel(lp.floor)}`, { dong: [lp.dong], floor: [lp.floor] }, 2);
       if (lp.ho) { add(`h|${lp.dong}|${lp.ho}`, `${lp.dong} ${lp.ho}호`, { dong: [lp.dong], ho: lp.ho }, 3); add(`hh|${lp.ho}`, `${lp.ho}호`, { ho: lp.ho }, 3, "모든 동"); }
       if (c && !lp.ho) add(`dc|${lp.dong}|${c}`, `${lp.dong} ${c}`, { dong: [lp.dong], common: c }, 3);
+      const co = coreOf(CORE_P, d); if (co) { add(`k|${lp.dong}|${co}`, `${lp.dong} ${co}코어`, { dong: [lp.dong], core: [`${lp.dong}|${co}`] }, 2); if (c && !lp.ho) add(`kc|${lp.dong}|${co}|${c}`, `${lp.dong} ${co}코어 ${c}`, { dong: [lp.dong], core: [`${lp.dong}|${co}`], common: c }, 3); }
     } else if (c) {
       add(`c|${c}`, c, { dong: ["_none"], common: c }, 1, "단지 공용");
       if (r) add(`cr|${c}|${r}`, `${c} ${r}`, { dong: ["_none"], common: c, room: r }, 2, "단지 공용");
