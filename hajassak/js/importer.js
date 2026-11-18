@@ -1,5 +1,5 @@
 /** 범용 엑셀/CSV 가져오기: 열 매핑(자동 추정 + 저장), 외부ID 기준 병합(내 수정 유지) */
-import { uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong, DEFAULT_DONG_COMMONS, normType, unitKey, parseContactText, contactsOf, setContacts, normPhone } from "./model.js";
+import { isSiteDongName, siteCommonName, uid, STATUSES, CATEGORIES, SEVERITIES, floorOfHo, findDong, aliasOf, dongNum, normHo, deriveDong, DEFAULT_DONG_COMMONS, normType, unitKey, parseContactText, contactsOf, setContacts, normPhone } from "./model.js";
 
 export const FIELDS = [
   { key: "extId", label: "외부 ID(순번·접수번호)", syn: ["순번", "번호", "접수번호", "id", "no", "하자번호", "관리번호"] },
@@ -20,6 +20,8 @@ export const FIELDS = [
   { key: "createdAt", label: "접수일", syn: ["접수일", "등록일", "접수일자", "date"] },
   { key: "due", label: "조치기한", syn: ["조치기한", "기한", "완료예정일", "due"] },
   { key: "category", label: "구분", syn: ["구분", "단계", "접수구분"] },
+  { key: "moveIn", label: "입주/키불", syn: ["입주/키불", "입주키불", "키불", "입주구분"] },
+  { key: "resvAt", label: "예약일시", syn: ["as예약일시", "예약일시", "입주예약일", "예약일"] },
   { key: "utype", label: "평형(타입)", syn: ["평형", "타입", "주택형", "평형타입", "세대타입", "주택타입"] },
 ];
 const norm = (s) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
@@ -94,7 +96,8 @@ export function rowsToRecords(rows, headerRow, map, { project, defaultCategory =
     if (!r || !r.some((c) => String(c).trim())) continue;
     const dongRaw = g(r, "dong"), content = g(r, "content");
     if (!dongRaw && !content) continue;
-    let dong = normDongName(dongRaw);
+    const siteRaw = isSiteDongName(dongRaw); // 1.3.0 동 칸에 ‘지하주차장’·‘B1’·‘부대시설’ 등 → 단지 공용
+    let dong = siteRaw ? "" : normDongName(dongRaw);
     const dd = findDong(project, dongNum(dong)); if (dd) dong = dd.name;
     const hoRaw = g(r, "ho"); let ho = normHo(hoRaw); let common = g(r, "common"); let floor = g(r, "floor").replace(/층$/, "");
     // 호 칸이 비었거나 공용 낱말이면 공용부로: 예) 호="12층 계단실" → 12층 · 계단실, 실="EV홀"(호 없음) → EV홀
@@ -104,13 +107,14 @@ export function rowsToRecords(rows, headerRow, map, { project, defaultCategory =
       if (hoIsCommon) { ho = ""; if (!floor) floor = floorFromText(hoRaw); }
       if (c && !common) { common = c.name || (hoIsCommon ? hoRaw.replace(/\d+\s*층/, "").trim() : ""); if (!common || /^공용$/.test(common)) common = "공용부"; }
     }
+    if (siteRaw && !common) { common = siteCommonName(dongRaw); if (!floor) floor = floorFromText(dongRaw); }
     const created = toDate(g(r, "createdAt"));
     out.push({
       extId: g(r, "extId"), dong, ho, floor: floor || floorOfHo(ho), common,
       room: common && g(r, "room") === common ? "" : g(r, "room"), part: g(r, "part"), trade: g(r, "trade"), subTrade: g(r, "subTrade"), type: g(r, "type"),
       content, vendorName: g(r, "vendorName"), vendorPerson: g(r, "vendorPerson"), vendorPhone: g(r, "vendorPhone"), status: mapStatus(g(r, "status")),
       createdAt: created ? new Date(created + "T09:00:00").toISOString() : new Date().toISOString(),
-      due: toDate(g(r, "due")), category: mapCategory(g(r, "category"), defaultCategory), utype: normType(g(r, "utype")),
+      due: toDate(g(r, "due")), category: mapCategory(g(r, "category"), defaultCategory), stage: g(r, "category"), moveIn: g(r, "moveIn"), resvAt: g(r, "resvAt").replace(/^(\d{4})(\d{2})(\d{2})/, "$1-$2-$3"), utype: normType(g(r, "utype")),
     });
   }
   return out;
@@ -150,14 +154,16 @@ export function mergeRecords({ project, existing, records, vendors, addMissingDo
     if (r.dong && !findDong(project, dongNum(r.dong))) newDongs.add(r.dong);
     const src = { dong: r.dong, ho: r.ho, floor: r.floor, common: r.common || "", room: r.room, part: r.part, trade: r.trade, subTrade: r.subTrade, type: r.type, content: r.content, category: r.category };
     const o = old.get(key(r));
+    // 1.3.0 작업지시서용 원본 칸(단계·입주/키불·예약일시): 있으면 넣되, 이것만으로는 ‘바뀜’으로 치지 않음(재가져오기 때 쓰기 폭증 방지)
+    const extra = Object.fromEntries([["stage", r.stage], ["moveIn", r.moveIn], ["resvAt", r.resvAt]].filter(([, v]) => v));
     if (!o) {
-      toPut.push({ id: uid("h"), projectId: project.id, extId: r.extId, ...src, severity: "보통", vendorId, status: r.status, due: r.due,
+      toPut.push({ id: uid("h"), projectId: project.id, extId: r.extId, ...src, ...extra, severity: "보통", vendorId, status: r.status, due: r.due,
         memo: "", createdAt: r.createdAt, updatedAt: now, origin: "import", history: [{ at: now, status: r.status, note: "엑셀 가져오기" }] });
       added++; continue;
     }
     const changed = Object.keys(src).some((k) => (o[k] || "") !== (src[k] || "")) || (!o.localEdited && (o.status !== r.status || (o.vendorId || "") !== vendorId || (o.due || "") !== (r.due || "")));
     if (!changed) { same++; continue; }
-    const next = { ...o, ...src, updatedAt: now };
+    const next = { ...o, ...src, ...extra, updatedAt: now };
     if (o.localEdited) kept++;
     else {
       if (o.status !== r.status) next.history = [...(o.history || []), { at: now, status: r.status, note: "엑셀 갱신" }];

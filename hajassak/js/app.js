@@ -489,7 +489,7 @@ function locLabels(f) {
   let v1 = "", l1 = "전체 위치", v2 = "", l2 = "전체", room3 = false, cs3 = false, v3 = "", l3 = "전체";
   const cores = M.fArr(f.core);
   if (dongs.length > 1) { v1 = "_multi"; l1 = `동 ${dongs.length}곳`; }
-  else if (dongs[0] === "_none") { if (com) { v1 = "c:" + com; l1 = com; if (f.room) { v2 = "r:" + f.room; l2 = f.room; } } else { v1 = "_none"; l1 = "단지 공용"; } }
+  else if (dongs[0] === "_none") { if (com) { v1 = "c:" + com; l1 = com; if (floors.length === 1) { v2 = "f:" + floors[0]; l2 = M.floorLabel(floors[0]); room3 = true; } else if (f.room) { v2 = "r:" + f.room; l2 = f.room; } } else { v1 = "_none"; l1 = "단지 공용"; } }
   else if (dongs[0] && cores.length === 1 && (cores[0] === "_none" || cores[0].startsWith(dongs[0] + "|"))) { v1 = "d:" + dongs[0]; l1 = dongs[0];
     /* 1.2.7 코어를 골랐으면 [세부 위치]=코어, 셋째 칸 = 그 코어의 층·호·공용부 */
     v2 = cores[0] === "_none" ? "k:_none" : "k:" + cores[0].split("|")[1]; l2 = cores[0] === "_none" ? "코어 미지정" : `${cores[0].split("|")[1]}코어`; cs3 = true;
@@ -513,7 +513,7 @@ function ddPick(btn, { title, opts, value, onPick, hint = "" }) {
   const el = document.createElement("div"); el.className = "dd-pop" + (wide ? " wide" : " dd-sheet"); el.setAttribute("role", "dialog"); el.setAttribute("aria-label", title);
   el.innerHTML = `${wide ? "" : '<div class="dd-dim"></div>'}<div class="dd-box"><div class="dd-hd"><b>${esc(title)}</b><button type="button" class="dd-x" aria-label="닫기">✕</button></div>
     ${many ? `<input class="inp dd-q" type="search" placeholder="찾기 (예: 802, 휀룸)" aria-label="${esc(title)} 찾기">` : ""}
-    <div class="dd-list" role="listbox">${opts.map((o) => (o.group ? `<div class="dd-grp">${esc(o.group)}</div>` : `<button type="button" class="dd-opt ${o.v === value ? "on" : ""}" role="option" aria-selected="${o.v === value}" data-v="${esc(o.v)}"><span>${esc(o.label)}${o.sub ? ` <small class="help">${esc(o.sub)}</small>` : ""}</span><small class="fn">${n(o.n || 0)}</small></button>`)).join("")}</div>
+    <div class="dd-list" role="listbox">${opts.map((o) => (o.group ? `<div class="dd-grp">${esc(o.group)}</div>` : `<button type="button" class="dd-opt ${o.v === value ? "on" : ""}" role="option" aria-selected="${o.v === value}" data-v="${esc(o.v)}"${o.kw ? ` data-kw="${esc(o.kw)}"` : ""}><span>${esc(o.label)}${o.sub ? ` <small class="help">${esc(o.sub)}</small>` : ""}</span><small class="fn">${n(o.n || 0)}</small></button>`)).join("")}</div>
     ${hint ? `<p class="help small dd-hint">${esc(hint)}</p>` : ""}</div>`;
   document.body.appendChild(el);
   if (wide) { const r = btn.getBoundingClientRect(); const box = $(".dd-box", el); const w = Math.max(r.width, 280); box.style.width = w + "px"; box.style.left = Math.min(r.left, window.innerWidth - w - 8) + "px"; box.style.top = r.bottom + 4 + "px"; box.style.maxHeight = Math.max(240, window.innerHeight - r.bottom - 16) + "px"; }
@@ -525,15 +525,23 @@ function ddPick(btn, { title, opts, value, onPick, hint = "" }) {
   $$(".dd-opt", el).forEach((b) => b.addEventListener("click", () => { close(); onPick(b.dataset.v); }));
   const q = $(".dd-q", el); if (q) { if (wide) q.focus();
     q.addEventListener("input", () => { const t = M.sameKey(q.value); let lastG = null, shownInG = 0;
-      const items = [...$(".dd-list", el).children]; for (const c of items) { if (c.classList.contains("dd-grp")) { if (lastG) lastG.hidden = !shownInG; lastG = c; shownInG = 0; continue; } const ok = !t || M.sameKey(c.textContent).includes(t) || !c.dataset.v; c.hidden = !ok; if (ok) shownInG++; }
+      const items = [...$(".dd-list", el).children]; for (const c of items) { if (c.classList.contains("dd-grp")) { if (lastG) lastG.hidden = !shownInG; lastG = c; shownInG = 0; continue; } const ok = !t || M.sameKey(c.textContent + " " + (c.dataset.kw || "")).includes(t) || !c.dataset.v; c.hidden = !ok; if (ok) shownInG++; }
       if (lastG) lastG.hidden = !shownInG; }); }
   $(".dd-opt.on", el)?.scrollIntoView({ block: "nearest" });
   window.__ddOpen = title; return el;
 }
+/** 1.3.0 단지 공용 장소 목록: 현장 설정(단지 공용) + 도면 장소 + 데이터에 있는 이름 */
+function sitePlaces(p = P()) { if (!p) return []; return [...new Set([...(p.commons?.length ? p.commons : M.DEFAULT_COMMONS), ...M.placesWithPlans(p, S.plans)])].filter((c) => !/코어|옥상|외벽/.test(c)); }
+const SITE_ALIAS = [[/지하주차장|주차/, "지하·B1·B2·주차"], [/부대|커뮤니티/, "부대·커뮤니티·주민공동"], [/관리/, "관리동·관리사무소"], [/경비/, "경비실"], [/근린|상가/, "근린·상가"], [/조경|놀이터/, "조경·놀이터·옥외"], [/외부|옥외/, "옥외·단지 외부"]];
+function siteAlias(name) { const a = SITE_ALIAS.find(([re]) => re.test(name)); return a ? a[1] : ""; }
+/** 데이터에 있는 단지 공용 이름(건수 많은 순) */
+function dataSites() { const m = new Map(); for (const d of PD()) { const c = M.locParts(d).site; if (c) m.set(c, (m.get(c) || 0) + 1); } return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 40); }
+/** 도면에서 찾은 그 장소의 세부 위치(실) */
+function placeRooms(place, p = P()) { try { return [...new Set(M.placeSpots(p, S.plans, place).flatMap((x) => x.spots.map((r) => r.name)))].slice(0, 80); } catch { return []; } }
 /** 1.2.6 위치 검색 색인(현장·건수 바뀔 때만 다시 만듦) */
 function locIndex() {
   const all = PD(); const key = `${S.pid}|${all.length}|${all[0]?.id}|${all.at(-1)?.id}`;
-  if (!S.locIdx || S.locIdx.key !== key) { const t = performance.now(); S.locIdx = { key, idx: M.buildLocIndex(all) }; window.__locIdxMs = Math.round(performance.now() - t); }
+  if (!S.locIdx || S.locIdx.key !== key) { const t = performance.now(); const idx = M.buildLocIndex(all); for (const c of sitePlaces()) if (!idx.some((e) => e.key === `c|${c}`)) idx.push({ key: `c|${c}`, label: c, sub: "단지 공용", f: { dong: ["_none"], common: c }, lv: 1, n: 0, norm: M.sameKey(`${c} ${siteAlias(c)}`) }); for (const e of idx) if (e.key.startsWith("c|") && !e.alias) { e.alias = 1; e.norm = M.sameKey(`${e.label} ${siteAlias(e.label)}`); } S.locIdx = { key, idx }; window.__locIdxMs = Math.round(performance.now() - t); }
   return S.locIdx.idx;
 }
 ROUTES.list = async () => {
@@ -561,6 +569,7 @@ ROUTES.list = async () => {
     <div class="ltabs" id="ltabs" role="tablist" aria-label="관리 탭"><button type="button" class="ltab ${ltab ? "" : "on"}" role="tab" aria-selected="${!ltab}" data-ltab="">전체 <small>${n(allP.length)}</small></button>${tabs.map((t) => `<button type="button" class="ltab ${ltab === t.id ? "on" : ""}" role="tab" aria-selected="${ltab === t.id}" data-ltab="${esc(t.id)}">★ ${esc(t.name)} <small>${n(tabCount(t.id))}</small></button>`).join("")}<button type="button" class="ltab ltab-cfg" id="ltab-cfg" aria-label="관리 탭 설정" title="탭 만들기·이름·순서">⚙</button></div>
     <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="검색 · 312-802 · 지하주차장 휀룸" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
       <button type="button" class="btn" id="btn-filter">필터${M.filterCount(f) ? ` <b class="badge">${M.filterCount(f)}</b>` : ""}</button></form>
+    ${presetRowHtml("list")}
     <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
     <div class="loc-row" id="loc-row">
       <button type="button" class="dd-btn ${lb.v1 ? "on" : ""}" id="dd-loc" aria-haspopup="listbox"><small>위치</small><b>${esc(lb.l1)}</b></button>
@@ -582,11 +591,14 @@ ROUTES.list = async () => {
     for (const k of order.slice(order.indexOf(from))) delete nf[k]; Object.assign(nf, patch);
     S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); };
   $("#dd-loc").addEventListener("click", (e) => { const base = locBase(); const dong = new Map(), com = new Map(); let nc = 0;
-    for (const d of base) { const dg = M.locParts(d).dong; if (dg) dong.set(dg, (dong.get(dg) || 0) + 1); else { nc++; if (d.common) com.set(d.common, (com.get(d.common) || 0) + 1); } }
+    for (const d of base) { const lp = M.locParts(d); const dg = lp.dong; if (dg) dong.set(dg, (dong.get(dg) || 0) + 1); else { nc++; const c = lp.site; if (c) com.set(c, (com.get(c) || 0) + 1); } }
     const dn = (x) => Number((x.match(/\d+/) || [])[0]) || 1e9;
+    /* 1.3.0 단지 공용(지하주차장·부대시설 등)을 동 목록 위에 — 하자가 없어도 현장의 공용 장소는 0건으로 보여 줌 */
+    const places = sitePlaces(); for (const c of places) if (!com.has(c)) com.set(c, 0);
+    const pOrd = (k) => { const i = places.indexOf(k); return i < 0 ? 1e6 : i; };
     ddPick(e.currentTarget, { title: "위치", value: lb.v1, opts: [{ v: "", label: "전체 위치", n: base.length },
-      ...(dong.size ? [{ group: "동" }] : []), ...[...dong.entries()].sort((a, b) => dn(a[0]) - dn(b[0]) || a[0].localeCompare(b[0], "ko")).map(([k, c]) => ({ v: "d:" + k, label: k, n: c })),
-      ...(nc ? [{ group: "단지 공용" }, { v: "_none", label: "단지 공용 전체", n: nc }] : []), ...[...com.entries()].sort((a, b) => b[1] - a[1]).map(([k, c]) => ({ v: "c:" + k, label: k, n: c }))],
+      { group: "단지 공용" }, { v: "_none", label: "단지 공용 전체", n: nc }, ...[...com.entries()].sort((a, b) => (b[1] > 0) - (a[1] > 0) || b[1] - a[1] || pOrd(a[0]) - pOrd(b[0])).map(([k, c]) => ({ v: "c:" + k, label: k, n: c, kw: siteAlias(k) })),
+      ...(dong.size ? [{ group: "동" }] : []), ...[...dong.entries()].sort((a, b) => dn(a[0]) - dn(b[0]) || a[0].localeCompare(b[0], "ko")).map(([k, c]) => ({ v: "d:" + k, label: k, n: c }))],
       onPick: (v) => (!v ? setLoc({}, "dong") : v === "_none" ? setLoc({ dong: ["_none"] }, "dong") : v.startsWith("d:") ? setLoc({ dong: [v.slice(2)] }, "dong") : setLoc({ dong: ["_none"], common: v.slice(2) }, "dong")) }); });
   /** 층·호(층별로 묶음)·동 공용부 고르기 목록 */
   const hoOpts = (cur, allLabel) => { const fl = new Map(), cm = new Map();
@@ -598,9 +610,13 @@ ROUTES.list = async () => {
     return opts; };
   const pickHo = (v, from) => (!v ? setLoc({}, from) : v.startsWith("f:") ? setLoc({ floor: [v.slice(2)] }, from) : v.startsWith("h:") ? setLoc({ floor: [v.slice(2).split("|")[0]], ho: v.split("|")[1] }, from) : setLoc({ common: v.slice(2) }, from));
   $("#dd-sub").addEventListener("click", (e) => { const cur = M.applyFilter(locBase(), { dong: M.fArr(f.dong), common: lb.v1.startsWith("c:") ? f.common : "" });
-    if (lb.v1.startsWith("c:")) { const rm = new Map(); for (const d of cur) { const r = M.roomOf(d); if (r) rm.set(r, (rm.get(r) || 0) + 1); }
-      return ddPick(e.currentTarget, { title: `${f.common} 세부실`, value: lb.v2, opts: [{ v: "", label: "전체", n: cur.length }, ...[...rm.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ko")).map(([k, c]) => ({ v: "r:" + k, label: k, n: c }))],
-        onPick: (v) => setLoc(v ? { room: v.slice(2) } : {}, "room") }); }
+    if (lb.v1.startsWith("c:")) { const rm = new Map(), fl = new Map(); for (const d of cur) { const r = M.roomOf(d); if (r) rm.set(r, (rm.get(r) || 0) + 1); const fx = M.locParts(d).floor; if (fx) fl.set(fx, (fl.get(fx) || 0) + 1); }
+      /* 1.3.0 단지 공용: 층(B1·B2…) → 세부실(도면 세부 위치·실) */
+      const fnum = (x) => (/^B(\d+)$/i.test(x) ? -Number(x.slice(1)) : Number(x) || 0);
+      for (const r of placeRooms(f.common)) if (!rm.has(r)) rm.set(r, 0);
+      return ddPick(e.currentTarget, { title: `${f.common} 세부 위치`, value: lb.v2, opts: [{ v: "", label: "전체", n: cur.length }, ...(fl.size ? [{ group: "층" }, ...[...fl.entries()].sort((a, b) => fnum(a[0]) - fnum(b[0])).map(([k, c]) => ({ v: "f:" + k, label: M.floorLabel(k), n: c }))] : []),
+        ...(rm.size ? [{ group: "세부실" }] : []), ...[...rm.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ko")).map(([k, c]) => ({ v: "r:" + k, label: k, n: c }))],
+        onPick: (v) => (!v ? setLoc({ dong: ["_none"], common: f.common }, "dong") : v.startsWith("f:") ? setLoc({ dong: ["_none"], floor: [v.slice(2)], common: f.common }, "floor") : setLoc({ room: v.slice(2) }, "room")) }); }
     /* 1.2.7 동 → 코어(호는 라인으로, 공용부는 지정한 코어) 또는 층·호 */
     const dong = M.fArr(f.dong)[0]; const kc = new Map(); for (const d of cur) { const c = M.coreOf(P(), d) || 0; kc.set(c, (kc.get(c) || 0) + 1); }
     const kOpts = [...kc.keys()].filter(Boolean).sort((a, b) => a - b).map((c) => ({ v: "k:" + c, label: `${c}코어`, n: kc.get(c) }));
@@ -627,6 +643,7 @@ ROUTES.list = async () => {
     const hits = q ? M.searchLoc(locIndex(), q, 8) : []; const pick = sgAct >= 0 && !sg.hidden ? sgList[sgAct] : hits[0] && (M.parseLocQuery(q) || hits[0].norm === M.sameKey(q)) ? hits[0] : null;
     if (pick) return applySugg(pick);
     S.filter = { ...S.filter, text: q }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
+  bindPresetRow(view());
   $("#btn-filter").addEventListener("click", () => filterSheet({ prefill: true })); // 1.2.9 목록 ‘필터’는 지금 걸린 조건 그대로(건수 찾기는 초기화)
   $$("[data-fopen]", view()).forEach((b) => b.addEventListener("click", () => filterSheet({ prefill: true, focus: b.dataset.fopen })));
   $$("[data-ltab]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltab); S.listLimit = 60; S.select.clear(); S.noRestore = true; rerender(); }));
@@ -680,6 +697,71 @@ function facetOptions(p, all) {
     ...(by.length ? [{ k: "createdBy", t: "등록자", o: [...by.map((x) => [x, x]), ...(all.some((d) => !d.createdBy) ? [["_none", "기록 없음"]] : [])] }] : []),
   ];
 }
+/* ---------- 1.3.0 저장된 조건(필터 프리셋): 이 기기 · 현장별(동기화 안 함) ---------- */
+const PRESET_K = () => `filterPresets:${S.pid || ""}`;
+function presets() { const a = LS.get(PRESET_K(), []); return Array.isArray(a) ? a : []; }
+function savePresets(a) { LS.set(PRESET_K(), a); }
+const presetSub = (pz) => { const k = M.filterCount(pz.f || {}); return `조건 ${k}개${pz.sort || pz.group != null ? " · 정렬·묶음" : ""}`; };
+function presetRowHtml(where) {
+  const a = presets(); if (!a.length && where === "list") return "";
+  return `<div class="pz-row" data-pzrow="${where}" role="toolbar" aria-label="저장된 조건"><span class="pz-lbl">🔖 저장된 조건</span><div class="chips scroll pz-chips">${a.map((pz) => `<span class="pz"><button type="button" class="chip pchip ${where === "list" && presetActive(pz) ? "on" : ""}" data-pz="${esc(pz.id)}" title="${esc(presetSub(pz))}">${esc(pz.name)}</button><button type="button" class="pz-more" data-pzm="${esc(pz.id)}" aria-label="${esc(pz.name)} 관리">⋯</button></span>`).join("") || '<span class="help small">아직 없어요 · 아래 ‘조건 저장’으로 지금 조건을 저장해요</span>'}</div></div>`;
+}
+const normF = (f) => JSON.stringify(Object.fromEntries(Object.entries(f || {}).filter(([, v]) => (Array.isArray(v) ? v.length : v)).sort((a, b) => a[0].localeCompare(b[0]))));
+const presetActive = (pz) => normF(pz.f) === normF(S.filter);
+/** 저장된 조건 적용: 필터(+저장했으면 정렬·묶음)를 그대로 → 목록 */
+async function applyPreset(id, sheet = null) {
+  const pz = presets().find((x) => x.id === id); if (!pz) return;
+  S.filter = JSON.parse(JSON.stringify(pz.f || {})); LS.set("filter", S.filter);
+  if (pz.sort) LS.set("listSort", pz.sort); if (pz.group != null) LS.set("listGroup", pz.group);
+  S.listLimit = 60; S.noRestore = true; window.__presetApplied = pz.name;
+  if (sheet) await sheet.close();
+  if (location.hash.split("?")[0] !== "#/list") go("#/list"); else rerender();
+  toast(`‘${pz.name}’ 조건을 걸었어요`);
+}
+/** 이름 + (정렬·묶음 포함) 묻기 */
+function presetNameSheet({ title, name = "", withSort = false, showSort = true, ok = "저장" }) {
+  return new Promise((resolve) => {
+    let val = null;
+    const s = openSheet({ title, cls: "dialog pz-sheet", html: `<label class="fld"><span>이름</span><input class="inp" id="pz-name" maxlength="20" value="${esc(name)}" placeholder="예: 코킹 빼고 미조치"></label>
+      ${showSort ? `<label class="check"><input type="checkbox" id="pz-sort" ${withSort ? "checked" : ""}> 정렬·묶어 보기도 함께 저장</label>` : ""}<p class="fs-err help small"></p>`,
+      footer: `<button type="button" class="btn" data-a="no">취소</button><button type="button" class="btn btn-primary" data-a="yes">${esc(ok)}</button>` });
+    const inp = $("#pz-name", s.el); setTimeout(() => inp.focus(), 50); s.onClose = () => resolve(val);
+    const yes = () => { const v = inp.value.trim().slice(0, 20); if (!v) { $(".fs-err", s.el).textContent = "이름을 넣어 주세요"; return; } val = { name: v, withSort: !!$("#pz-sort", s.el)?.checked }; s.close(); };
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") yes(); });
+    $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", () => (b.dataset.a === "yes" ? yes() : s.close())));
+  });
+}
+const curSortGroup = () => ({ sort: { mode: "", dir: "", ...LS.get("listSort", {}) }, group: LS.get("listGroup", "") });
+/** 지금 조건(f) 저장. 같은 이름이면 덮어쓸지 물음 */
+async function savePresetFlow(f) {
+  if (!M.filterCount(f) && !f.text) { toast("저장할 조건이 없어요 · 먼저 조건을 골라요"); return null; }
+  const r = await presetNameSheet({ title: "조건 저장" }); if (!r) return null;
+  const a = presets(); const same = a.find((x) => x.name === r.name);
+  if (same && !(await ask(`‘${r.name}’이(가) 이미 있어요. 지금 조건으로 덮어쓸까요?`, { ok: "덮어쓰기" }))) return null;
+  const sg = r.withSort ? curSortGroup() : {};
+  const pz = { id: same?.id || M.uid("pz"), name: r.name, f: JSON.parse(JSON.stringify(f)), ...sg, at: new Date().toISOString() };
+  savePresets(same ? a.map((x) => (x.id === same.id ? pz : x)) : [...a, pz]); toast(`‘${r.name}’ 저장했어요`); return pz;
+}
+/** ⋯ / 길게 누르기: 적용 · 이름 바꾸기 · 지금 조건으로 덮어쓰기 · 순서 · 삭제. cur = 지금 조건(패널이면 패널 조건) */
+async function presetMenu(id, cur, sheet = null) {
+  const a = presets(); const i = a.findIndex((x) => x.id === id); if (i < 0) return false; const pz = a[i];
+  const k = await choose(`🔖 ${pz.name} · ${presetSub(pz)}`, [{ icon: "✅", label: "적용", value: "apply" }, { icon: "✏️", label: "이름 바꾸기", value: "ren" }, { icon: "💾", label: "지금 조건으로 덮어쓰기", sub: `지금 조건 ${M.filterCount(cur)}개`, value: "over" },
+    ...(i > 0 ? [{ icon: "⬅️", label: "앞으로", value: "up" }] : []), ...(i < a.length - 1 ? [{ icon: "➡️", label: "뒤로", value: "down" }] : []), { icon: "🗑", label: "삭제", value: "del" }]);
+  if (!k) return false;
+  if (k === "apply") { await applyPreset(id, sheet); return false; }
+  if (k === "ren") { const r = await presetNameSheet({ title: "이름 바꾸기", name: pz.name, showSort: false, ok: "바꾸기" }); if (!r) return false; pz.name = r.name; }
+  if (k === "over") { if (!(await ask(`‘${pz.name}’을(를) 지금 조건으로 덮어쓸까요?`, { ok: "덮어쓰기" }))) return false; pz.f = JSON.parse(JSON.stringify(cur)); if (pz.sort || pz.group != null) Object.assign(pz, curSortGroup()); pz.at = new Date().toISOString(); toast("덮어썼어요"); }
+  if (k === "up" || k === "down") { const j = k === "up" ? i - 1 : i + 1; [a[i], a[j]] = [a[j], a[i]]; }
+  if (k === "del") { if (!(await ask(`‘${pz.name}’ 저장된 조건을 지울까요? (하자는 그대로예요)`, { ok: "삭제", danger: true }))) return false; a.splice(i, 1); toast("지웠어요"); }
+  savePresets(a); return true;
+}
+/** 저장된 조건 줄 연결(목록·패널 공용) */
+function bindPresetRow(root, { cur = () => S.filter, sheet = null, onChange = () => rerender() } = {}) {
+  const row = $(".pz-row", root); if (!row) return;
+  $$("[data-pz]", row).forEach((b) => b.addEventListener("click", () => applyPreset(b.dataset.pz, sheet)));
+  $$("[data-pzm]", row).forEach((b) => b.addEventListener("click", async () => { if (await presetMenu(b.dataset.pzm, cur(), sheet)) onChange(); }));
+  onLongPress(row, "[data-pz]", async (b) => { if (await presetMenu(b.dataset.pz, cur(), sheet)) onChange(); });
+}
 function filterSheet({ prefill = false, focus = "" } = {}) {
   const p = P(); const all = PD(); const ctx = { vendorName: vName };
   // 1.2.7 건수 찾기(홈·대시보드)는 늘 초기화 상태로 열림. 1.2.9 목록 ‘필터’는 지금 걸린 조건을 그대로 보여 줌(초기화 버튼 따로) — 적용하면 목록 조건을 새로 바꿈
@@ -691,7 +773,7 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length && !M.fArr(nf["x_" + fc.k]).length && focus !== fc.k && focus !== "x_" + fc.k ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
     <div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
   const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
-    html: `<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
+    html: `${presetRowHtml("panel")}<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
       <div class="chips scroll" id="fl-active"></div>
       <div class="fl-toggles"><label class="check"><input type="checkbox" id="fl-overdue" ${nf.overdue ? "checked" : ""}> ⏰ 기한초과만 <small class="fn" id="fl-odn"></small></label>
         <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label></div>
@@ -711,8 +793,9 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
         <label class="check"><input type="checkbox" data-k="chain" ${nf.chain ? "checked" : ""}> 후속 공정 있는 하자</label>
         <label class="check"><input type="checkbox" data-k="mine" ${nf.mine ? "checked" : ""}> 다음 공정 보낼 차례</label>
         <label class="fld"><span>검색어</span><input class="inp" data-k="text" value="${esc(nf.text || "")}" placeholder="내용·위치·메모"></label></details>`,
-    footer: `<button type="button" class="btn" data-a="reset">초기화</button><button type="button" class="btn btn-primary" data-a="apply" id="fl-apply">0건 보기</button>` });
+    footer: `<button type="button" class="btn" data-a="reset">초기화</button><button type="button" class="btn" data-a="psave" id="fl-psave">🔖 조건 저장</button><button type="button" class="btn btn-primary" data-a="apply" id="fl-apply">0건 보기</button>` });
   const el = s.el;
+  const redrawPresets = () => { const old = $(".pz-row", el); const tmp = document.createElement("div"); tmp.innerHTML = presetRowHtml("panel"); old.replaceWith(tmp.firstElementChild); bindPresetRow(el, { cur: () => (addExw(), clean()), sheet: s, onChange: redrawPresets }); };
   const clean = () => { const o = {}; for (const [k, v] of Object.entries(nf)) { if (Array.isArray(v) ? v.length : v) o[k] = v; } return o; };
   const refresh = () => {
     const f0 = clean(); const res = M.applyFilter(all, f0, ctx).length;
@@ -749,11 +832,13 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   for (const i of $$("[data-k]", el)) i.addEventListener(i.type === "checkbox" ? "change" : "input", () => { nf[i.dataset.k] = i.type === "checkbox" ? (i.checked ? "1" : "") : i.value.trim(); refresh(); });
   $$("[data-a]", el).forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.a === "reset") { for (const k of Object.keys(nf)) delete nf[k]; syncInputs(); refresh(); return; }
+    if (b.dataset.a === "psave") { addExw(); if (await savePresetFlow(clean())) redrawPresets(); return; }
     addExw(); S.filter = clean(); LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; await s.close();
     if (location.hash.split("?")[0] !== "#/list") go("#/list"); else rerender();
   }));
   /** 그 항목으로 펼치고 스크롤(제외 단어는 제외 칸) */
   function goFacet(k) { const t = k === "exw" ? $("#fl-ex", el) : $(`details.fc[data-fc="${k.replace(/^x_/, "")}"]`, el); if (!t) return; if (t.tagName === "DETAILS") t.open = true; t.scrollIntoView({ block: "start" }); t.classList.add("fc-focus"); setTimeout(() => t.classList.remove("fc-focus"), 1500); }
+  bindPresetRow(el, { cur: () => (addExw(), clean()), sheet: s, onChange: redrawPresets });
   refresh();
   if (focus) setTimeout(() => goFacet(focus), 60);
   window.__flPrefill = prefill;
@@ -1071,12 +1156,23 @@ function matchPlans(dr) {
   const score = (pl) => (pl.rooms?.some((r) => want.includes(r.name)) ? 4 : 0) + (pl.utype ? 2 : 0) + (pl.dongs?.length ? 1 : 0);
   return S.plans.filter(ok).sort((a, b) => score(b) - score(a));
 }
+/** 1.3.0 공종·세부공종 → 업체 자동 지정(설정 표 + 기록 학습 + 업체 담당 공종) */
+function vendorLearned() { const all = PD(); const key = `${S.pid}|${all.length}|${all.at(-1)?.id}|${all.at(-1)?.vendorId}`; if (!S.vLearn || S.vLearn.key !== key) S.vLearn = { key, m: M.learnVendorMap(all) }; return S.vLearn.m; }
+function autoVendorOf(dr, cands = null) {
+  const a = M.autoVendorFor(dr, { table: P()?.vendorMap || [], learned: vendorLearned(), vendors: S.vendors }); if (a) return a;
+  const c = (cands || M.vendorsForTrade(S.vendors, dr.trade, P()?.id, PD()))[0]; return c ? { id: c.id, why: `담당 공종 · ${dr.trade}`, src: "trades" } : null;
+}
 function renderForm() {
   const p = P(); const dr = S.draft; const editing = !!dr._editId;
   setTab(editing ? null : "new"); setHeader(editing ? "하자 수정" : "하자 등록", { backBtn: navDepth() > 1 || editing });
   const trade = p.trades.find((t) => t.name === dr.trade);
-  const cands = M.vendorsForTrade(S.vendors, dr.trade, p.id, PD()); const sug = cands[0] || null;
-  if (dr.vendorAuto && sug) dr.vendorId = sug.id;
+  const cands = M.vendorsForTrade(S.vendors, dr.trade, p.id, PD());
+  /* 1.3.0 자동 지정: 설정 표 → 기록(세부공종·공종에 가장 많이 맡은 업체) → 업체 담당 공종. 미지정일 때만 채우고, 이미 있으면 ‘→ 업체로 변경’ 한 번 누르기 */
+  if (dr.vendorAuto === undefined) dr.vendorAuto = !editing;
+  const auto = autoVendorOf(dr, cands);
+  if (dr.vendorAuto) dr.vendorId = auto?.id || (dr.trade ? "" : dr.vendorId);
+  const sug = auto && dr.vendorId === auto.id ? auto : null;
+  const hint = auto && auto.id !== dr.vendorId && !dr.vendorAuto ? auto : null;
   const loc = M.locText(dr);
   const plans = matchPlans(dr);
   const prevPhotos = editing ? photoCount({ id: dr._editId }) : { before: 0, after: 0 };
@@ -1099,8 +1195,9 @@ function renderForm() {
     <label class="fld"><span>내용 <em>*</em></span><div class="ta-wrap"><textarea class="inp" id="f-content" rows="3" placeholder="예: 거실 창호 하부 실리콘 미시공">${esc(dr.content)}</textarea>
       ${speechSupported() ? `<button type="button" class="mic" id="btn-mic" aria-label="음성으로 입력">🎤</button>` : ""}</div></label></section>
     <section class="fsec" id="fs-save"><h3 class="fsec-h"><span class="n">4</span>업체·기한 · 저장</h3>
-    <label class="fld"><span>담당업체 ${sug && dr.vendorId === sug.id ? '<small class="sugg">공종 추천</small>' : ""}</span>
+    <label class="fld"><span>담당업체 ${sug && dr.vendorAuto ? `<small class="sugg auto" title="${esc(sug.why)}">자동 지정 · ${esc(sug.why)}</small>` : sug ? `<small class="sugg">${esc(sug.why)}</small>` : ""}</span>
       <select class="inp" id="f-vendor"><option value="">업체 미지정</option>${S.vendors.map((v) => `<option value="${v.id}" ${v.id === dr.vendorId ? "selected" : ""}>${esc(v.name)}${(v.trades || []).length ? " · " + esc(v.trades.slice(0, 2).join(",")) : ""}</option>`).join("")}<option value="_new">＋ 새 업체 등록…</option></select></label>
+    ${hint ? `<button type="button" class="btn btn-sm vhint" id="v-auto-hint" data-vid="${esc(hint.id)}">→ ${esc(V(hint.id)?.name || "")} 로 ${dr.vendorId ? "변경" : "지정"} <small>${esc(hint.why)}</small></button>` : ""}
     ${cands.length > 1 ? `<div class="chips vsw" id="v-switch"><small class="help">‘${esc(dr.trade)}’ 다른 업체:</small>${cands.filter((v) => v.id !== dr.vendorId).map((v) => `<button type="button" class="chip" data-vsw="${v.id}">${esc(v.name)}</button>`).join("")}</div>` : ""}
     <label class="fld"><span>조치기한</span><div class="row"><input class="inp" type="date" id="f-due" value="${esc(dr.due || "")}">
       ${[3, 7, 14].map((d) => `<button type="button" class="chip" data-due="${d}">+${d}일</button>`).join("")}</div></label></section>
@@ -1129,7 +1226,8 @@ function renderForm() {
       } else return;
       if (dr[k] === v) dr[k] = ""; // 아래 토글에서 다시 선택되도록
     }
-    if (k === "trade" && dr.trade !== v) { dr.subTrade = ""; dr.vendorAuto = true; }
+    if (k === "trade" && dr.trade !== v) dr.subTrade = "";
+    if ((k === "trade" || k === "subTrade") && !dr.vendorId) dr.vendorAuto = true; // 미지정이면 공종·세부공종 고를 때 자동 지정(새 등록·수정 모두)
     dr[k] = dr[k] === v && k !== "category" && k !== "severity" ? "" : v;
     if (k === "category") LS.set("lastCat", v);
     renderForm();
@@ -1154,6 +1252,7 @@ function renderForm() {
   $("#btn-cam").addEventListener("click", () => addPh(true));
   $("#btn-alb").addEventListener("click", () => addPh(false));
   $$("[data-rmph]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.photos.splice(+b.dataset.rmph, 1); renderForm(); }));
+  $("#v-auto-hint")?.addEventListener("click", (e) => { sync(); dr.vendorId = e.currentTarget.dataset.vid; dr.vendorAuto = true; renderForm(); });
   $$("[data-vsw]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.vendorId = b.dataset.vsw; dr.vendorAuto = false; renderForm(); }));
   $("#f-vendor").addEventListener("change", async (e) => {
     sync();
@@ -1235,8 +1334,9 @@ function locationPicker(dr, onDone) {
     const skipLabel = K === "part" ? (has ? "완료 ✓" : "건너뛰고 완료 ✓") : has ? "다음 ›" : { dong: "동 건너뛰기 ›", floor: "층 건너뛰기 ›", ho: "호 건너뛰기 ›", room: "실 건너뛰기 ›" }[K];
     let h = `<div class="lp-top"><ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}" data-go="${i}">${t}</li>`).join("")}</ol><button type="button" class="btn btn-sm lp-skip" data-skip="1">${skipLabel}</button></div>`;
     if (STEPS[step] === "dong") {
-      h += `<h4>동</h4><div class="tiles">${p.dongs.map((x) => tile(x.name, x.name, x.name === sel.dong, "", !!x.userAdded)).join("")}${addTile("동", "_add")}</div>
-        <h4>단지 공용 <small class="help">동과 상관없는 곳 — 누르면 바로 선택</small></h4><div class="tiles cm">${[...new Set([...p.commons, ...M.placesWithPlans(p, S.plans)])].map((c) => tile("c:" + c, c + (M.placeSpots(p, S.plans, c).length ? " ›" : ""), !sel.dong && c === sel.common, "common", isUserItem("commons", c) && p.commons.includes(c))).join("")}${addTile("단지 공용", "_addc")}</div>
+      /* 1.3.0 단지 공용(지하주차장·부대시설 등)을 동 위에 — 동이 많아도 바로 보이게 */
+      h += `<h4>단지 공용 <small class="help">지하주차장·부대시설 등 동과 상관없는 곳</small></h4><div class="tiles cm" id="lp-site">${[...new Set([...(p.commons.length ? p.commons : M.DEFAULT_COMMONS), ...M.placesWithPlans(p, S.plans), ...dataSites()])].map((c) => tile("c:" + c, c + (M.placeSpots(p, S.plans, c).length ? " ›" : ""), !sel.dong && c === sel.common, "common", isUserItem("commons", c) && p.commons.includes(c))).join("")}${addTile("단지 공용", "_addc")}</div>
+        <h4>동</h4><div class="tiles">${p.dongs.map((x) => tile(x.name, x.name, x.name === sel.dong, "", !!x.userAdded)).join("")}${addTile("동", "_add")}</div>
         <p class="help">동 안의 공용부(계단실·EV홀·피트실·옥상 등)는 동을 고르면 나와요.</p>`;
     } else if (STEPS[step] === "floor") {
       const pf = !d && place() ? M.placeFloors(p, S.plans, sel.common) : null;
@@ -1740,6 +1840,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
         <button type="button" class="btn btn-lg" data-s="copy">📋 내용 복사</button>
         <button type="button" class="btn btn-lg" data-s="share">📤 다른 앱으로 공유</button>
         <button type="button" class="btn btn-lg" data-s="img">🧾 요청서 이미지</button>
+        <button type="button" class="btn btn-lg" data-s="wo">📋 작업지시 및 완료확인서</button>
         <button type="button" class="btn btn-lg" data-s="pdf">📄 요청서 PDF(인쇄)</button></div>
       <p class="help">카카오톡은 앱이 특정 친구를 대신 고를 수 없어요. 카카오톡에서 <b>업체 대화방</b>을 고르면 돼요.${phones.length ? "" : " 업체에 전화번호를 등록하면 문자·전화 버튼이 생겨요."}</p>
       <label class="check"><input type="checkbox" id="mark" checked> 보낸 뒤 선택한 건 중 ‘접수’ 건을 ‘업체전달’로 표시</label>` });
@@ -1796,6 +1897,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
     if (k === "copy") { (await copyText(ta.value)) ? toast("복사했어요") : toast("복사 실패"); return after("복사"); }
     if (k === "pdf") { const items2 = sel(); await s.close(); return printRequest({ vendor, items: items2 }); }
     if (k === "img") { const items2 = sel(); await s.close(); return requestImageFor(items2, vendor); }
+    if (k === "wo") { const items2 = sel(); await s.close(); return workOrderSheet({ items: items2, filter: S.filter }); }
   }));
   refresh();
 }
@@ -2092,6 +2194,60 @@ async function transferSheet(items) {
 /* ---------- 1.2.2 요청서 이미지: 만들기 → 미리보기 → 카톡 공유(이미지 첨부)·이미지 복사·저장·문자 (자동 발송 없음) ---------- */
 function nextDocNo() { const t = M.todayStr(); const c = LS.get("reqSeq", {}); const k = c.d === t ? (c.n || 0) + 1 : 1; LS.set("reqSeq", { d: t, n: k }); return { no: `HS-${t.replace(/-/g, "")}-${String(k).padStart(3, "0")}`, today: t }; }
 /** 체크/목록에서 업체가 여럿이면 업체부터 고름 */
+/* ---------- 1.3.0 작업지시 및 완료확인서(표 형식 요청서): 미리보기 · 인쇄(A4 가로)/PDF · 이미지 여러 장 ---------- */
+async function workOrderSheet({ items, filter = null }) {
+  items = (items || []).filter(Boolean); if (!items.length) return toast("확인서에 넣을 하자가 없어요");
+  const W = await import("./workorder.js"); M.setCoreProject(P());
+  if (!document.getElementById("wo-css")) { const st = document.createElement("style"); st.id = "wo-css"; st.textContent = W.WO_CSS; document.head.appendChild(st); }
+  const p = P(); const allP = PD(); let high = !!LS.get("woHigh", false);
+  const defName = S.issuer || (Sync.signedIn?.() ? Sync.actorName() : "");
+  let who = { name: LS.get("woName", "") || defName, team: LS.get("woTeam", "") };
+  const cond = W.woCondition(items, { filter: filter || {}, vendorName: vName });
+  const meta = () => ({ date: M.todayStr(), who: who.name ? `${who.name}${who.team ? `(${who.team})` : ""}` : who.team ? `(${who.team})` : "", cond });
+  const rows = () => W.woRows(items, { project: p, all: allP, high });
+  let imgs = null; // { key, files, pngs }
+  const s = openSheet({ title: `${W.WO_TITLE} · ${n(items.length)}건`, full: true, cls: "wo-sheet",
+    html: `<div class="wo-bar"><label class="wo-tg"><input type="checkbox" id="wo-high" ${high ? "checked" : ""}><span class="wo-sw" aria-hidden="true"></span> 고층부터</label><span class="sp"></span>
+        <button type="button" class="rbtn" data-w="print" id="wo-print">🖨<small>인쇄</small></button><button type="button" class="rbtn" data-w="close" id="wo-close">✕<small>닫기</small></button></div>
+      <div class="wo-who"><label>출력자 <input class="inp" id="wo-name" value="${esc(who.name)}" placeholder="이름" maxlength="20"></label><label>팀 <input class="inp" id="wo-team" value="${esc(who.team)}" placeholder="(선택)" maxlength="20"></label></div>
+      <div class="wo-prev" id="wo-prev"></div>
+      <div class="send-grid wo-share"><button type="button" class="btn btn-kakao btn-lg" data-w="share">카톡으로 공유 <small>이미지</small></button>
+        <button type="button" class="btn btn-lg" data-w="copy">🖼 이미지 복사</button><button type="button" class="btn btn-lg" data-w="save">💾 이미지 저장</button><button type="button" class="btn btn-lg" data-w="pdf">📄 PDF 저장(인쇄)</button></div>
+      <p class="help small">인쇄·PDF는 A4 가로, 쪽마다 표 머리글이 반복돼요(PDF는 인쇄 창에서 ‘PDF로 저장’). 이미지는 장당 ${W.IMG_ROWS}건씩 여러 장으로 나눠요.</p>` });
+  const el = s.el;
+  const draw = () => { const r = rows(); $("#wo-prev", el).innerHTML = W.woHtml({ rows: r, meta: meta() }); fit(); window.__wo = { n: r.length, high, rows: r.map((x) => ({ no: x.no, stage: x.stage, dong: x.dong, ho: x.ho, utype: x.utype, movein: x.movein, room: x.room, trade: x.trade, core: x.core, head: x.head, text: x.text, status: x.status, date: x.date })), meta: meta() }; imgs = null; };
+  const fit = () => { const pv = $("#wo-prev", el); const doc = $(".wo-doc", pv); if (!doc) return; const z = Math.min(1, Math.max(0.5, (pv.clientWidth - 2) / 1200)); doc.style.zoom = z; };
+  const makeImgs = async () => {
+    const key = `${high}|${meta().who}`; if (imgs && imgs.key === key) return imgs;
+    busy(true, "확인서 이미지 만드는 중…");
+    try { const R = await import("./reqimg.js"); const pages = await W.renderWoImages({ rows: rows(), meta: meta() });
+      const jpgs = await Promise.all(pages.map((pg) => R.toBlob(pg.canvas, "image/jpeg", 0.92))); const pngs = await Promise.all(pages.map((pg) => R.toBlob(pg.canvas, "image/png")));
+      const base = `작업지시확인서_${M.todayStr()}`; const files = jpgs.map((b, i) => new File([b], `${base}${jpgs.length > 1 ? "_" + (i + 1) : ""}.jpg`, { type: "image/jpeg" }));
+      imgs = { key, files, pngs }; window.__woImg = { n: pages.length, sizes: pages.map((x) => [x.w, x.h]), rows: pages.map((x) => x.rows), jpg: jpgs.map((b) => b.size) };
+    } catch (e) { console.error(e); toast("이미지를 만들지 못했어요: " + (e.message || e)); imgs = null; }
+    busy(false); return imgs;
+  };
+  const print = () => { const root = $("#print-root"); root.innerHTML = W.woHtml({ rows: rows(), meta: meta() }); document.body.classList.add("printing", "printing-wo");
+    const cleanup = () => { document.body.classList.remove("printing", "printing-wo"); root.innerHTML = ""; window.removeEventListener("afterprint", cleanup); };
+    window.addEventListener("afterprint", cleanup); S.lastPrintHtml = root.innerHTML.length; window.__woPrinted = (window.__woPrinted || 0) + 1;
+    if (window.__noPrint) return; setTimeout(() => window.print(), 50); };
+  $("#wo-high", el).addEventListener("change", (e) => { high = e.target.checked; LS.set("woHigh", high); draw(); });
+  for (const [id, k] of [["#wo-name", "name"], ["#wo-team", "team"]]) $(id, el).addEventListener("input", (e) => { who[k] = e.target.value.trim(); LS.set(k === "name" ? "woName" : "woTeam", who[k]); draw(); });
+  $$("[data-w]", el).forEach((b) => b.addEventListener("click", async () => {
+    const k = b.dataset.w;
+    if (k === "close") return s.close();
+    if (k === "print" || k === "pdf") return print();
+    const im = await makeImgs(); if (!im) return;
+    if (k === "share") {
+      if (canShareFiles(im.files)) { try { await navigator.share({ files: im.files, title: W.WO_TITLE, text: `${W.WO_TITLE} ${items.length}건` }); window.__woImg.shared = true; return; } catch (er) { if (er?.name === "AbortError") return; } }
+      im.files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 300)); window.__woImg.fallback = true; return toast("이미지 공유가 안 되는 환경이라 이미지를 저장했어요. 카톡에서 사진으로 첨부해 주세요.", { ms: 7000 });
+    }
+    if (k === "copy") { try { await navigator.clipboard.write([new ClipboardItem({ "image/png": im.pngs[0] })]); window.__woImg.copied = 1; return toast(`${im.pngs.length > 1 ? `1/${im.pngs.length}장 ` : ""}이미지를 복사했어요 — 카톡에 붙여넣기(Ctrl+V)`); } catch { return toast("이미지 복사가 막혔어요 — ‘이미지 저장’을 써 주세요"); } }
+    if (k === "save") { im.files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 300)); window.__woImg.saved = true; return toast(`이미지 ${im.files.length}장을 저장했어요`); }
+  }));
+  const ro = new ResizeObserver(fit); ro.observe($("#wo-prev", el)); s.onClose = () => ro.disconnect();
+  draw(); return s;
+}
 async function requestImageFor(items, vendor = null) {
   items = items.filter(Boolean); if (!items.length) return toast("요청서에 넣을 하자를 고르세요");
   if (!vendor) {
@@ -2136,6 +2292,7 @@ async function requestImageSheet({ vendor, items }) {
       <div class="send-grid">${mobile ? btnShare + btnCopy : btnCopy + btnShare}
         <button type="button" class="btn btn-lg" data-r="save">💾 이미지 저장</button>
         <button type="button" class="btn btn-lg" data-r="text">📋 문구 복사</button>
+        <button type="button" class="btn btn-lg" data-r="wo">📋 작업지시서(표) 형식</button>
         ${vps.map((x) => `<a class="btn btn-lg" data-r="sms" href="${esc(M.smsHref(x.phone, text))}">💬 문자 ${x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a>`).join("")}</div>
       <p class="help small">${mobile ? "‘카톡으로 공유’ → 공유창에서 <b>카카오톡</b> → 업체 대화방을 고르면 이미지가 첨부돼요. 보내기는 카톡에서 직접 눌러요." : "PC: ‘이미지 복사’ 후 카카오톡 PC 업체 대화방에 <b>Ctrl+V</b>. 복사가 안 되면 ‘이미지 저장’ 후 끌어다 놓으세요."}${vps.length ? " 문자는 문구만 채워져요 — 이미지는 저장 후 문자에 직접 첨부하세요." : ""}${canFiles ? "" : " 이 브라우저는 이미지 공유가 안 돼서 ‘카톡으로 공유’를 누르면 저장 + 문구 복사로 대신해요."}</p>
       <label class="check"><input type="checkbox" id="req-mark" checked> 보낸 뒤 ‘접수’ 건을 ‘업체전달’로 바꾸고 요청서 발송 시각 기록</label>` });
@@ -2165,6 +2322,7 @@ async function requestImageSheet({ vendor, items }) {
     }
     if (k === "save") { save(); return toast("이미지를 저장했어요", { ms: 6000, action: "보냄으로 표시", onAction: () => done("요청서 이미지(저장)") }); }
     if (k === "text") return toast((await copyText(text)) ? "문구를 복사했어요" : "복사 실패");
+    if (k === "wo") { await s.close(); cleanup(); return workOrderSheet({ items }); }
     if (k === "sms") { e.preventDefault(); S.lastSms = b.getAttribute("href"); if (!window.__noNav) location.href = S.lastSms; return toast("문자 앱에서 이미지를 직접 첨부해 주세요", { ms: 7000, action: "보냄으로 표시", onAction: () => done("요청서 이미지(문자)") }); }
   }));
   return s;
@@ -2331,8 +2489,9 @@ async function quickVendor(trade) {
 /* ---------- 내보내기 ---------- */
 async function exportSheet(list, title) {
   if (!list.length) return toast("내보낼 하자가 없어요");
-  const k = await choose(`${title} 내보내기 · ${list.length}건`, [{ label: "엑셀(.xlsx)", value: "xlsx", icon: "📊" }, { label: "CSV", value: "csv", icon: "🧾" }, { label: "요청서 PDF(인쇄)", value: "pdf", icon: "📄", sub: "업체별로 묶어서 인쇄" }]);
+  const k = await choose(`${title} 내보내기 · ${list.length}건`, [{ label: "엑셀(.xlsx)", value: "xlsx", icon: "📊" }, { label: "CSV", value: "csv", icon: "🧾" }, { label: "요청서 PDF(인쇄)", value: "pdf", icon: "📄", sub: "업체별로 묶어서 인쇄" }, { label: "작업지시 및 완료확인서", value: "wo", icon: "📋", sub: "표 형식 · A4 가로 인쇄/PDF · 이미지" }]);
   if (!k) return;
+  if (k === "wo") return workOrderSheet({ items: list, filter: S.filter });
   const { toXlsx, toCsv } = await import("./exporter.js");
   const ctx = { vendorName: vName, photos: photoCount, vendorOf: (d) => V(d.vendorId), vendors: S.vendors };
   const fn = `${P().name}_${title}_${M.todayStr()}`.replace(/[\\/:*?"<>|\s]+/g, "_");
@@ -2344,6 +2503,33 @@ async function exportSheet(list, title) {
   if (vid) printRequest({ vendor: V(vid), items: byV.get(vid === "_none" ? "" : vid) });
 }
 
+/* ---------- 1.3.0 설정 › 공종·세부공종 → 업체 자동 지정 표(현장별, 현장 문서로 동기화) ---------- */
+function vendorMapSheet() {
+  const p = P(); if (!p) return; let rows = structuredClone(p.vendorMap || []);
+  const learned = vendorLearned(); const tName = (tk) => p.trades.find((t) => M.tradeKey(t.name) === tk)?.name || tk;
+  const learnedRows = () => [...learned.entries()].filter(([k]) => k.startsWith("s:") || k.startsWith("t:")).map(([k, x]) => { const [tk, sk] = k.slice(2).split("|"); const t = tName(tk); const sub = sk ? (p.trades.find((q) => M.tradeKey(q.name) === tk)?.subs || []).find((s2) => M.sameKey(s2) === sk) || sk : ""; return { trade: t, sub, ...x }; })
+    .filter((r) => V(r.id) && !rows.some((q) => M.tradeKey(q.trade) === M.tradeKey(r.trade) && M.sameKey(q.sub || "") === M.sameKey(r.sub || ""))).sort((a, b) => b.n - a.n).slice(0, 30);
+  const vOpts = (sel) => `<option value="">업체 고르기…</option>${S.vendors.map((v) => `<option value="${v.id}" ${v.id === sel ? "selected" : ""}>${esc(v.name)}</option>`).join("")}`;
+  const tOpts = (sel) => `<option value="">공종…</option>${[...new Set([...p.trades.map((t) => t.name), ...(sel ? [sel] : [])])].map((t) => `<option ${t === sel ? "selected" : ""}>${esc(t)}</option>`).join("")}`;
+  const s = openSheet({ title: "공종 → 업체 자동 지정", full: true, cls: "vm-sheet", html: `<p class="help">하자 등록·수정에서 공종이나 세부공종을 고르면 <b>담당업체가 미지정일 때</b> 자동으로 채워요(이미 있으면 ‘→ 업체로 변경’ 버튼만). 순서: 이 표의 세부공종 → 공종 → 기록에서 가장 많이 맡은 업체 → 업체 담당 공종.</p>
+      <div id="vm-rows"></div><button type="button" class="btn btn-sm" id="vm-add">＋ 줄 추가</button>
+      <h4 class="sec">기록으로 배운 것 <small class="help">가장 많이 맡은 업체 — 표에 넣으면 고정돼요</small></h4><div id="vm-learn"></div>`,
+    footer: `<button type="button" class="btn" data-close>취소</button><button type="button" class="btn btn-primary" id="vm-save">저장</button>` });
+  const el = s.el;
+  const draw = () => {
+    $("#vm-rows", el).innerHTML = rows.map((r, i) => { const subs = p.trades.find((t) => t.name === r.trade)?.subs || []; return `<div class="vm-row" data-i="${i}"><select class="inp" data-f="trade" aria-label="공종">${tOpts(r.trade)}</select>
+      <input class="inp" data-f="sub" list="vm-subs-${i}" value="${esc(r.sub || "")}" placeholder="세부공종(전체)" aria-label="세부공종"><datalist id="vm-subs-${i}">${subs.map((x) => `<option value="${esc(x)}">`).join("")}</datalist>
+      <select class="inp" data-f="vendorId" aria-label="업체">${vOpts(r.vendorId)}</select><button type="button" class="btn btn-sm" data-rm="${i}" aria-label="줄 지우기">✕</button></div>`; }).join("") || '<p class="help small">아직 없어요 · 아래 ‘기록으로 배운 것’에서 넣거나 줄을 추가해요</p>';
+    const lr = learnedRows(); window.__vmLearn = lr.length;
+    $("#vm-learn", el).innerHTML = lr.map((r, i) => `<div class="vm-l"><span><b>${esc(r.trade)}</b>${r.sub ? ` › ${esc(r.sub)}` : ""} → ${esc(V(r.id)?.name || "")} <small class="help">${r.n}/${r.all}건</small></span><button type="button" class="btn btn-sm" data-lp="${i}">표에 넣기</button></div>`).join("") || '<p class="help small">업체가 지정된 하자가 쌓이면 여기에 나와요</p>';
+    $$(".vm-row", el).forEach((row) => $$("[data-f]", row).forEach((inp) => inp.addEventListener("change", () => { rows[+row.dataset.i][inp.dataset.f] = inp.value.trim(); if (inp.dataset.f === "trade") draw(); })));
+    $$("[data-rm]", el).forEach((b) => b.addEventListener("click", () => { rows.splice(+b.dataset.rm, 1); draw(); }));
+    $$("[data-lp]", el).forEach((b) => b.addEventListener("click", () => { const r = lr[+b.dataset.lp]; rows.push({ trade: r.trade, sub: r.sub || "", vendorId: r.id }); draw(); }));
+  };
+  $("#vm-add", el).addEventListener("click", () => { rows.push({ trade: "", sub: "", vendorId: "" }); draw(); });
+  $("#vm-save", el).addEventListener("click", async () => { p.vendorMap = rows.filter((r) => r.vendorId && (r.trade || r.sub)).map((r) => ({ trade: r.trade || "", sub: r.sub || "", vendorId: r.vendorId })); await saveProject(p); toast(`자동 지정 ${p.vendorMap.length}줄 저장`); s.close(); });
+  draw(); return s;
+}
 /* ---------- 설정 ---------- */
 ROUTES.help = async (qq) => {
   setTab(null); setHeader("사용법", { backBtn: true, help: "" });
@@ -2367,6 +2553,7 @@ ROUTES.settings = async () => {
       ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
       ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}
+      ${p ? item("", "🏷", "공종 → 업체 자동 지정", `표 ${(p.vendorMap || []).length}줄 · 없으면 기록에서 가장 많이 맡은 업체`, 'data-a="vendor-map" id="si-vmap"') : ""}
       ${item("", "🧹", "공종 이름 정리/합치기", (() => { const n1 = P() ? tradeDupesNow().length : 0; return n1 ? `비슷한 이름 ${n1}묶음 — 합치기` : "도장 · 도장공사 같은 이름을 하나로"; })(), 'data-a="trade-merge" id="si-trademerge"')}
       ${item("", "🏷", "하자 유형 정리/합치기", (() => { const n1 = P() ? typeDupesNow().length : 0; return n1 ? `비슷한 이름 ${n1}묶음 — 합치기` : "찍힘 · 흠집/찍힘 같은 이름을 하나로"; })(), 'data-a="type-merge" id="si-typemerge"')}</div>
     <h3 class="sec">동기화·팀</h3><div class="slist">
@@ -2396,6 +2583,7 @@ ROUTES.settings = async () => {
     if (a === "backup") return doBackup();
     if (a === "persist") { const ok = await navigator.storage?.persist?.(); toast(ok ? "저장공간 보호가 켜졌어요" : "브라우저가 거절했어요. 앱을 홈 화면에 설치하면 보통 허용돼요"); return rerender(); }
     if (a === "trade-merge") return tradeMergeSheet();
+    if (a === "vendor-map") return vendorMapSheet();
     if (a === "type-merge") return typeMergeSheet();
     if (a === "issuer") { const v = await prompt2("요청자 이름(요청서 표시)", S.issuer); if (v !== null) { S.issuer = v; LS.set("issuer", v); rerender(); } return; }
     if (a === "wipe") {

@@ -184,7 +184,7 @@ const floorOk = (d, v) => { const fl = d.floor || floorOfHo(d.ho) || locParts(d)
 export function facetMatch(d, k, v) {
   switch (k) {
     case "vendorId": return v === "_none" ? !d.vendorId : d.vendorId === v;
-    case "dong": { const dg = d.dong || locParts(d).dong; return v === "_none" ? !dg : dg === v; }
+    case "dong": { const dg = locParts(d).dong; return v === "_none" ? !dg : dg === v; }
     case "floor": return floorOk(d, v);
     case "trade": return v === "_none" ? !d.trade : d.trade === v || sameTrade(d.trade, v);
     case "type": return v === "_none" ? !d.type : d.type === v || sameType(d.type, v);
@@ -205,7 +205,7 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (exW.length) { const hay = exNorm(`${d.trade || ""} ${d.subTrade || ""} ${d.content || ""} ${locText(d)} ${ctx.vendorName?.(d) || ""} ${d.type || ""}`); if (exW.some((w) => hay.includes(w))) return false; }
     if (f.ho && (d.ho || locParts(d).ho) !== String(f.ho)) return false;
     if (f.room && roomOf(d) !== f.room) return false;
-    if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || d.common : d.common !== f.common)) return false;
+    if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || commonOf(d) : commonOf(d) !== f.common)) return false;
     if (f.turn && !isTurnOf(d, f.turn)) return false;
     if (f.chain && !hasSteps(d)) return false;
     if (f.mine && !isMyTurn(d)) return false;
@@ -298,6 +298,22 @@ export function vendorsForTrade(vendors, trade, projectId, defects = []) {
   const inP = (v) => !v.projectIds?.length || v.projectIds.includes(projectId);
   return [...c].sort((a, b) => (inP(b) - inP(a)) || String(last.get(b.id) || "").localeCompare(String(last.get(a.id) || "")) || a.name.localeCompare(b.name, "ko"));
 }
+/** 1.3.0 기록으로 배우기: 공종·세부공종별로 가장 많이 맡은 업체 { key → { id, n, all } } (s:공종|세부 · x:세부 · t:공종) */
+export function learnVendorMap(defects) {
+  const m = new Map(); const add = (k, id) => { let x = m.get(k); if (!x) m.set(k, (x = new Map())); x.set(id, (x.get(id) || 0) + 1); };
+  for (const d of defects) { if (!d.vendorId || !d.trade) continue; const tk = tradeKey(d.trade); if (!tk) continue; add("t:" + tk, d.vendorId); if (d.subTrade) { const sk = sameKey(d.subTrade); add(`s:${tk}|${sk}`, d.vendorId); add("x:" + sk, d.vendorId); } }
+  const out = new Map(); for (const [k, x] of m) { const [id, n] = [...x.entries()].sort((a, b) => b[1] - a[1])[0]; let all = 0; for (const c of x.values()) all += c; out.set(k, { id, n, all }); }
+  return out;
+}
+/** 1.3.0 자동 지정 업체: 설정 표(세부공종 → 공종) → 기록(세부공종 → 공종, 가장 많이 맡은 업체) → null. { id, why, src } */
+export function autoVendorFor({ trade = "", subTrade = "" } = {}, { table = [], learned = null, vendors = [] } = {}) {
+  const ok = (id) => !!id && vendors.some((v) => v.id === id); const tk = tradeKey(trade), sk = subTrade ? sameKey(subTrade) : "";
+  if (!tk && !sk) return null;
+  if (sk) for (const r of table) if (ok(r.vendorId) && r.sub && sameKey(r.sub) === sk && (!r.trade || tradeKey(r.trade) === tk)) return { id: r.vendorId, why: `설정 · ${r.sub}`, src: "table" };
+  if (tk) for (const r of table) if (ok(r.vendorId) && !r.sub && r.trade && tradeKey(r.trade) === tk) return { id: r.vendorId, why: `설정 · ${r.trade}`, src: "table" };
+  if (learned) { for (const [k, lab] of [[sk && `s:${tk}|${sk}`, subTrade], [sk && `x:${sk}`, subTrade], [tk && `t:${tk}`, trade]]) { const x = k && learned.get(k); if (x && ok(x.id)) return { id: x.id, why: `기록 · ${lab} ${x.n}건`, src: "learned" }; } }
+  return null;
+}
 export function suggestVendor(vendors, trade, projectId, defects = []) {
   return vendorsForTrade(vendors, trade, projectId, defects)[0] || null;
 }
@@ -356,19 +372,29 @@ export function typeCounts(list) {
 /* ---------- 1.2.5 위치 정렬(동→층→호) · 코어 ---------- */
 const LOC_CACHE = new WeakMap();
 /** 동·층·호·라인을 구조 필드에서, 없으면 위치 글자(예: ‘312동 2803호 부부욕실’, ‘지하2층’)에서 */
+/** 1.3.0 단지 공용 이름 추측: 동 칸·위치 글자에 들어온 ‘지하주차장’·‘B1’·‘부대시설’·‘커뮤니티’ 등 */
+export const SITE_RULES = [[/^\s*(?:지하|B)\s*\d{0,2}\s*층?\s*$/i, "지하주차장"], [/지하\s*주차|주차장|^지하|^B\d/i, ""], [/부대|커뮤니티|주민\s*공동|경로당|어린이집|피트니스|휘트니스|독서실/, ""], [/관리\s*동|관리\s*사무/, ""], [/경비/, ""], [/근린|상가/, ""], [/놀이터|조경|화단|산책로|수목/, ""], [/옥외|단지\s*외부/, ""]];
+export function siteCommonName(t) { const s = String(t || "").trim(); if (!s) return ""; for (const [re, name] of SITE_RULES) if (re.test(s)) return name || s.replace(/\s+/g, " ").slice(0, 20); return ""; }
+/** 자유 글자(위치·실)에서 단지 공용 낱말 하나: ‘커뮤니티 헬스장’ → ‘커뮤니티’, ‘B2 램프’ → ‘지하주차장’ */
+export function siteWord(t) { for (const w of String(t || "").split(/[\s,/·()]+/)) { const n = siteCommonName(w); if (n) return n; } return ""; }
+/** 동 칸에 동 번호 대신 단지 공용 이름이 들어온 경우(숫자 동 아님) */
+export const isSiteDongName = (s) => !!s && !/\d{2,4}\s*동?$/.test(String(s).replace(/^(?:지하|B)\s*\d{1,2}/i, "")) && !/^\d{2,4}/.test(String(s)) && !!siteCommonName(s);
 export function locParts(d) {
   const c0 = LOC_CACHE.get(d); if (c0 && c0.a === d.dong && c0.b === d.ho && c0.c === d.floor && c0.e === d.locEtc && c0.g === d.common && c0.h === d.core && c0.r === d.room) return c0.v;
   const txt = `${d.locEtc || ""} ${d.common || ""} ${d.room || ""}`;
-  let dong = d.dong || (txt.match(/(\d{2,4})\s*동/) || [])[1] && `${txt.match(/(\d{2,4})\s*동/)[1]}동` || "";
+  const siteDong = isSiteDongName(d.dong);
+  let dong = siteDong ? "" : d.dong || (txt.match(/(\d{2,4})\s*동/) || [])[1] && `${txt.match(/(\d{2,4})\s*동/)[1]}동` || "";
   let ho = String(d.ho || (txt.match(/(\d{3,4})\s*호/) || [])[1] || "").trim();
   let floor = String(d.floor || floorOfHo(ho) || "");
+  if (!floor && siteDong) { const b = String(d.dong).match(/(?:지하|B)\s*(\d{1,2})/i); if (b) floor = `B${b[1]}`; }
   if (!floor) { const b = txt.match(/(?:지하|B)\s*(\d{1,2})\s*층?/i); const f = txt.match(/(?<![\dB])(\d{1,2})\s*층/); floor = b ? `B${b[1]}` : /옥상/.test(txt) ? "옥상" : f ? f[1] : ""; }
   const dm = String(dong).match(/\d+/); const fm = String(floor).match(/^B(\d+)$/i);
   const floorNum = !floor ? null : fm ? -Number(fm[1]) : floor === "옥상" ? 999 : Number.isFinite(Number(floor)) ? Number(floor) : null;
   const hoNum = /^\d+$/.test(ho) ? Number(ho) : null;
   // 1.2.7 코어: 구조 필드(d.core) → 위치 글자의 ‘1코어’
   const cm = !d.core && txt.match(/(\d{1,2})\s*코어/); const core = Number(d.core) || (cm ? Number(cm[1]) : null) || null;
-  const v = { dong, dongNum: dm ? Number(dm[0]) : null, floor, floorNum, ho, hoNum, line: hoNum != null && hoNum >= 100 ? hoNum % 100 : null, core };
+  const site = dong ? "" : d.common || (siteDong ? siteCommonName(d.dong) : !ho ? siteWord(d.locEtc) || siteWord(d.room) : "");
+  const v = { dong, dongNum: dm ? Number(dm[0]) : null, floor, floorNum, ho, hoNum, line: hoNum != null && hoNum >= 100 ? hoNum % 100 : null, core, site };
   LOC_CACHE.set(d, { a: d.dong, b: d.ho, c: d.floor, e: d.locEtc, g: d.common, h: d.core, r: d.room, v });
   return v;
 }
@@ -422,6 +448,8 @@ export function sortList(list, mode = "", dir = "", p = CORE_P) {
   return K.sort(cmp).map((x) => x.d);
 }
 /* ---------- 1.2.6 위치 바로 고르기(동 › 층 › 호 › 실 / 단지 공용 › 공간 › 세부실) + 위치 검색 ---------- */
+/** 공용부 이름: 저장된 common, 없으면 단지 공용 추측 이름 */
+export const commonOf = (d) => d.common || locParts(d).site || "";
 export const LOC_KEYS = ["dong", "core", "floor", "ho", "common", "room"];
 /** 세부실: 실 이름(room), 없으면 위치 글자에서 동·호·층을 뺀 나머지 */
 export function roomOf(d) {
@@ -451,8 +479,8 @@ export function locLevel(base, f) {
     push(m, { label: (k) => k, patch: (k) => ({ dong: [k] }) }, "dong", (a, b) => (Number((a.match(/\d+/) || [])[0]) || 1e9) - (Number((b.match(/\d+/) || [])[0]) || 1e9) || numKo(a, b));
     const nc = cur.filter((d) => !locParts(d).dong).length; if (nc) chips.push({ label: "단지 공용", n: nc, patch: { dong: ["_none"] }, kind: "dong" });
   } else if (dongs[0] === "_none") {
-    if (!common) push(count((d) => d.common || (roomOf(d) ? "" : "")), { label: (k) => k, patch: (k) => ({ common: k }) }, "common");
-    const rm = count((d) => (common || !d.common ? roomOf(d) : "")); if (common || !chips.length) push(rm, { label: (k) => k, patch: (k) => ({ room: k }) }, "room");
+    if (!common) push(count((d) => commonOf(d)), { label: (k) => k, patch: (k) => ({ common: k }) }, "common");
+    const rm = count((d) => (common || !commonOf(d) ? roomOf(d) : "")); if (common || !chips.length) push(rm, { label: (k) => k, patch: (k) => ({ room: k }) }, "room");
   } else if (ho || common) {
     push(count((d) => roomOf(d)), { label: (k) => k, patch: (k) => ({ room: k }) }, "room");
   } else if (!floors.length) {
@@ -469,7 +497,7 @@ export function buildLocIndex(list) {
   const m = new Map();
   const add = (key, label, f, lv, sub = "") => { const e = m.get(key); if (e) e.n++; else m.set(key, { key, label, sub, f, lv, n: 1, norm: sameKey(label) }); };
   for (const d of list) {
-    const lp = locParts(d); const c = d.common || ""; const r = roomOf(d);
+    const lp = locParts(d); const c = lp.dong ? d.common || "" : lp.site || ""; const r = roomOf(d);
     if (lp.dong) {
       add(`d|${lp.dong}`, lp.dong, { dong: [lp.dong] }, 1);
       if (lp.floor) add(`f|${lp.dong}|${lp.floor}`, `${lp.dong} ${floorLabel(lp.floor)}`, { dong: [lp.dong], floor: [lp.floor] }, 2);
