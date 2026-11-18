@@ -516,3 +516,7 @@ details.vgrp>summary{background:var(--card);border:1px solid var(--line);border-
 /* 1.2.8 제외 */
 .chip.ex,.fchip.ex{background:#fdecea;border-color:#d93025;color:#b3261e}.fchip.ex::before{content:"−";font-weight:800;margin-right:1px}
 .fl-ex{border:1px dashed #d93025;border-radius:12px;padding:8px 10px;margin:0 0 10px}.fl-ex .row{display:flex;gap:6px;margin:6px 0}.fl-ex .row .inp{flex:1;min-width:0}.ex-t{color:#b3261e}
+/* 1.2.9 칩 묶음 */
+.chip.cgrp{display:inline-flex;align-items:center;padding:0;gap:0}.chip.cgrp button{background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:6px 6px 6px 12px}.chip.cgrp .cg-x{padding:6px 12px 6px 6px}
+.fc-focus>summary,.fl-ex.fc-focus{outline:3px solid var(--brand-2);border-radius:10px}
+#fl-exw-chips{flex-wrap:wrap;overflow:visible}.fl-ex label.check{display:block;line-height:1.5}.fl-ex label.check input{vertical-align:middle;margin-right:6px}

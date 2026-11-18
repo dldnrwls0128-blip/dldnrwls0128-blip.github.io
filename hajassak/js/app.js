@@ -627,7 +627,8 @@ ROUTES.list = async () => {
     const hits = q ? M.searchLoc(locIndex(), q, 8) : []; const pick = sgAct >= 0 && !sg.hidden ? sgList[sgAct] : hits[0] && (M.parseLocQuery(q) || hits[0].norm === M.sameKey(q)) ? hits[0] : null;
     if (pick) return applySugg(pick);
     S.filter = { ...S.filter, text: q }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
-  $("#btn-filter").addEventListener("click", () => filterSheet());
+  $("#btn-filter").addEventListener("click", () => filterSheet({ prefill: true })); // 1.2.9 목록 ‘필터’는 지금 걸린 조건 그대로(건수 찾기는 초기화)
+  $$("[data-fopen]", view()).forEach((b) => b.addEventListener("click", () => filterSheet({ prefill: true, focus: b.dataset.fopen })));
   $$("[data-ltab]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltab); S.listLimit = 60; S.select.clear(); S.noRestore = true; rerender(); }));
   $("#ltab-cfg").addEventListener("click", () => tabManager());
   $("#core-fix")?.addEventListener("click", () => coreAssign(coreFix));
@@ -647,9 +648,12 @@ ROUTES.list = async () => {
   $("#btn-sendlist").addEventListener("click", () => sendSheet({ items: list }));
 };
 /** 필터 칩(여러 값이면 값마다 칩) */
-function activeChips(f) {
+function activeChips(f, { collapse = 3 } = {}) {
   return Object.entries(f).flatMap(([k, v]) => {
     if (!v || (Array.isArray(v) && !v.length)) return [];
+    /* 1.2.9 한 항목에 4개 이상이면 칩 하나로(누르면 필터 패널의 그 항목, ✕는 그 항목 모두 지우기) */
+    if (Array.isArray(v) && collapse && v.length > collapse) { const ex = k === "exw" || k.startsWith("x_"); const lb = FILTER_LABEL[k] || k;
+      return [`<span class="chip on cgrp ${ex ? "ex" : ""}"><button type="button" class="cg-open" data-fopen="${k}" title="${esc(v.map((x) => filterChipText(k, x)).join(", "))}">${esc(lb)} ${n(v.length)}개</button><button type="button" class="cg-x" data-rm="${k}" aria-label="${esc(lb)} 조건 모두 지우기">✕</button></span>`]; }
     if (Array.isArray(v)) return v.map((x) => `<button type="button" class="chip on ${k === "exw" || k.startsWith("x_") ? "ex" : ""}" data-rm="${k}" data-rv="${esc(x)}">${esc(FILTER_LABEL[k] || k)}: ${esc(filterChipText(k, x))} ✕</button>`);
     return [`<button type="button" class="chip on" data-rm="${k}">${esc(FILTER_LABEL[k] || k)}: ${esc(filterChipText(k, v))} ✕</button>`];
   }).join("");
@@ -676,15 +680,15 @@ function facetOptions(p, all) {
     ...(by.length ? [{ k: "createdBy", t: "등록자", o: [...by.map((x) => [x, x]), ...(all.some((d) => !d.createdBy) ? [["_none", "기록 없음"]] : [])] }] : []),
   ];
 }
-function filterSheet() {
+function filterSheet({ prefill = false, focus = "" } = {}) {
   const p = P(); const all = PD(); const ctx = { vendorName: vName };
-  // 1.2.7 건수 찾기는 늘 초기화 상태로 열림(목록에 걸린 조건·지난번 고른 것 미리 넣지 않음) — 적용하면 목록 조건을 새로 바꿈
-  const nf = {};
+  // 1.2.7 건수 찾기(홈·대시보드)는 늘 초기화 상태로 열림. 1.2.9 목록 ‘필터’는 지금 걸린 조건을 그대로 보여 줌(초기화 버튼 따로) — 적용하면 목록 조건을 새로 바꿈
+  const nf = prefill ? JSON.parse(JSON.stringify(S.filter || {})) : {};
   const facets = facetOptions(p, all);
-  for (const fc of facets) for (const v of M.fArr(nf[fc.k])) if (!fc.o.some(([x]) => x === v)) fc.o.unshift([v, filterChipText(fc.k, v)]);
+  for (const fc of facets) for (const v of [...M.fArr(nf[fc.k]), ...M.fArr(nf["x_" + fc.k])]) if (!fc.o.some(([x]) => x === v)) fc.o.unshift([v, filterChipText(fc.k, v)]);
   const has = (k, v) => M.fArr(nf[k]).includes(v);
   const day = (dd) => { const t = new Date(Date.now() - dd * 864e5); return M.localDay(t.toISOString()); };
-  const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
+  const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length && !M.fArr(nf["x_" + fc.k]).length && focus !== fc.k && focus !== "x_" + fc.k ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
     <div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
   const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
     html: `<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
@@ -722,6 +726,7 @@ function filterSheet() {
     $("#fl-urgent", el).checked = has("severity", "긴급");
     $("#fl-active", el).innerHTML = activeChips(f0) || '<span class="help">조건 없음 · 전체</span>';
     $("#fl-exw-chips", el).innerHTML = M.fArr(nf.exw).map((w) => `<button type="button" class="chip on ex" data-exw="${esc(w)}" aria-label="제외 ${esc(w)} 지우기">−${esc(w)} ✕</button>`).join("");
+    $$("[data-fopen]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => goFacet(b.dataset.fopen)));
     $$("[data-rm]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (b.dataset.rv != null && Array.isArray(nf[k])) nf[k] = nf[k].filter((x) => x !== b.dataset.rv); else delete nf[k]; syncInputs(); refresh(); }));
   };
   const syncInputs = () => { $("#fl-overdue", el).checked = !!nf.overdue; $("#fl-ho", el).value = nf.ho || ""; $("#fl-from", el).value = nf.from || ""; $("#fl-to", el).value = nf.to || "";
@@ -747,7 +752,11 @@ function filterSheet() {
     addExw(); S.filter = clean(); LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; await s.close();
     if (location.hash.split("?")[0] !== "#/list") go("#/list"); else rerender();
   }));
+  /** 그 항목으로 펼치고 스크롤(제외 단어는 제외 칸) */
+  function goFacet(k) { const t = k === "exw" ? $("#fl-ex", el) : $(`details.fc[data-fc="${k.replace(/^x_/, "")}"]`, el); if (!t) return; if (t.tagName === "DETAILS") t.open = true; t.scrollIntoView({ block: "start" }); t.classList.add("fc-focus"); setTimeout(() => t.classList.remove("fc-focus"), 1500); }
   refresh();
+  if (focus) setTimeout(() => goFacet(focus), 60);
+  window.__flPrefill = prefill;
   return s;
 }
 /** 1.2.4 집계: 지금 목록을 업체·동·공종·유형 × 상태 건수 표로. 칸을 누르면 그 조건으로 목록 */
