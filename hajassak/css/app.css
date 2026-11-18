@@ -471,3 +471,14 @@ details.fc>summary::after{content:"▾";margin-left:auto;color:var(--sub)}detail
 .co-lines{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;margin:6px 0}
 .co-line{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:10px}.co-line.own{border-color:var(--brand)}
 .list-hd{flex-wrap:wrap;row-gap:6px}.list-hd>b,.list-hd .help,.list-hd .btn-sm{white-space:nowrap}
+/* 1.2.6 위치 바로 고르기 · 위치 검색 */
+.ls-form{position:relative}
+.ls-sugg{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:30;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);max-height:340px;overflow:auto;padding:4px}
+.ls-opt{display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:8px 10px;border:0;border-radius:8px;background:none;color:inherit;text-align:left;cursor:pointer;font-size:15px}
+.ls-opt:hover,.ls-opt.act{background:var(--chip)}.ls-opt .cnt{color:var(--sub);white-space:nowrap}
+.loc-pick{margin:0 0 6px}
+.loc-crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px 4px;font-size:15px;margin:0 0 4px}
+.loc-crumbs .crumb{border:0;background:none;color:var(--brand);font-weight:700;padding:6px 4px;min-height:36px;cursor:pointer;font-size:15px}
+.loc-crumbs .crumb.cur{color:var(--ink);padding:6px 4px}.loc-crumbs .sep{color:var(--sub)}
+.crumb-x{margin-left:4px;min-width:36px;min-height:36px;border-radius:50%;border:1px solid var(--line);background:var(--card);color:var(--sub);cursor:pointer}
+.lchip small{opacity:.7;margin-left:2px}.lchip.k-common,.lchip.k-room{border-style:dashed}

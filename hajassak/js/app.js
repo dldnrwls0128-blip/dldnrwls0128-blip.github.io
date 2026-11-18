@@ -55,7 +55,7 @@ async function loadAll() {
 }
 async function saveProject(p) { await db.put("projects", p); const i = S.projects.findIndex((x) => x.id === p.id); if (i >= 0) S.projects[i] = p; else S.projects.push(p); }
 async function saveDefect(d, { local = true } = {}) {
-  d.updatedAt = new Date().toISOString(); if (local) d.localEdited = true;
+  d.updatedAt = new Date().toISOString(); if (local) d.localEdited = true; S.locIdx = null;
   await db.put("defects", d);
   const i = S.defects.findIndex((x) => x.id === d.id); if (i >= 0) S.defects[i] = d; else S.defects.push(d);
   requestPersist();
@@ -341,7 +341,7 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간", core: "코어" };
+const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간", core: "코어", room: "실" };
 function filterChipText(k, v) {
   if (k === "status") return v === "_open" ? "미조치" : v === "_done" ? "완료(조치·확인)" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
@@ -385,6 +385,12 @@ function listGroupsHtml(list, grp, sorted = false) {
       ${shown.map((d) => defectCard(d, { sel: true })).join("")}${shown.length < items.length ? `<p class="help small lg-more">+${n(items.length - shown.length)}건은 아래 ‘더 보기’</p>` : ""}</details>`;
   }).join("");
 }
+/** 1.2.6 위치 검색 색인(현장·건수 바뀔 때만 다시 만듦) */
+function locIndex() {
+  const all = PD(); const key = `${S.pid}|${all.length}|${all[0]?.id}|${all.at(-1)?.id}`;
+  if (!S.locIdx || S.locIdx.key !== key) { const t = performance.now(); S.locIdx = { key, idx: M.buildLocIndex(all) }; window.__locIdxMs = Math.round(performance.now() - t); }
+  return S.locIdx.idx;
+}
 ROUTES.list = async () => {
   setTab("list");
   setHeader("하자 목록", { backBtn: navDepth() > 1 });
@@ -399,10 +405,15 @@ ROUTES.list = async () => {
   const tOn = (t) => fTypes.some((v) => (t.key ? M.sameType(v, t.name) || v === t.name : v === "_none"));
   const typeChips = tcs.length > 1 || fTypes.length ? `<div class="chips scroll ty-chips" id="ty-chips" role="group" aria-label="하자 유형"><button type="button" class="chip ${fTypes.length ? "" : "on"}" data-ty="">유형 전체 <small>${n(tcs.reduce((a, t) => a + t.n, 0))}</small></button>${tcs.map((t) => `<button type="button" class="chip ${tOn(t) ? "on" : ""}" data-ty="${t.key ? esc(t.name) : "_none"}">${t.key ? esc(t.name) : "유형 없음"} <small>${n(t.n)}</small></button>`).join("")}</div>` : "";
   const chips = activeChips(f);
+  /* 1.2.6 위치 바로 고르기 */
+  const fNoLoc = Object.fromEntries(Object.entries(f).filter(([k]) => !M.LOC_KEYS.includes(k)));
+  const lv = M.locLevel(M.applyFilter(all, fNoLoc, { vendorName: vName }), f); const hasLoc = lv.crumbs.length > 1;
   view().innerHTML = `
-    <form class="search" id="lsearch" role="search"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="내용·위치·업체 검색" aria-label="목록 검색">
+    <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="검색 · 312-802 · 지하주차장 휀룸" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
       <button type="button" class="btn" id="btn-filter">필터${M.filterCount(f) ? ` <b class="badge">${M.filterCount(f)}</b>` : ""}</button></form>
     <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
+    <div class="loc-pick" id="loc-pick"><div class="loc-crumbs" aria-label="위치">📍 ${lv.crumbs.map((c, i) => (i === lv.crumbs.length - 1 ? `<b class="crumb cur">${esc(c.label)}</b>` : `<button type="button" class="crumb" data-crumb="${i}">${esc(c.label)}</button>`)).join('<span class="sep">›</span>')}${hasLoc ? `<button type="button" class="crumb-x" id="loc-back" aria-label="한 단계 위로" title="한 단계 위로">✕</button>` : ""}</div>
+      ${lv.chips.length ? `<div class="chips scroll loc-chips" id="loc-chips">${lv.chips.slice(0, 300).map((c) => `<button type="button" class="chip lchip k-${c.kind}" data-lp="${esc(JSON.stringify(c.patch))}">${esc(c.label)} <small>${n(c.n)}</small></button>`).join("")}</div>` : ""}</div>
     <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
     <div class="ty-row">${typeChips}</div>
     <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
@@ -411,7 +422,27 @@ ROUTES.list = async () => {
     ${list.length > S.listLimit ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
-  $("#lsearch").addEventListener("submit", (e) => { e.preventDefault(); S.filter = { ...S.filter, text: $("#ls").value.trim() }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
+  const setLoc = (patch, keep = null) => { const nf = { ...S.filter }; const order = ["dong", "floor", "ho", "common", "room"];
+    if (keep) { for (const k of order) if (!keep.includes(k)) delete nf[k]; }
+    else { const first = Math.min(...Object.keys(patch).map((k) => order.indexOf(k))); for (const k of order.slice(first)) delete nf[k]; Object.assign(nf, patch); }
+    S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); };
+  $$("[data-lp]", view()).forEach((b) => b.addEventListener("click", () => setLoc(JSON.parse(b.dataset.lp))));
+  $$("[data-crumb]", view()).forEach((b) => b.addEventListener("click", () => setLoc(null, lv.crumbs[+b.dataset.crumb].keep)));
+  $("#loc-back")?.addEventListener("click", () => setLoc(null, lv.crumbs[lv.crumbs.length - 2].keep));
+  /* 위치 검색: 312-802 · 312동 802 · 802호 · 휀룸 · 지하주차장 휀룸 → 위치 고르기 (색인 미리 만들어 두고 입력은 잠깐 기다렸다가) */
+  const lsI = $("#ls"), sg = $("#ls-sugg"); let sgT = 0, sgList = [], sgAct = -1;
+  const applySugg = (e) => { const nf = { ...S.filter }; for (const k of M.LOC_KEYS) delete nf[k]; delete nf.text; Object.assign(nf, JSON.parse(JSON.stringify(e.f))); S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); };
+  const drawSugg = () => { const q = lsI.value.trim(); sgList = q ? M.searchLoc(locIndex(), q, 8) : []; sgAct = -1;
+    sg.hidden = !sgList.length; sg.innerHTML = sgList.map((e, i) => `<button type="button" class="ls-opt" role="option" data-si="${i}"><span>📍 <b>${esc(e.label)}</b>${e.sub ? ` <small class="help">${esc(e.sub)}</small>` : ""}</span><small class="cnt">${n(e.n)}건</small></button>`).join("");
+    $$("[data-si]", sg).forEach((b) => b.addEventListener("mousedown", (ev) => { ev.preventDefault(); applySugg(sgList[+b.dataset.si]); })); window.__suggN = (window.__suggN || 0) + 1; };
+  lsI.addEventListener("input", () => { clearTimeout(sgT); sgT = setTimeout(drawSugg, 120); });
+  lsI.addEventListener("focus", () => { if (lsI.value.trim()) drawSugg(); });
+  lsI.addEventListener("blur", () => setTimeout(() => { sg.hidden = true; }, 150));
+  lsI.addEventListener("keydown", (e) => { if (sg.hidden || !sgList.length) return; if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sgAct = (sgAct + (e.key === "ArrowDown" ? 1 : -1) + sgList.length) % sgList.length; $$(".ls-opt", sg).forEach((b, i) => b.classList.toggle("act", i === sgAct)); } else if (e.key === "Escape") sg.hidden = true; });
+  $("#lsearch").addEventListener("submit", (e) => { e.preventDefault(); clearTimeout(sgT); const q = lsI.value.trim();
+    const hits = q ? M.searchLoc(locIndex(), q, 8) : []; const pick = sgAct >= 0 && !sg.hidden ? sgList[sgAct] : hits[0] && (M.parseLocQuery(q) || hits[0].norm === M.sameKey(q)) ? hits[0] : null;
+    if (pick) return applySugg(pick);
+    S.filter = { ...S.filter, text: q }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
   $("#btn-filter").addEventListener("click", () => filterSheet());
   $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (k === "_all") S.filter = {}; else if (b.dataset.rv != null && Array.isArray(S.filter[k])) { S.filter[k] = S.filter[k].filter((x) => x !== b.dataset.rv); if (!S.filter[k].length) delete S.filter[k]; } else delete S.filter[k]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
   $("#btn-more")?.addEventListener("click", () => { S.listLimit += 120; rerender(); });

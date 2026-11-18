@@ -176,11 +176,11 @@ export const fArr = (v) => (Array.isArray(v) ? v.filter((x) => x !== "" && x != 
 export const FACET_KEYS = ["vendorId", "dong", "floor", "core", "trade", "type", "status", "severity", "category", "createdBy"];
 export const localDay = (iso) => { if (!iso) return ""; const t = new Date(iso); if (isNaN(t)) return String(iso).slice(0, 10); const z = new Date(t.getTime() - t.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
 const statusOk = (d, v) => (v === "_open" ? isOpen(d) : v === "_done" ? d.status === "조치완료" || d.status === "확인완료" : d.status === v);
-const floorOk = (d, v) => (v === "_none" ? !(d.floor || d.ho) : (d.floor || floorOfHo(d.ho)) === v);
+const floorOk = (d, v) => { const fl = d.floor || floorOfHo(d.ho) || locParts(d).floor; return v === "_none" ? !fl : fl === v; };
 export function facetMatch(d, k, v) {
   switch (k) {
     case "vendorId": return v === "_none" ? !d.vendorId : d.vendorId === v;
-    case "dong": return v === "_none" ? !d.dong : d.dong === v;
+    case "dong": { const dg = d.dong || locParts(d).dong; return v === "_none" ? !dg : dg === v; }
     case "floor": return floorOk(d, v);
     case "trade": return v === "_none" ? !d.trade : d.trade === v || sameTrade(d.trade, v);
     case "type": return v === "_none" ? !d.type : d.type === v || sameType(d.type, v);
@@ -196,7 +196,8 @@ export function applyFilter(list, f = {}, ctx = {}) {
   const facets = FACET_KEYS.map((k) => [k, fArr(f[k])]).filter(([, vs]) => vs.length);
   return list.filter((d) => {
     for (const [k, vs] of facets) if (!vs.some((v) => facetMatch(d, k, v))) return false;
-    if (f.ho && d.ho !== f.ho) return false;
+    if (f.ho && (d.ho || locParts(d).ho) !== String(f.ho)) return false;
+    if (f.room && roomOf(d) !== f.room) return false;
     if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || d.common : d.common !== f.common)) return false;
     if (f.turn && !isTurnOf(d, f.turn)) return false;
     if (f.chain && !hasSteps(d)) return false;
@@ -217,7 +218,7 @@ export function facetCounts(list, f, k, values, ctx = {}) {
   for (const v of values) m.set(v, base.filter((d) => facetMatch(d, k, v)).length);
   return m;
 }
-export const filterCount = (f) => [...FACET_KEYS, "ho", "common", "turn", "chain", "mine", "overdue", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
+export const filterCount = (f) => [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
 
 export function countBy(list, key) {
   const m = new Map();
@@ -345,7 +346,7 @@ export function typeCounts(list) {
 const LOC_CACHE = new WeakMap();
 /** 동·층·호·라인을 구조 필드에서, 없으면 위치 글자(예: ‘312동 2803호 부부욕실’, ‘지하2층’)에서 */
 export function locParts(d) {
-  if (LOC_CACHE.has(d) && LOC_CACHE.get(d).sig === `${d.dong}|${d.ho}|${d.floor}|${d.locEtc}|${d.common}`) return LOC_CACHE.get(d).v;
+  const c0 = LOC_CACHE.get(d); if (c0 && c0.a === d.dong && c0.b === d.ho && c0.c === d.floor && c0.e === d.locEtc && c0.g === d.common) return c0.v;
   const txt = `${d.locEtc || ""} ${d.common || ""} ${d.room || ""}`;
   let dong = d.dong || (txt.match(/(\d{2,4})\s*동/) || [])[1] && `${txt.match(/(\d{2,4})\s*동/)[1]}동` || "";
   let ho = String(d.ho || (txt.match(/(\d{3,4})\s*호/) || [])[1] || "").trim();
@@ -355,7 +356,7 @@ export function locParts(d) {
   const floorNum = !floor ? null : fm ? -Number(fm[1]) : floor === "옥상" ? 999 : Number.isFinite(Number(floor)) ? Number(floor) : null;
   const hoNum = /^\d+$/.test(ho) ? Number(ho) : null;
   const v = { dong, dongNum: dm ? Number(dm[0]) : null, floor, floorNum, ho, hoNum, line: hoNum != null && hoNum >= 100 ? hoNum % 100 : null };
-  LOC_CACHE.set(d, { sig: `${d.dong}|${d.ho}|${d.floor}|${d.locEtc}|${d.common}`, v });
+  LOC_CACHE.set(d, { a: d.dong, b: d.ho, c: d.floor, e: d.locEtc, g: d.common, v });
   return v;
 }
 /** 코어: 현장 설정(p.coreCfg.dongs[동][라인]) → 동 데이터의 cores([{core, lines:[..]}]) → 기본 규칙(라인 per개씩 한 코어, 기본 2) */
@@ -376,26 +377,111 @@ export const sortDefaultDir = (mode) => (mode === "new" ? "desc" : "asc");
 /** 정렬: 비어 있는 값(동·층·호 없음)은 오름·내림 상관없이 항상 뒤로 */
 export function sortList(list, mode = "", dir = "", p = CORE_P) {
   const today = todayStr(); const sg = (dir || sortDefaultDir(mode)) === "desc" ? -1 : 1;
+  // 1.2.6 큰 목록(수만 건)도 빠르게: 키를 한 번만 계산해 두고 정렬
+  const K = list.map((d) => { const l = locParts(d); return { d, c: d.createdAt || "", od: isOverdue(d, today) ? 1 : 0, due: d.due || "", dn: l.dongNum, ds: l.dong, f: l.floorNum, ln: l.line, ho: l.hoNum, co: mode === "core" ? coreOf(p, d) : null }; });
   const numC = (a, b) => (a == null && b == null ? 0 : a == null ? 1 : b == null ? -1 : (a - b) * sg);
-  const strC = (a, b) => (!a && !b ? 0 : !a ? 1 : !b ? -1 : a.localeCompare(b, "ko", { numeric: true }) * sg);
-  const newest = (a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0);
-  const L = (d) => locParts(d);
-  const dongC = (a, b) => numC(L(a).dongNum, L(b).dongNum) || strC(L(a).dong, L(b).dong);
-  const floorC = (a, b) => numC(L(a).floorNum, L(b).floorNum);
-  const lineC = (a, b) => numC(L(a).line, L(b).line);
-  const hoC = (a, b) => numC(L(a).hoNum, L(b).hoNum);
-  const coreC = (a, b) => numC(coreOf(p, a), coreOf(p, b));
+  const strC = (a, b) => (!a && !b ? 0 : !a ? 1 : !b ? -1 : a < b ? -sg : a > b ? sg : 0);
+  const dsC = (a, b) => (!a && !b ? 0 : !a ? 1 : !b ? -1 : a.localeCompare(b, "ko", { numeric: true }) * sg);
+  const newest = (a, b) => (a.c < b.c ? 1 : a.c > b.c ? -1 : 0);
+  const dongC = (a, b) => numC(a.dn, b.dn) || (a.dn == null && b.dn == null ? 0 : a.ds === b.ds ? 0 : dsC(a.ds, b.ds));
   const cmp = {
-    "": (a, b) => (isOverdue(b, today) - isOverdue(a, today)) || newest(a, b),
-    new: (a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0) * sg,
+    "": (a, b) => (b.od - a.od) || newest(a, b),
+    new: (a, b) => (a.c < b.c ? -1 : a.c > b.c ? 1 : 0) * sg,
     due: (a, b) => strC(a.due, b.due) || newest(a, b),
-    loc: (a, b) => dongC(a, b) || floorC(a, b) || lineC(a, b) || hoC(a, b) || newest(a, b),
+    loc: (a, b) => dongC(a, b) || numC(a.f, b.f) || numC(a.ln, b.ln) || numC(a.ho, b.ho) || newest(a, b),
     dong: (a, b) => dongC(a, b) || newest(a, b),
-    floor: (a, b) => floorC(a, b) || dongC(a, b) || lineC(a, b) || newest(a, b),
-    ho: (a, b) => lineC(a, b) || dongC(a, b) || floorC(a, b) || newest(a, b),
-    core: (a, b) => dongC(a, b) || coreC(a, b) || floorC(a, b) || lineC(a, b) || newest(a, b),
+    floor: (a, b) => numC(a.f, b.f) || dongC(a, b) || numC(a.ln, b.ln) || newest(a, b),
+    ho: (a, b) => numC(a.ln, b.ln) || dongC(a, b) || numC(a.f, b.f) || newest(a, b),
+    core: (a, b) => dongC(a, b) || numC(a.co, b.co) || numC(a.f, b.f) || numC(a.ln, b.ln) || newest(a, b),
   }[mode] || ((a, b) => newest(a, b));
-  return [...list].sort(cmp);
+  return K.sort(cmp).map((x) => x.d);
+}
+/* ---------- 1.2.6 위치 바로 고르기(동 › 층 › 호 › 실 / 단지 공용 › 공간 › 세부실) + 위치 검색 ---------- */
+export const LOC_KEYS = ["dong", "floor", "ho", "common", "room"];
+/** 세부실: 실 이름(room), 없으면 위치 글자에서 동·호·층을 뺀 나머지 */
+export function roomOf(d) {
+  if (d.room) return d.room;
+  const t = String(d.locEtc || "").replace(/\d{2,4}\s*동|\d{3,4}\s*호|(?:지하|B)\s*\d{1,2}\s*층?|\d{1,2}\s*층/gi, " ").replace(/\s+/g, " ").trim();
+  return t.slice(0, 20);
+}
+const realCommon = (c) => (c && c !== "_any" && c !== "_bare" ? c : "");
+const floorSortNum = (f) => (/^B(\d+)$/i.test(f) ? -Number(f.slice(1)) : f === "옥상" ? 999 : Number(f) || 0);
+const numKo = (a, b) => String(a).localeCompare(String(b), "ko", { numeric: true });
+/** 지금 위치 단계: { crumbs:[{label, keep:[키]}], chips:[{label, n, patch, kind}] }. base = 위치 말고 나머지 조건을 건 목록 */
+export function locLevel(base, f) {
+  const dongs = fArr(f.dong), floors = fArr(f.floor), ho = f.ho ? String(f.ho) : "", common = realCommon(f.common), room = f.room || "";
+  const crumbs = [{ label: "전체 위치", keep: [] }];
+  if (dongs.length) crumbs.push({ label: dongs.length > 1 ? `${dongs[0] === "_none" ? "단지 공용" : dongs[0]} 외 ${dongs.length - 1}` : dongs[0] === "_none" ? "단지 공용" : dongs[0], keep: ["dong"] });
+  if (floors.length) crumbs.push({ label: floors.map(floorLabel).join("·"), keep: ["dong", "floor"] });
+  if (ho) crumbs.push({ label: `${ho}호`, keep: ["dong", "floor", "ho"] });
+  if (common) crumbs.push({ label: common, keep: ["dong", "floor", "ho", "common"] });
+  if (room) crumbs.push({ label: room, keep: LOC_KEYS });
+  const cur = applyFilter(base, { dong: dongs, floor: floors, ho, common, room });
+  const count = (keyFn) => { const m = new Map(); for (const d of cur) { const k = keyFn(d); if (k) m.set(k, (m.get(k) || 0) + 1); } return m; };
+  const chips = [];
+  const push = (m, mk, kind, sortFn = numKo) => { for (const [k, n] of [...m.entries()].sort((a, b) => sortFn(a[0], b[0]))) chips.push({ label: mk.label(k), n, patch: mk.patch(k), kind }); };
+  if (room || dongs.length > 1) return { crumbs, chips, total: cur.length };
+  if (!dongs.length) {
+    const m = count((d) => locParts(d).dong);
+    push(m, { label: (k) => k, patch: (k) => ({ dong: [k] }) }, "dong", (a, b) => (Number((a.match(/\d+/) || [])[0]) || 1e9) - (Number((b.match(/\d+/) || [])[0]) || 1e9) || numKo(a, b));
+    const nc = cur.filter((d) => !locParts(d).dong).length; if (nc) chips.push({ label: "단지 공용", n: nc, patch: { dong: ["_none"] }, kind: "dong" });
+  } else if (dongs[0] === "_none") {
+    if (!common) push(count((d) => d.common || (roomOf(d) ? "" : "")), { label: (k) => k, patch: (k) => ({ common: k }) }, "common");
+    const rm = count((d) => (common || !d.common ? roomOf(d) : "")); if (common || !chips.length) push(rm, { label: (k) => k, patch: (k) => ({ room: k }) }, "room");
+  } else if (ho || common) {
+    push(count((d) => roomOf(d)), { label: (k) => k, patch: (k) => ({ room: k }) }, "room");
+  } else if (!floors.length) {
+    push(count((d) => locParts(d).floor), { label: (k) => floorLabel(k), patch: (k) => ({ floor: [k] }) }, "floor", (a, b) => floorSortNum(a) - floorSortNum(b));
+    push(count((d) => (!d.ho && d.common ? d.common : "")), { label: (k) => k, patch: (k) => ({ common: k }) }, "common");
+  } else {
+    push(count((d) => locParts(d).ho), { label: (k) => `${k}호`, patch: (k) => ({ ho: k }) }, "ho");
+    push(count((d) => (!d.ho && d.common ? d.common : "")), { label: (k) => k, patch: (k) => ({ common: k }) }, "common");
+  }
+  return { crumbs, chips, total: cur.length };
+}
+/** 위치 검색 색인: 동 · 동 층 · 동 호 · 동 공용부 · 단지 공용 공간 · 공간 세부실 · 세부실(모든 위치) */
+export function buildLocIndex(list) {
+  const m = new Map();
+  const add = (key, label, f, lv, sub = "") => { const e = m.get(key); if (e) e.n++; else m.set(key, { key, label, sub, f, lv, n: 1, norm: sameKey(label) }); };
+  for (const d of list) {
+    const lp = locParts(d); const c = d.common || ""; const r = roomOf(d);
+    if (lp.dong) {
+      add(`d|${lp.dong}`, lp.dong, { dong: [lp.dong] }, 1);
+      if (lp.floor) add(`f|${lp.dong}|${lp.floor}`, `${lp.dong} ${floorLabel(lp.floor)}`, { dong: [lp.dong], floor: [lp.floor] }, 2);
+      if (lp.ho) { add(`h|${lp.dong}|${lp.ho}`, `${lp.dong} ${lp.ho}호`, { dong: [lp.dong], ho: lp.ho }, 3); add(`hh|${lp.ho}`, `${lp.ho}호`, { ho: lp.ho }, 3, "모든 동"); }
+      if (c && !lp.ho) add(`dc|${lp.dong}|${c}`, `${lp.dong} ${c}`, { dong: [lp.dong], common: c }, 3);
+    } else if (c) {
+      add(`c|${c}`, c, { dong: ["_none"], common: c }, 1, "단지 공용");
+      if (r) add(`cr|${c}|${r}`, `${c} ${r}`, { dong: ["_none"], common: c, room: r }, 2, "단지 공용");
+    }
+    if (r) add(`r|${r}`, r, { room: r }, 4, "모든 위치");
+  }
+  return [...m.values()];
+}
+/** ‘312-802’, ‘312동 802’, ‘802호’, ‘B1’·‘지하1층’ → { dong, ho, floor } (없으면 null) */
+export function parseLocQuery(q) {
+  const t = String(q || "").trim(); let m;
+  if ((m = t.match(/^(\d{2,4})\s*(?:-|–|동)\s*(\d{3,4})\s*호?$/))) return { dong: `${m[1]}동`, ho: m[2] };
+  if ((m = t.match(/^(\d{2,4})\s*동\s*(?:(?:지하|B)\s*(\d{1,2})|(\d{1,2}))\s*층$/i))) return { dong: `${m[1]}동`, floor: m[2] ? `B${m[2]}` : m[3] };
+  if ((m = t.match(/^(\d{2,4})\s*동$/))) return { dong: `${m[1]}동` };
+  if ((m = t.match(/^(\d{3,4})\s*호$/))) return { ho: m[1] };
+  if ((m = t.match(/^(?:지하|B)\s*(\d{1,2})\s*층?$/i))) return { floor: `B${m[1]}` };
+  return null;
+}
+/** 색인에서 찾기 → 건수 많은 순 최대 n개 */
+export function searchLoc(index, q, n = 8) {
+  const qs = String(q || "").trim(); if (!qs) return [];
+  const pq = parseLocQuery(qs); let hits;
+  if (pq) {
+    hits = index.filter((e) => (!pq.dong || fArr(e.f.dong)[0] === pq.dong) && (!pq.ho || e.f.ho === pq.ho) && (!pq.floor || fArr(e.f.floor)[0] === pq.floor)
+      && (pq.ho ? e.f.ho : true) && (pq.floor ? fArr(e.f.floor).length : true) && !e.f.room && !e.f.common);
+    if (pq.dong && !pq.ho && !pq.floor) hits = hits.filter((e) => e.lv === 1);
+  } else {
+    const toks = qs.split(/\s+/).map(sameKey).filter(Boolean);
+    hits = index.filter((e) => toks.every((t) => e.norm.includes(t)));
+  }
+  const nq = sameKey(qs);
+  return hits.sort((a, b) => (b.norm === nq) - (a.norm === nq) || (b.norm.startsWith(nq)) - (a.norm.startsWith(nq)) || a.lv - b.lv || b.n - a.n).slice(0, n);
 }
 /** 도면 매칭: plan.dongs(빈 배열=전체), plan.floors "3-25, B1" */
 export function planMatches(plan, dong, floor) {
