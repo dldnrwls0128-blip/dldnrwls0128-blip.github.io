@@ -377,7 +377,7 @@ b.ui{display:inline-block;padding:0 6px;border-radius:6px;background:rgba(15,118
 .rate-t{font-size:13px;color:var(--sub)}.rate-t b{color:var(--ink)}
 .od-alert{display:block;width:100%;margin-top:10px;padding:10px 12px;border:0;border-radius:12px;background:var(--warn-bg);color:var(--warn);font-size:14px;text-align:left;cursor:pointer}
 .home2 .btn-xl{margin:4px 0 var(--gap);box-shadow:0 4px 14px color-mix(in srgb,var(--brand) 35%,transparent)}
-.actions4{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:var(--gap)}
+.actions4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:var(--gap)}
 .act{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:96px;padding:12px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--card);box-shadow:var(--shadow);text-align:left;cursor:pointer;color:var(--ink)}
 .act-i{font-size:24px;line-height:1;margin-bottom:6px}.act b{font-size:16px}.act small{font-size:12px;color:var(--sub);line-height:1.3}
 .more{padding:0;overflow:hidden;border-radius:var(--r-lg)}.more>summary{list-style:none;display:flex;align-items:center;gap:8px;min-height:52px;padding:0 14px;font-weight:700;cursor:pointer}
@@ -437,3 +437,32 @@ b.ui{display:inline-block;padding:0 6px;border-radius:6px;background:rgba(15,118
 .ph-more .btn{min-height:40px}
 body:has(.form .form-act) #toast{bottom:calc(136px + var(--safe-b))}
 .tm-row{padding:10px 12px;border:1px solid var(--line);border-radius:12px;margin:8px 0}.tm-names{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}.tm-row .row{align-items:flex-end;gap:8px}.tm-row .fld{flex:1;margin:0}.vsw{align-items:center;margin-top:6px}
+
+/* 1.2.4 유형 칩·목록 묶어 보기 */
+.ty-chips .chip small{opacity:.7;margin-left:2px}
+.inp-sm{width:auto;min-height:36px;padding:4px 8px;font-size:13px}
+details.lgrp{margin:0 0 12px}
+details.lgrp>summary{list-style:none;cursor:pointer}
+details.lgrp>summary::-webkit-details-marker{display:none}
+details.lgrp>summary .grp-tt::after{content:"▾";float:right;color:var(--sub)}
+details.lgrp:not([open])>summary .grp-tt::after{content:"▸"}
+.lg-more{margin:4px 8px}
+#dash-types .hrow{cursor:pointer}
+.ty-row{display:flex;align-items:flex-start;gap:6px}.ty-row>.inp-sm{flex:none;margin-top:2px}.ty-row>.chips{flex:1;min-width:0;margin:0}
+.hrow b{white-space:nowrap}
+/* 1.2.4 필터 패널·집계 */
+.res-n{font-size:17px}
+.fl-res{position:sticky;top:-1px;z-index:3;background:var(--card);margin:0 0 6px;padding:6px 0;font-size:16px}.fl-res b{font-size:22px;color:var(--brand)}
+.fl-toggles{display:flex;flex-wrap:wrap;gap:4px 14px;margin:2px 0 6px}
+details.fc{border-top:1px solid var(--line);padding:6px 0}details.fc>summary{cursor:pointer;padding:6px 0;list-style:none;display:flex;gap:8px;align-items:baseline}details.fc>summary::-webkit-details-marker{display:none}
+details.fc>summary::after{content:"▾";margin-left:auto;color:var(--sub)}details.fc:not([open])>summary::after{content:"▸"}
+.fc-sel{color:var(--brand);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%}
+.fc-chips{flex-wrap:wrap}.fchip .fn{opacity:.75;margin-left:2px}.fchip.zero{opacity:.45}
+.dash-find{display:flex;gap:8px;margin:0 0 var(--gap)}.dash-find .btn-primary{flex:1}
+.agg-wrap{overflow-x:auto;margin-top:8px;-webkit-overflow-scrolling:touch}
+.agg-t{border-collapse:collapse;font-size:13px;min-width:100%;white-space:nowrap}.agg-t th,.agg-t td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:center}
+.agg-t tbody th{text-align:left;position:sticky;left:0;background:var(--card);max-width:120px;overflow:hidden;text-overflow:ellipsis}.agg-t thead th{color:var(--sub);font-weight:600}
+.agg-t tr.sum th,.agg-t tr.sum td{font-weight:800;border-top:2px solid var(--line)}
+.agg-c{min-width:36px;min-height:32px;border:0;border-radius:8px;background:var(--chip);color:inherit;font-weight:700;cursor:pointer}.agg-c.bad{color:#c2410c}.agg-t .z{color:var(--sub)}
+@media (max-width:420px){.actions4{grid-template-columns:repeat(2,1fr)}.actions4 .act{min-height:70px;padding:10px}}
+.agg-sheet .sheet-bd,.fl-sheet .sheet-bd{overflow-x:hidden}.agg-wrap{max-width:100%}#agg-rows{flex-wrap:wrap}

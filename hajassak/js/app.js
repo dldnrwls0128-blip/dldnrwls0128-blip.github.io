@@ -108,7 +108,7 @@ const scrollMem = new Map(); let curHash = "";
 function captureView() {
   const top = (document.querySelector(".app-header")?.getBoundingClientRect().bottom || 0) + 2;
   let anchor = "", off = 0;
-  for (const el of $$("[data-id]", view())) { const r = el.getBoundingClientRect(); if (r.height && r.bottom > top) { anchor = el.dataset.id; off = r.top; break; } }
+  for (const el of $$("[data-id]", view())) { if (el.closest("details:not([open])")) continue; const r = el.getBoundingClientRect(); if (r.height && r.bottom > top) { anchor = el.dataset.id; off = r.top; break; } }
   return { y: window.scrollY, anchor, off, open: $$("details[id]", view()).filter((x) => x.open).map((x) => x.id), limit: S.listLimit };
 }
 function restoreView(m) {
@@ -297,6 +297,7 @@ ROUTES.home = async () => {
     <div class="actions4">
       <button type="button" class="act" data-go="#/list"><span class="act-i">📋</span><b>목록</b><small>${n(open.length)}건 미조치</small></button>
       <button type="button" class="act" data-go="#/grid"><span class="act-i">🏢</span><b>동현황</b><small>세대별 한눈에</small></button>
+      <button type="button" class="act" id="home-find"><span class="act-i">🔎</span><b>건수 찾기</b><small>업체·동·유형별</small></button>
       <button type="button" class="act" data-go="#/vendors"><span class="act-i">📲</span><b>보내기</b><small>${unsent ? `미전달 ${n(unsent)}건` : "업체에 카톡·문자"}</small></button>
     </div>
     <details class="more card" id="home-more"><summary>더보기 <small>대시보드 · 엑셀 · 현장 전환 · 사용법</small></summary>
@@ -314,6 +315,7 @@ ROUTES.home = async () => {
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
   $("#btn-proj").addEventListener("click", switchProject);
+  $("#home-find")?.addEventListener("click", () => filterSheet());
   $("[data-a=switch]", view())?.addEventListener("click", switchProject);
   $("#qsearch").addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#qs").value); });
 };
@@ -339,7 +341,7 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색" };
+const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간" };
 function filterChipText(k, v) {
   if (k === "status") return v === "_open" ? "미조치" : v === "_done" ? "완료(조치·확인)" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
@@ -351,61 +353,192 @@ function filterChipText(k, v) {
   if (k === "mine") return "다음 공정 보낼 차례";
   if (k === "floor") return v === "_none" ? "층 미지정" : M.floorLabel(v);
   if (k === "text") return `“${v}”`;
+  if (k === "from") return `${v}부터`;
+  if (k === "to") return `${v}까지`;
+  if (v === "_none") return { dong: "동 없음", trade: "공종 없음", type: "유형 없음", createdBy: "기록 없음", severity: "없음", category: "없음" }[k] || "없음";
   return v;
+}
+/** 1.2.4 목록 묶어 보기: 유형별·공종·업체별·위치(동)별. 묶음 순서는 다시 그려도 유지(보던 자리 유지) */
+function listGroupsHtml(list, grp) {
+  const keyOf = grp === "type" ? (d) => (d.type ? M.typeKey(d.type) : "")
+    : grp === "tv" ? (d) => `${d.trade ? M.tradeKey(d.trade) : ""}|${d.vendorId || ""}`
+    : (d) => d.dong || (d.common ? "공용:" + d.common : d.locEtc ? "기타" : "");
+  const m = new Map();
+  for (const d of list) { const k = keyOf(d); if (!m.has(k)) m.set(k, []); m.get(k).push(d); }
+  const label = (k, items) => {
+    if (grp === "type") return k ? M.typeCounts(items)[0].name : "유형 없음";
+    if (grp === "tv") { const d = items[0]; return `${d.trade || "공종 미지정"} · ${vName(d) || "업체 미지정"}`; }
+    return !k ? "위치 미지정" : k.startsWith("공용:") ? k.slice(3) : k;
+  };
+  const okey = `lg:${grp}`; S.grpOrder ||= new Map(); const prev = S.grpOrder.get(okey) || [];
+  let keys = [...m.keys()].sort((a, b) => (!a) - (!b) || m.get(b).length - m.get(a).length || String(a).localeCompare(String(b), "ko"));
+  if (navKind() === "re" || navKind() === "pop") keys = [...prev.filter((k) => m.has(k)), ...keys.filter((k) => !prev.includes(k))];
+  S.grpOrder.set(okey, keys);
+  const closed = new Set(LS.get("listGrpClosed", [])); let left = S.listLimit;
+  return keys.map((k, gi) => {
+    const items = m.get(k); const shown = items.slice(0, Math.max(0, left)); left -= shown.length; const gk = `${grp}:${k}`; const lb = label(k, items);
+    return `<details class="lgrp" id="lg-${grp}-${gi}" data-gk="${esc(gk)}" ${closed.has(gk) ? "" : "open"}><summary class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="${items.map((d) => d.id).join(",")}" aria-label="${esc(lb)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(lb)}</b> <span class="help">${n(items.length)}건 · 미조치 ${n(items.filter(M.isOpen).length)}</span></div></summary>
+      ${shown.map((d) => defectCard(d, { sel: true })).join("")}${shown.length < items.length ? `<p class="help small lg-more">+${n(items.length - shown.length)}건은 아래 ‘더 보기’</p>` : ""}</details>`;
+  }).join("");
 }
 ROUTES.list = async () => {
   setTab("list");
   setHeader("하자 목록", { backBtn: navDepth() > 1 });
   const f = S.filter; const all = PD();
   const list = M.applyFilter(all, f, { vendorName: vName }).sort((a, b) => (M.isOverdue(b) - M.isOverdue(a)) || (a.createdAt < b.createdAt ? 1 : -1));
-  const chips = Object.entries(f).filter(([, v]) => v).map(([k, v]) => `<button type="button" class="chip on" data-rm="${k}">${esc(FILTER_LABEL[k])}: ${esc(filterChipText(k, v))} ✕</button>`).join("");
+  /* 1.2.4 유형 칩(건수: 유형 조건만 뺀 목록 기준) + 묶어 보기 */
+  const tcs = M.typeCounts(M.applyFilter(all, { ...f, type: [] }, { vendorName: vName })); const fTypes = M.fArr(f.type);
+  const tOn = (t) => fTypes.some((v) => (t.key ? M.sameType(v, t.name) || v === t.name : v === "_none"));
+  const typeChips = tcs.length > 1 || fTypes.length ? `<div class="chips scroll ty-chips" id="ty-chips" role="group" aria-label="하자 유형"><button type="button" class="chip ${fTypes.length ? "" : "on"}" data-ty="">유형 전체 <small>${n(tcs.reduce((a, t) => a + t.n, 0))}</small></button>${tcs.map((t) => `<button type="button" class="chip ${tOn(t) ? "on" : ""}" data-ty="${t.key ? esc(t.name) : "_none"}">${t.key ? esc(t.name) : "유형 없음"} <small>${n(t.n)}</small></button>`).join("")}</div>` : "";
+  const grp = LS.get("listGroup", "");
+  const chips = activeChips(f);
   view().innerHTML = `
     <form class="search" id="lsearch" role="search"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="내용·위치·업체 검색" aria-label="목록 검색">
       <button type="button" class="btn" id="btn-filter">필터${M.filterCount(f) ? ` <b class="badge">${M.filterCount(f)}</b>` : ""}</button></form>
     <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
-    <div class="list-hd"><b>${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
-      <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
-    <div id="cards">${list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("") || `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
+    <div class="ty-row"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select>${typeChips}</div>
+    <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
+      <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
+    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
     ${list.length > S.listLimit ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
   $("#lsearch").addEventListener("submit", (e) => { e.preventDefault(); S.filter = { ...S.filter, text: $("#ls").value.trim() }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
   $("#btn-filter").addEventListener("click", () => filterSheet());
-  $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { if (b.dataset.rm === "_all") S.filter = {}; else delete S.filter[b.dataset.rm]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
+  $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (k === "_all") S.filter = {}; else if (b.dataset.rv != null && Array.isArray(S.filter[k])) { S.filter[k] = S.filter[k].filter((x) => x !== b.dataset.rv); if (!S.filter[k].length) delete S.filter[k]; } else delete S.filter[k]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
   $("#btn-more")?.addEventListener("click", () => { S.listLimit += 120; rerender(); });
+  $$("[data-ty]", view()).forEach((b) => b.addEventListener("click", () => { const v = b.dataset.ty; const cur = M.fArr(S.filter.type);
+    if (!v) delete S.filter.type; else if (b.classList.contains("on")) { const nx = cur.filter((x) => !(x === v || (v !== "_none" && M.sameType(x, v)))); if (nx.length) S.filter.type = nx; else delete S.filter.type; } else S.filter.type = [...cur, v]; LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; rerender(); }));
+  $("#lgroup").addEventListener("change", (e) => { LS.set("listGroup", e.target.value); S.noRestore = true; rerender(); });
+  $$("details.lgrp", view()).forEach((dd) => dd.addEventListener("toggle", () => { const c = new Set(LS.get("listGrpClosed", [])); if (dd.open) c.delete(dd.dataset.gk); else c.add(dd.dataset.gk); LS.set("listGrpClosed", [...c].slice(-200)); }));
+  $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = g.dataset.gall.split(","); for (const x of ids) S.select[g.checked ? "add" : "delete"](x); syncChecks(); }));
   $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
+  $("#btn-agg").addEventListener("click", () => aggSheet(list));
+  if (S.openFilter) { S.openFilter = false; setTimeout(() => filterSheet(), 50); }
   $("#btn-sendlist").addEventListener("click", () => sendSheet({ items: list }));
 };
+/** 필터 칩(여러 값이면 값마다 칩) */
+function activeChips(f) {
+  return Object.entries(f).flatMap(([k, v]) => {
+    if (!v || (Array.isArray(v) && !v.length)) return [];
+    if (Array.isArray(v)) return v.map((x) => `<button type="button" class="chip on" data-rm="${k}" data-rv="${esc(x)}">${esc(FILTER_LABEL[k] || k)}: ${esc(filterChipText(k, x))} ✕</button>`);
+    return [`<button type="button" class="chip on" data-rm="${k}">${esc(FILTER_LABEL[k] || k)}: ${esc(filterChipText(k, v))} ✕</button>`];
+  }).join("");
+}
+/** 1.2.4 필터 패널: 항목마다 여러 개 고르기 + 실시간 건수(그 항목만 뺀 나머지 조건 기준) · 항목끼리는 그리고 */
+function facetOptions(p, all) {
+  const uniq = (a) => [...new Set(a.filter(Boolean))];
+  const tradeNames = []; for (const t of uniq([...p.trades.map((t) => t.name), ...all.map((d) => d.trade)])) if (!tradeNames.some((x) => M.sameTrade(x, t))) tradeNames.push(t);
+  const typeNames = M.typeCounts(all).filter((t) => t.key).map((t) => t.name);
+  const floors = uniq(all.map((d) => d.floor || M.floorOfHo(d.ho))).sort((a, b) => (Number(b) || -99) - (Number(a) || -99));
+  const dongs = uniq([...p.dongs.map((d) => d.name), ...all.map((d) => d.dong)]);
+  const vids = new Set(all.map((d) => d.vendorId).filter(Boolean)); const vendors = S.vendors.filter((v) => vids.has(v.id) || !v.projectIds?.length || v.projectIds.includes(p.id));
+  const by = uniq(all.map((d) => d.createdBy));
+  return [
+    { k: "status", t: "상태", o: [["_open", "미조치 전체"], ["_done", "완료(조치·확인)"], ...M.STATUSES.map((x) => [x, x])] },
+    { k: "vendorId", t: "업체", o: [...vendors.map((v) => [v.id, v.name]), ["_none", "업체 미지정"]] },
+    { k: "dong", t: "동", o: [...dongs.map((x) => [x, x]), ...(all.some((d) => !d.dong) ? [["_none", "동 없음(단지 공용 등)"]] : [])] },
+    { k: "floor", t: "층", o: [...floors.map((x) => [x, M.floorLabel(x)]), ...(all.some((d) => !(d.floor || d.ho)) ? [["_none", "층 미지정"]] : [])], fold: true },
+    { k: "trade", t: "공종", o: tradeNames.map((x) => [x, x]) },
+    { k: "type", t: "유형", o: [...typeNames.map((x) => [x, x]), ...(all.some((d) => !d.type) ? [["_none", "유형 없음"]] : [])] },
+    { k: "severity", t: "중요도", o: M.SEVERITIES.map((x) => [x, x]) },
+    { k: "category", t: "구분", o: uniq([...M.catsOf(p), ...all.map((d) => d.category)]).map((x) => [x, x]), fold: true },
+    ...(by.length ? [{ k: "createdBy", t: "등록자", o: [...by.map((x) => [x, x]), ...(all.some((d) => !d.createdBy) ? [["_none", "기록 없음"]] : [])] }] : []),
+  ];
+}
 function filterSheet() {
-  const p = P(); const f = { ...S.filter };
-  const sel = (k, opts, label) => `<label class="fld"><span>${label}</span><select class="inp" data-k="${k}"><option value="">전체</option>${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(f[k] || "") === String(v) ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>`;
-  const usedTrades = [...new Set([...p.trades.map((t) => t.name), ...PD().map((d) => d.trade).filter(Boolean)])];
-  const usedTypes = [...new Set([...p.types, ...PD().map((d) => d.type).filter(Boolean)])];
-  const s = openSheet({
-    title: "필터", full: true,
-    html: `<div class="grid2">
-      ${sel("dong", p.dongs.map((d) => [d.name, d.name]), "동")}
-      <label class="fld"><span>호</span><input class="inp" data-k="ho" inputmode="numeric" value="${esc(f.ho || "")}" placeholder="예: 1203"></label>
-      ${sel("common", [["_any", "공용부·세대 외 전체"], ["_bare", "공용부 미지정(동·층만)"], ...[...new Set([...M.dongCommonsOf(p), ...p.commons, ...PD().map((d) => d.common).filter(Boolean)])].map((x) => [x, x])], "공용부")}
-      ${sel("floor", [["_none", "층 미지정"], ...[...new Set([f.floor, ...PD().map((d) => d.floor || M.floorOfHo(d.ho))].filter((x) => x && x !== "_none"))].sort((a, b) => (Number(b) || -99) - (Number(a) || -99)).map((x) => [x, M.floorLabel(x)])], "층")}
-      ${sel("status", [["_open", "미조치 전체"], ["_done", "완료(조치·확인)"], ...M.STATUSES.map((x) => [x, x])], "상태")}
-      ${sel("category", [...new Set([...M.catsOf(p), ...PD().map((d) => d.category).filter(Boolean)])].map((x) => [x, x]), "구분")}
-      ${sel("trade", usedTrades.map((x) => [x, x]), "공종")}
-      ${sel("vendorId", [["_none", "업체 미지정"], ...S.vendors.map((v) => [v.id, v.name])], "업체")}
-      ${sel("turn", S.vendors.map((v) => [v.id, v.name]), "내 차례 대기(업체)")}
-      ${sel("chain", [["1", "후속 공정 있는 하자"]], "후속 공정")}
-      ${sel("mine", [["1", "다음 공정 보낼 차례"]], "내 차례 대기")}
-      ${sel("type", usedTypes.map((x) => [x, x]), "유형")}
-      ${sel("severity", M.SEVERITIES.map((x) => [x, x]), "중요도")}</div>
-      <label class="check"><input type="checkbox" data-k="overdue" ${f.overdue ? "checked" : ""}> 기한초과만</label>
-      <label class="fld"><span>검색어</span><input class="inp" data-k="text" value="${esc(f.text || "")}" placeholder="내용·위치·메모"></label>`,
-    footer: `<button type="button" class="btn" data-a="reset">초기화</button><button type="button" class="btn btn-primary" data-a="apply">적용</button>`,
+  const p = P(); const all = PD(); const ctx = { vendorName: vName };
+  const nf = JSON.parse(JSON.stringify(S.filter || {})); for (const k of M.FACET_KEYS) if (nf[k] && !Array.isArray(nf[k])) nf[k] = [nf[k]];
+  const facets = facetOptions(p, all);
+  for (const fc of facets) for (const v of M.fArr(nf[fc.k])) if (!fc.o.some(([x]) => x === v)) fc.o.unshift([v, filterChipText(fc.k, v)]);
+  const has = (k, v) => M.fArr(nf[k]).includes(v);
+  const day = (dd) => { const t = new Date(Date.now() - dd * 864e5); return M.localDay(t.toISOString()); };
+  const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
+    <div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
+  const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
+    html: `<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
+      <div class="chips scroll" id="fl-active"></div>
+      <div class="fl-toggles"><label class="check"><input type="checkbox" id="fl-overdue" ${nf.overdue ? "checked" : ""}> ⏰ 기한초과만 <small class="fn" id="fl-odn"></small></label>
+        <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label></div>
+      ${facets.map(facetHtml).join("")}
+      <details class="fc" data-fc="_loc" ${nf.ho || nf.from || nf.to ? "open" : ""}><summary><b>호 · 기간</b></summary>
+        <div class="grid2"><label class="fld"><span>호</span><input class="inp" id="fl-ho" inputmode="numeric" value="${esc(nf.ho || "")}" placeholder="예: 1203"></label><span></span>
+        <label class="fld"><span>등록일 부터</span><input class="inp" type="date" id="fl-from" value="${esc(nf.from || "")}"></label><label class="fld"><span>까지</span><input class="inp" type="date" id="fl-to" value="${esc(nf.to || "")}"></label></div>
+        <div class="chips"><button type="button" class="chip" data-per="0">오늘</button><button type="button" class="chip" data-per="6">최근 7일</button><button type="button" class="chip" data-per="29">최근 30일</button><button type="button" class="chip" data-per="">기간 없음</button></div></details>
+      <details class="fc" data-fc="_more" ${nf.common || nf.turn || nf.chain || nf.mine || nf.text ? "open" : ""}><summary><b>더 보기</b> <small>공용부 · 내 차례 · 후속 공정 · 검색어</small></summary>
+        <div class="grid2">
+        <label class="fld"><span>공용부</span><select class="inp" data-k="common"><option value="">전체</option>${[["_any", "공용부·세대 외 전체"], ["_bare", "공용부 미지정(동·층만)"], ...[...new Set([...M.dongCommonsOf(p), ...p.commons, ...all.map((d) => d.common).filter(Boolean)])].map((x) => [x, x])].map(([v, t]) => `<option value="${esc(v)}" ${nf.common === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
+        <label class="fld"><span>내 차례 대기(업체)</span><select class="inp" data-k="turn"><option value="">전체</option>${S.vendors.map((v) => `<option value="${esc(v.id)}" ${nf.turn === v.id ? "selected" : ""}>${esc(v.name)}</option>`).join("")}</select></label></div>
+        <label class="check"><input type="checkbox" data-k="chain" ${nf.chain ? "checked" : ""}> 후속 공정 있는 하자</label>
+        <label class="check"><input type="checkbox" data-k="mine" ${nf.mine ? "checked" : ""}> 다음 공정 보낼 차례</label>
+        <label class="fld"><span>검색어</span><input class="inp" data-k="text" value="${esc(nf.text || "")}" placeholder="내용·위치·메모"></label></details>`,
+    footer: `<button type="button" class="btn" data-a="reset">초기화</button><button type="button" class="btn btn-primary" data-a="apply" id="fl-apply">0건 보기</button>` });
+  const el = s.el;
+  const clean = () => { const o = {}; for (const [k, v] of Object.entries(nf)) { if (Array.isArray(v) ? v.length : v) o[k] = v; } return o; };
+  const refresh = () => {
+    const f0 = clean(); const res = M.applyFilter(all, f0, ctx).length;
+    $("#fl-n", el).textContent = n(res); $("#fl-apply", el).textContent = `${n(res)}건 보기`;
+    for (const fc of facets) {
+      const cnt = M.facetCounts(all, f0, fc.k, fc.o.map(([v]) => v), ctx);
+      for (const b of $$(`.fchip[data-fk="${fc.k}"]`, el)) { const c = cnt.get(b.dataset.fv) || 0; b.querySelector(".fn").textContent = n(c); const on = has(fc.k, b.dataset.fv); b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); b.classList.toggle("zero", !c && !on); }
+      const sel = M.fArr(nf[fc.k]); $(`[data-sel-of="${fc.k}"]`, el).textContent = sel.length ? sel.map((v) => filterChipText(fc.k, v)).join(", ") : "";
+    }
+    $("#fl-odn", el).textContent = n(M.applyFilter(all, { ...f0, overdue: true }, ctx).length);
+    $("#fl-urgent", el).checked = has("severity", "긴급");
+    $("#fl-active", el).innerHTML = activeChips(f0) || '<span class="help">조건 없음 · 전체</span>';
+    $$("[data-rm]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (b.dataset.rv != null && Array.isArray(nf[k])) nf[k] = nf[k].filter((x) => x !== b.dataset.rv); else delete nf[k]; syncInputs(); refresh(); }));
+  };
+  const syncInputs = () => { $("#fl-overdue", el).checked = !!nf.overdue; $("#fl-ho", el).value = nf.ho || ""; $("#fl-from", el).value = nf.from || ""; $("#fl-to", el).value = nf.to || "";
+    for (const i of $$("[data-k]", el)) { if (i.type === "checkbox") i.checked = !!nf[i.dataset.k]; else i.value = nf[i.dataset.k] || ""; } };
+  const toggle = (k, v) => { const cur = M.fArr(nf[k]); nf[k] = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]; };
+  el.addEventListener("click", (e) => {
+    const b = e.target.closest(".fchip"); if (b) { toggle(b.dataset.fk, b.dataset.fv); refresh(); return; }
+    const per = e.target.closest("[data-per]"); if (per) { if (per.dataset.per === "") { delete nf.from; delete nf.to; } else { nf.from = day(+per.dataset.per); nf.to = day(0); } syncInputs(); refresh(); }
   });
-  $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => {
-    const nf = {};
-    if (b.dataset.a === "apply") $$("[data-k]", s.el).forEach((i) => { const v = i.type === "checkbox" ? i.checked : i.value.trim(); if (v) nf[i.dataset.k] = v; });
-    S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; await s.close(); rerender();
+  $("#fl-overdue", el).addEventListener("change", (e) => { nf.overdue = e.target.checked || undefined; refresh(); });
+  $("#fl-urgent", el).addEventListener("change", (e) => { const cur = M.fArr(nf.severity).filter((x) => x !== "긴급"); nf.severity = e.target.checked ? [...cur, "긴급"] : cur; refresh(); });
+  for (const [id, k] of [["#fl-ho", "ho"], ["#fl-from", "from"], ["#fl-to", "to"]]) $(id, el).addEventListener("input", (e) => { nf[k] = e.target.value.trim(); refresh(); });
+  for (const i of $$("[data-k]", el)) i.addEventListener(i.type === "checkbox" ? "change" : "input", () => { nf[i.dataset.k] = i.type === "checkbox" ? (i.checked ? "1" : "") : i.value.trim(); refresh(); });
+  $$("[data-a]", el).forEach((b) => b.addEventListener("click", async () => {
+    if (b.dataset.a === "reset") { for (const k of Object.keys(nf)) delete nf[k]; syncInputs(); refresh(); return; }
+    S.filter = clean(); LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; await s.close();
+    if (location.hash.split("?")[0] !== "#/list") go("#/list"); else rerender();
   }));
+  refresh();
+  return s;
+}
+/** 1.2.4 집계: 지금 목록을 업체·동·공종·유형 × 상태 건수 표로. 칸을 누르면 그 조건으로 목록 */
+function aggSheet(list, base = null) {
+  let row = LS.get("aggRow", "vendorId");
+  const ROWS = { vendorId: "업체", dong: "동", trade: "공종", type: "유형" };
+  const COLS = [["_open", "미조치"], ...M.STATUSES.map((x) => [x, x])];
+  const keyOf = { vendorId: (d) => d.vendorId || "_none", dong: (d) => d.dong || "_none", trade: (d) => (d.trade ? M.tradeKey(d.trade) : "_none"), type: (d) => (d.type ? M.typeKey(d.type) : "_none") };
+  const table = () => {
+    const m = new Map(); const nameOf = new Map();
+    for (const d of list) { const k = keyOf[row](d); if (!m.has(k)) m.set(k, []); m.get(k).push(d);
+      if (!nameOf.has(k)) nameOf.set(k, row === "vendorId" ? (k === "_none" ? "업체 미지정" : vLabel(k)) : k === "_none" ? "없음" : row === "dong" ? k : row === "trade" ? d.trade : d.type); }
+    if (row === "type") for (const [k, items] of m) if (k !== "_none") nameOf.set(k, M.typeCounts(items)[0].name);
+    const rows = [...m.entries()].sort((a, b) => (a[0] === "_none") - (b[0] === "_none") || b[1].filter(M.isOpen).length - a[1].filter(M.isOpen).length || b[1].length - a[1].length);
+    const fv = (k, items) => (k === "_none" ? "_none" : row === "vendorId" || row === "dong" ? k : row === "trade" ? items[0].trade : nameOf.get(k));
+    const cell = (items, rk, c) => { const v = c === "_open" ? items.filter(M.isOpen).length : c === "_od" ? items.filter((d) => M.isOverdue(d)).length : c === "_all" ? items.length : items.filter((d) => d.status === c).length;
+      return `<td>${v ? `<button type="button" class="agg-c ${c === "_od" ? "bad" : ""}" data-rk="${esc(rk)}" data-c="${c}">${n(v)}</button>` : '<span class="z">·</span>'}</td>`; };
+    return `<table class="agg-t"><thead><tr><th>${ROWS[row]}</th>${COLS.map(([, t]) => `<th>${t}</th>`).join("")}<th>기한초과</th><th>합계</th></tr></thead><tbody>
+      ${rows.map(([k, items]) => `<tr><th>${esc(nameOf.get(k) || "-")}</th>${COLS.map(([c]) => cell(items, fv(k, items), c)).join("")}${cell(items, fv(k, items), "_od")}${cell(items, fv(k, items), "_all")}</tr>`).join("")}
+      <tr class="sum"><th>합계</th>${COLS.map(([c]) => cell(list, "_ALL", c)).join("")}${cell(list, "_ALL", "_od")}${cell(list, "_ALL", "_all")}</tr></tbody></table>`;
+  };
+  const s = openSheet({ title: base ? "집계 (전체)" : "집계 (지금 목록 기준)", full: true, cls: "agg-sheet",
+    html: `<p class="help">${base ? "전체" : "검색 결과"} <b>${n(list.length)}건</b>을 묶어서 셌어요. 숫자를 누르면 그 조건의 목록으로 가요.</p>
+      <div class="chips" id="agg-rows">${Object.entries(ROWS).map(([k, t]) => `<button type="button" class="chip ${k === row ? "on" : ""}" data-row="${k}">${t} × 상태</button>`).join("")}</div>
+      <div class="agg-wrap" id="agg-wrap">${table()}</div>` });
+  const bind = () => $$(".agg-c", s.el).forEach((b) => b.addEventListener("click", async () => {
+    const f = { ...(base || S.filter) }; const rk = b.dataset.rk, c = b.dataset.c;
+    if (rk !== "_ALL") f[row] = [rk];
+    if (c === "_od") f.overdue = true; else if (c !== "_all") f.status = [c];
+    S.filter = f; LS.set("filter", f); S.listLimit = 60; S.noRestore = true; await s.close();
+    if (location.hash.split("?")[0] !== "#/list") go("#/list"); else rerender();
+  }));
+  $$("[data-row]", s.el).forEach((b) => b.addEventListener("click", () => { row = b.dataset.row; LS.set("aggRow", row); $$("[data-row]", s.el).forEach((x) => x.classList.toggle("on", x === b)); $("#agg-wrap", s.el).innerHTML = table(); bind(); }));
+  bind(); return s;
 }
 
 /* ---------- 세대 보기 ---------- */
@@ -544,24 +677,28 @@ ROUTES.dash = async () => {
   for (const d of list) { const k = d.vendorId || "_none"; const m = vrows.get(k) || { all: 0, open: 0, od: 0, done: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d, today)) m.od++; if (!M.isOpen(d)) m.done++; vrows.set(k, m); }
   const vlist = [...vrows.entries()].sort((a, b) => b[1].open - a[1].open);
   const bar = (v, max, cls = "") => `<span class="bar ${cls}"><i style="width:${Math.round((v / Math.max(1, max)) * 100)}%"></i></span>`;
-  const types = M.countBy(open, "type").slice(0, 8); const tmax = Math.max(1, ...types.map((t) => t[1]));
+  const types = M.typeCounts(list).filter((t) => t.key).slice(0, 10); const tmax = Math.max(1, ...types.map((t) => t.n));
   const dongs = M.countBy(open, "dong").slice(0, 12); const dmax = Math.max(1, ...dongs.map((t) => t[1]));
   const cats = M.countBy(list, "category"); const copen = new Map(M.countBy(open, "category")); const cmax = Math.max(1, ...cats.map((t) => t[1]));
   view().innerHTML = `
     <div class="kpis"><div class="kpi"><b>${n(list.length)}</b><span>전체</span></div><div class="kpi"><b>${n(open.length)}</b><span>미조치</span></div>
       <div class="kpi warn"><b>${n(od.length)}</b><span>기한초과</span></div><div class="kpi ok"><b>${list.length ? Math.round((done / list.length) * 100) : 0}%</b><span>조치율</span></div></div>
+    <div class="dash-find"><button type="button" class="btn btn-primary" id="dash-find">🔎 업체·동·유형별 건수 찾기</button><button type="button" class="btn" id="dash-agg">📊 집계표</button></div>
     <section class="card"><h3>상태별</h3><div class="stbar">${M.STATUSES.map((s) => (st.get(s) ? `<i class="${M.STATUS_CLS[s]}" style="flex:${st.get(s)}" title="${s}"></i>` : "")).join("")}</div>
       <div class="stleg">${M.STATUSES.map((s) => `<button type="button" class="lg" data-st="${s}">${pill(s)} ${n(st.get(s) || 0)}</button>`).join("")}</div></section>
     <section class="card"><h3>업체별 <small>미조치 · 기한초과 · 조치율</small></h3>
       <table class="tbl"><tbody>${vlist.map(([k, m]) => `<tr data-v="${k}"><td>${esc(k === "_none" ? "업체 미지정" : vLabel(k))}</td><td class="r">${m.open}</td><td class="r ${m.od ? "od" : ""}">${m.od}</td><td class="w">${bar(m.done, m.all, "ok")}<small>${Math.round((m.done / m.all) * 100)}%</small></td></tr>`).join("") || '<tr><td class="help">데이터 없음</td></tr>'}</tbody></table></section>
     <section class="card"><h3>미조치 경과일</h3>${aging.map(([l, v]) => `<div class="hrow"><span>${l}</span>${bar(v, amax, v && l.includes("초과") ? "bad" : "")}<b>${v}</b></div>`).join("")}</section>
     <section class="card"><h3>구분별 <small>전체 · 미조치</small></h3>${cats.map(([t, v]) => `<div class="hrow" data-cat="${esc(t)}"><span>${esc(t || "-")}</span>${bar(v, cmax)}<b>${v}<small> · ${copen.get(t) || 0}</small></b></div>`).join("") || '<p class="help">없음</p>'}</section>
-    <section class="card"><h3>유형별(미조치)</h3>${types.map(([t, v]) => `<div class="hrow"><span>${esc(t || "-")}</span>${bar(v, tmax)}<b>${v}</b></div>`).join("") || '<p class="help">없음</p>'}</section>
+    <section class="card" id="dash-types"><h3>유형별 <small>전체 · 미조치</small></h3>${types.map((t) => `<div class="hrow" data-ty="${esc(t.name)}"><span>${esc(t.name)}</span>${bar(t.n, tmax)}<b>${t.n}<small> · ${t.open}</small></b></div>`).join("") || '<p class="help">없음</p>'}</section>
     <section class="card"><h3>동별(미조치)</h3>${dongs.map(([t, v]) => `<div class="hrow" data-dg="${esc(t)}"><span>${esc(t || "-")}</span>${bar(v, dmax)}<b>${v}</b></div>`).join("") || '<p class="help">없음</p>'}</section>`;
   $$("[data-st]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = { status: b.dataset.st }; LS.set("filter", S.filter); go("#/list"); }));
   $$("[data-v]", view()).forEach((r) => r.addEventListener("click", () => { if (r.dataset.v === "_none") { S.filter = { vendorId: "_none", status: "_open" }; LS.set("filter", S.filter); go("#/list"); } else go(`#/vendor?id=${r.dataset.v}`); }));
   $$("[data-cat]", view()).forEach((r) => r.addEventListener("click", () => { if (!r.dataset.cat) return; S.filter = { category: r.dataset.cat }; LS.set("filter", S.filter); go("#/list"); }));
   $$("[data-dg]", view()).forEach((r) => r.addEventListener("click", () => go(`#/grid?dong=${encodeURIComponent(r.dataset.dg)}`)));
+  $$("[data-ty]", view()).forEach((r) => r.addEventListener("click", () => { S.filter = { type: [r.dataset.ty] }; LS.set("filter", S.filter); go("#/list"); }));
+  $("#dash-find").addEventListener("click", () => filterSheet());
+  $("#dash-agg").addEventListener("click", () => aggSheet(PD(), {}));
 };
 
 /* ---------- 하자 등록/수정 ---------- */
@@ -610,9 +747,10 @@ async function addListItem(k) {
   const p = P(); const arr = listArr(p, k); const nm = LIST_NAME[k];
   const r = await formSheet({ title: `${nm} 직접 추가`, ok: "추가하고 선택", hint: "현장 설정에 저장돼서 다음부터 바로 고를 수 있어요.",
     fields: [{ k: "v", label: `${nm} 이름`, placeholder: { commons: "예: 경비실", dongCommons: "예: 쓰레기 분리수거장", rooms: "예: 알파룸", parts: "예: 걸레받이", types: "예: 결로", categories: "예: 준공검사", trades: "예: 방음" }[k] }],
-    validate: ({ v }) => (!v ? "이름을 입력하세요" : v.length > 20 ? "20자 이내로 입력하세요" : k !== "trades" && M.hasSame(arr, v) ? `이미 있는 ${nm}이에요: ${arr.find((x) => M.sameKey(x) === M.sameKey(v))}` : "") });
+    validate: ({ v }) => (!v ? "이름을 입력하세요" : v.length > 20 ? "20자 이내로 입력하세요" : k !== "trades" && k !== "types" && M.hasSame(arr, v) ? `이미 있는 ${nm}이에요: ${arr.find((x) => M.sameKey(x) === M.sameKey(v))}` : "") });
   if (!r) return null;
   if (k === "trades") { const ex = p.trades.find((t) => M.sameTrade(t.name, r.v)); if (ex) { toast(`‘${r.v}’은(는) ‘${ex.name}’과 같은 공종이라 ‘${ex.name}’을(를) 골랐어요`, { ms: 4000 }); return ex.name; } }
+  if (k === "types") { const ex = p.types.find((t) => M.sameType(t, r.v)); if (ex) { toast(`‘${r.v}’은(는) ‘${ex}’과 같은 유형이라 ‘${ex}’을(를) 골랐어요`, { ms: 4000 }); return ex; } }
   if (k === "trades") p.trades.push({ name: r.v, subs: [] }); else p[k].push(r.v);
   await saveProject(p); toast(`${nm} ‘${r.v}’ 추가했어요`); return r.v;
 }
@@ -1447,7 +1585,7 @@ async function mergeTrades(map) {
     const nv = [...new Set((v.trades || []).map(to))];
     if (nv.length !== (v.trades || []).length || nv.some((x, i) => x !== v.trades[i])) { v.trades = nv; await saveVendor(v); res.vendors++; }
   }
-  if (S.filter.trade && map.has(S.filter.trade)) { S.filter.trade = to(S.filter.trade); LS.set("filter", S.filter); }
+  if (S.filter.trade) { S.filter.trade = Array.isArray(S.filter.trade) ? [...new Set(S.filter.trade.map(to))] : to(S.filter.trade); LS.set("filter", S.filter); }
   db.setVendorNames?.(S.vendors);
   return res;
 }
@@ -1495,6 +1633,66 @@ async function tradeMergeSheet() {
   $("#tm-manual", s.el).addEventListener("click", async () => { const a = $("#tm-from", s.el).value, b = $("#tm-into", s.el).value;
     if (!a || !b) return toast("합칠 두 공종을 고르세요"); if (a === b) return toast("서로 다른 공종을 고르세요");
     if (!(await ask(`‘${a}’ → ‘${b}’로 합칠까요? 하자 ${n0(a)}건의 공종 이름이 바뀌어요.`, { ok: "합치기" }))) return; run(new Map([[a, b]])); });
+  return s;
+}
+
+/* ---------- 1.2.4 하자 유형 이름 합치기: ‘찍힘’·‘흠집/찍힘’·‘찍힘 자국’, ‘깨짐’·‘파손’ 같은 이름을 하나로 ---------- */
+function typeUsage(p = P()) {
+  const cnt = new Map(); const add = (t, k = 1) => { if (t) cnt.set(t, (cnt.get(t) || 0) + k); };
+  for (const d of S.defects) if (d.projectId === p.id) add(d.type);
+  for (const t of p.types || []) add(t, 0);
+  return cnt;
+}
+function typeDupesNow(p = P()) { const cnt = typeUsage(p); return M.typeDuplicates([...cnt.keys()], (n0) => cnt.get(n0) || 0, p.types || []).map((g) => ({ ...g, counts: Object.fromEntries(g.names.map((n0) => [n0, cnt.get(n0) || 0])) })); }
+async function mergeTypes(map) {
+  const p = P(); const to = (t) => (t && map.has(t) ? map.get(t) : t); const res = { defects: 0, pairs: [...map.entries()].filter(([a, b]) => a !== b), kind: "type" };
+  if (!res.pairs.length) return res;
+  const nt = []; for (const t of p.types || []) { const x = to(t); if (!nt.includes(x)) nt.push(x); }
+  for (const v of new Set(map.values())) if (v && !nt.includes(v)) nt.push(v);
+  p.types = nt; await saveProject(p);
+  for (const d of S.defects) { if (d.projectId !== p.id || !map.has(d.type) || to(d.type) === d.type) continue; d.type = to(d.type); await saveDefect(d); res.defects++; }
+  if (S.filter.type) { S.filter.type = Array.isArray(S.filter.type) ? [...new Set(S.filter.type.map(to))] : to(S.filter.type); LS.set("filter", S.filter); }
+  return res;
+}
+const typeMergeText = (r) => `${r.pairs.map(([a, b]) => `${a} → ${b}`).join(", ")} (하자 ${r.defects}건)`;
+const logTypeMerge = (p, r, auto) => { LS.set("typeMergeLog", [...LS.get("typeMergeLog", []), { at: new Date().toISOString(), pid: p.id, auto, pairs: r.pairs, defects: r.defects }].slice(-20)); window.__typeMerge = r; };
+async function autoMergeTypes(tries = 0) {
+  const p = P(); if (!p || isViewerNow()) return;
+  const key = `typeMerged:${p.id}`; if (LS.get(key, "")) return;
+  if (Sync.attached() && Sync.status().key !== "ok") { if (tries < 6) setTimeout(() => autoMergeTypes(tries + 1), 10000); return; }
+  const map = new Map(); for (const g of typeDupesNow(p)) for (const n0 of g.names) if (n0 !== g.to) map.set(n0, g.to);
+  if (map.size) {
+    try { const r = await mergeTypes(map); logTypeMerge(p, r, true); rerender(); toast(`같은 하자 유형을 합쳤어요: ${typeMergeText(r)}`, { ms: 9000, action: "자세히", onAction: () => typeMergeSheet() }); }
+    catch (e) { console.warn(e); return; }
+  }
+  LS.set(key, APP_VERSION);
+}
+async function typeMergeSheet() {
+  const p = P(); if (!p) return;
+  const ro = isViewerNow(); const cnt = typeUsage(p); const all = [...cnt.keys()].sort((a, b) => a.localeCompare(b, "ko")); const dupes = typeDupesNow(p);
+  const log = LS.get("typeMergeLog", []).filter((x) => x.pid === p.id).slice(-5).reverse();
+  const opts = all.map((x) => `<option value="${esc(x)}">${esc(x)} (${cnt.get(x) || 0})</option>`).join("");
+  const s = openSheet({ title: "하자 유형 정리/합치기", full: true, cls: "ty-sheet",
+    html: `${ro ? '<p class="warnbox help">보기 전용 멤버라 바꿀 수 없어요.</p>' : ""}
+      <p class="help">띄어쓰기·기호만 다르거나 흔히 같은 뜻으로 쓰는 이름(예: 찍힘 · 흠집/찍힘 · 찍힘 자국, 깨짐 · 파손)은 같은 유형으로 봐요. 합치면 이 현장의 하자·유형 목록·필터가 한 이름으로 바뀌고, 팀 현장이면 팀원에게도 동기화돼요.</p>
+      <h4 class="sec">비슷한 이름 ${dupes.length}묶음</h4>
+      <div id="ty-dupes">${dupes.map((g, i) => `<div class="tm-row" data-g="${i}"><div class="tm-names">${g.names.map((x) => `<span class="chip">${esc(x)} <small>${g.counts[x]}건</small></span>`).join("")}</div>
+        <div class="row"><label class="fld"><span>대표 이름</span><select class="inp" data-to="${i}">${g.names.map((x) => `<option ${x === g.to ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label><button type="button" class="btn btn-primary" data-merge="${i}" ${ro ? "disabled" : ""}>합치기</button></div></div>`).join("") || '<p class="help" id="ty-none">겹치는 유형 이름이 없어요 👍</p>'}</div>
+      <h4 class="sec">직접 합치기</h4>
+      <div class="grid2"><label class="fld"><span>이 유형을</span><select class="inp" id="ty-from"><option value="">선택…</option>${opts}</select></label>
+        <label class="fld"><span>여기로 합치기</span><select class="inp" id="ty-into"><option value="">선택…</option>${opts}</select></label></div>
+      <button type="button" class="btn btn-block" id="ty-manual" ${ro ? "disabled" : ""}>합치기</button>
+      ${log.length ? `<h4 class="sec">최근 합친 기록</h4><ul class="help small" id="ty-log">${log.map((x) => `<li>${fmtDT(x.at)} ${x.auto ? "(자동)" : ""} ${esc(x.pairs.map(([a, b]) => `${a} → ${b}`).join(", "))} · 하자 ${x.defects}건</li>`).join("")}</ul>` : ""}` });
+  const run = async (map) => {
+    busy(true, "유형 합치는 중…"); let r;
+    try { r = await mergeTypes(map); } catch (e) { busy(false); return toast(e.readOnly ? e.message : "합치지 못했어요: " + e.message); }
+    busy(false); logTypeMerge(p, r, false); await s.close(); rerender(); toast(`합쳤어요: ${typeMergeText(r)}`, { ms: 7000 }); typeMergeSheet();
+  };
+  $$("[data-merge]", s.el).forEach((b) => b.addEventListener("click", async () => { const g = dupes[+b.dataset.merge]; const to = $(`[data-to="${b.dataset.merge}"]`, s.el).value;
+    const from = g.names.filter((x) => x !== to); if (!(await ask(`${from.join(", ")} → ‘${to}’로 합칠까요?`, { ok: "합치기" }))) return; run(new Map(from.map((x) => [x, to]))); }));
+  $("#ty-manual", s.el).addEventListener("click", async () => { const a = $("#ty-from", s.el).value, b = $("#ty-into", s.el).value;
+    if (!a || !b) return toast("합칠 두 유형을 고르세요"); if (a === b) return toast("서로 다른 유형을 고르세요");
+    if (!(await ask(`‘${a}’ → ‘${b}’로 합칠까요? 하자 ${cnt.get(a) || 0}건의 유형 이름이 바뀌어요.`, { ok: "합치기" }))) return; run(new Map([[a, b]])); });
   return s;
 }
 
@@ -1849,7 +2047,8 @@ ROUTES.settings = async () => {
       ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
       ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}
-      ${item("", "🧹", "공종 이름 정리/합치기", (() => { const n1 = P() ? tradeDupesNow().length : 0; return n1 ? `비슷한 이름 ${n1}묶음 — 합치기` : "도장 · 도장공사 같은 이름을 하나로"; })(), 'data-a="trade-merge" id="si-trademerge"')}</div>
+      ${item("", "🧹", "공종 이름 정리/합치기", (() => { const n1 = P() ? tradeDupesNow().length : 0; return n1 ? `비슷한 이름 ${n1}묶음 — 합치기` : "도장 · 도장공사 같은 이름을 하나로"; })(), 'data-a="trade-merge" id="si-trademerge"')}
+      ${item("", "🏷", "하자 유형 정리/합치기", (() => { const n1 = P() ? typeDupesNow().length : 0; return n1 ? `비슷한 이름 ${n1}묶음 — 합치기` : "찍힘 · 흠집/찍힘 같은 이름을 하나로"; })(), 'data-a="type-merge" id="si-typemerge"')}</div>
     <h3 class="sec">동기화·팀</h3><div class="slist">
       ${item("#/sync", "👥", "동기화·팀 현장", Sync.attached() ? `${esc(Sync.state.ws.name)} · ${ROLE_KO[Sync.state.ws.role] || ""}${Sync.state.wsDoc ? ` · 팀원 ${Object.keys(Sync.state.wsDoc.members || {}).length}/${Sync.memberCap(Sync.state.wsDoc)} (${Sync.planOf(Sync.state.wsDoc) === "pro" ? "유료" : "무료"})` : ""} · ${esc(Sync.status().label)}` : `꺼짐 · 팀원·PC·폰이 같은 현장을 실시간으로 공유 (무료: 현장당 ${Sync.FREE_MEMBERS}명)`, 'id="si-sync"')}</div>
     <h3 class="sec">데이터</h3><div class="slist">
@@ -1877,6 +2076,7 @@ ROUTES.settings = async () => {
     if (a === "backup") return doBackup();
     if (a === "persist") { const ok = await navigator.storage?.persist?.(); toast(ok ? "저장공간 보호가 켜졌어요" : "브라우저가 거절했어요. 앱을 홈 화면에 설치하면 보통 허용돼요"); return rerender(); }
     if (a === "trade-merge") return tradeMergeSheet();
+    if (a === "type-merge") return typeMergeSheet();
     if (a === "issuer") { const v = await prompt2("요청자 이름(요청서 표시)", S.issuer); if (v !== null) { S.issuer = v; LS.set("issuer", v); rerender(); } return; }
     if (a === "wipe") {
       if (!(await ask(Sync.attached() ? "이 팀 현장의 모든 현장·하자·사진·업체를 삭제할까요?\n팀 현장이라 클라우드와 모든 팀원 기기에서도 지워져요. 이 기기만 비우려면 동기화·팀에서 ‘이 기기 전용으로 전환’하세요.\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요." : "이 기기의 모든 현장·하자·사진·업체를 삭제할까요?\n먼저 백업 파일을 만들어 두세요. 되돌릴 수 없어요.", { ok: "모두 삭제", danger: true }))) return;
@@ -2658,6 +2858,7 @@ async function main() {
   initUpdates();
   initSync();
   setTimeout(() => autoMergeTrades().catch((e) => console.warn(e)), 1500);
+  setTimeout(() => autoMergeTypes().catch((e) => console.warn(e)), 2600);
   window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync }; // 테스트·디버그용
 }
 main();

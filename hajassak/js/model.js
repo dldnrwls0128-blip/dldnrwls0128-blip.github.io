@@ -171,24 +171,38 @@ export function parseQuery(p, q) {
 }
 
 /* ---------- 필터 ---------- */
+/* 1.2.4 필터: 업체·동·층·공종·유형·상태·중요도·구분·등록자는 여러 개 고르기(배열, 한 항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’). 예전 한 개 값(문자열)도 그대로 */
+export const fArr = (v) => (Array.isArray(v) ? v.filter((x) => x !== "" && x != null) : v ? [v] : []);
+export const FACET_KEYS = ["vendorId", "dong", "floor", "trade", "type", "status", "severity", "category", "createdBy"];
+export const localDay = (iso) => { if (!iso) return ""; const t = new Date(iso); if (isNaN(t)) return String(iso).slice(0, 10); const z = new Date(t.getTime() - t.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
+const statusOk = (d, v) => (v === "_open" ? isOpen(d) : v === "_done" ? d.status === "조치완료" || d.status === "확인완료" : d.status === v);
+const floorOk = (d, v) => (v === "_none" ? !(d.floor || d.ho) : (d.floor || floorOfHo(d.ho)) === v);
+export function facetMatch(d, k, v) {
+  switch (k) {
+    case "vendorId": return v === "_none" ? !d.vendorId : d.vendorId === v;
+    case "dong": return v === "_none" ? !d.dong : d.dong === v;
+    case "floor": return floorOk(d, v);
+    case "trade": return v === "_none" ? !d.trade : d.trade === v || sameTrade(d.trade, v);
+    case "type": return v === "_none" ? !d.type : d.type === v || sameType(d.type, v);
+    case "status": return statusOk(d, v);
+    case "createdBy": return v === "_none" ? !d.createdBy : d.createdBy === v;
+    default: return v === "_none" ? !d[k] : d[k] === v;
+  }
+}
 export function applyFilter(list, f = {}, ctx = {}) {
   const today = todayStr();
   const text = (f.text || "").trim().toLowerCase();
+  const facets = FACET_KEYS.map((k) => [k, fArr(f[k])]).filter(([, vs]) => vs.length);
   return list.filter((d) => {
-    if (f.dong && d.dong !== f.dong) return false;
+    for (const [k, vs] of facets) if (!vs.some((v) => facetMatch(d, k, v))) return false;
     if (f.ho && d.ho !== f.ho) return false;
     if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || d.common : d.common !== f.common)) return false;
-    if (f.floor && (f.floor === "_none" ? d.floor || d.ho : (d.floor || floorOfHo(d.ho)) !== f.floor)) return false;
-    if (f.trade && d.trade !== f.trade && !sameTrade(d.trade, f.trade)) return false;
     if (f.turn && !isTurnOf(d, f.turn)) return false;
     if (f.chain && !hasSteps(d)) return false;
     if (f.mine && !isMyTurn(d)) return false;
-    if (f.vendorId && (f.vendorId === "_none" ? d.vendorId : d.vendorId !== f.vendorId)) return false;
-    if (f.type && d.type !== f.type) return false;
-    if (f.category && d.category !== f.category) return false;
-    if (f.severity && d.severity !== f.severity) return false;
-    if (f.status === "_open" ? !isOpen(d) : f.status === "_done" ? !(d.status === "조치완료" || d.status === "확인완료") : f.status && d.status !== f.status) return false;
     if (f.overdue && !isOverdue(d, today)) return false;
+    if (f.from && localDay(d.createdAt) < f.from) return false;
+    if (f.to && localDay(d.createdAt) > f.to) return false;
     if (text) {
       const hay = `${d.dong} ${d.ho} ${d.floor ? floorLabel(d.floor) : ""} ${d.common || ""} ${d.locEtc || ""} ${d.room} ${d.part} ${d.trade} ${d.subTrade} ${(d.steps || []).map((x) => x.trade).join(" ")} ${d.type} ${d.content} ${ctx.vendorName?.(d) || ""} ${d.memo || ""}`.toLowerCase();
       if (!hay.includes(text)) return false;
@@ -196,7 +210,13 @@ export function applyFilter(list, f = {}, ctx = {}) {
     return true;
   });
 }
-export const filterCount = (f) => ["dong", "ho", "common", "floor", "trade", "turn", "chain", "vendorId", "type", "category", "severity", "status", "overdue", "text"].filter((k) => f[k]).length;
+/** 항목별 건수(그 항목 조건만 빼고 나머지 조건으로) → Map(값 → 건수) */
+export function facetCounts(list, f, k, values, ctx = {}) {
+  const base = applyFilter(list, { ...f, [k]: [] }, ctx); const m = new Map();
+  for (const v of values) m.set(v, base.filter((d) => facetMatch(d, k, v)).length);
+  return m;
+}
+export const filterCount = (f) => [...FACET_KEYS, "ho", "common", "turn", "chain", "mine", "overdue", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
 
 export function countBy(list, key) {
   const m = new Map();
@@ -278,6 +298,47 @@ export function canonicalTrade(variants, count = () => 0) {
 export function tradeDuplicates(names, count = () => 0) {
   const m = new Map(); for (const n0 of names) { if (!n0) continue; const k = tradeKey(n0); if (!k) continue; if (!m.has(k)) m.set(k, new Set()); m.get(k).add(n0); }
   return [...m.entries()].filter(([, v]) => v.size > 1).map(([key, v]) => { const names2 = [...v]; return { key, names: names2, to: canonicalTrade(names2, count) }; });
+}
+/* 1.2.4 하자 유형 같은 것으로 보기: 띄어쓰기·기호·끝말(현상·발생·자국·됨) 무시 + 흔한 다른 말(깨짐=파손, 크랙=균열 …) */
+const TYPE_SYN = [
+  ["찍힘", "흠집/찍힘", "흠집찍힘", "찍힘흠집", "찍힘/흠집", "흠집", "찍힘자국", "찍김", "긁힘", "스크래치", "기스"],
+  ["파손", "깨짐", "부서짐", "파손깨짐", "깨짐파손"],
+  ["틈새", "틈", "틈새발생", "벌어짐", "이격"],
+  ["단차", "단차발생", "높이차"],
+  ["오염", "얼룩", "더러움", "오염얼룩"],
+  ["코킹불량", "코킹", "코킹누락", "코킹미시공", "실리콘불량", "실리콘", "실란트불량"],
+  ["들뜸", "들뜸현상", "뜸"],
+  ["균열", "크랙", "갈라짐", "금감"],
+  ["누수", "물샘", "물새는", "누수흔적"],
+  ["이색변색", "이색", "변색", "색상불량"],
+  ["미시공", "미설치", "누락", "시공누락"],
+  ["작동불량", "작동안됨", "고장"],
+  ["수직수평불량", "수평불량", "수직불량", "수평수직불량"],
+];
+const TYPE_SYN_MAP = new Map(); for (const g of TYPE_SYN) for (const w of g) TYPE_SYN_MAP.set(w, g[0]);
+export function typeKey(s) {
+  let k = sameKey(s).replace(/[·・\-_/()（）,.]/g, "");
+  if (TYPE_SYN_MAP.has(k)) return TYPE_SYN_MAP.get(k);
+  const k2 = k.replace(/(현상|발생|자국|됨|있음)$/, "");
+  return TYPE_SYN_MAP.get(k2) || k2 || k;
+}
+export const sameType = (a, b) => !!a && !!b && typeKey(a) === typeKey(b) && typeKey(a) !== "";
+/** 대표 유형 이름: 현장 유형 목록에 있는 이름 우선 → 가장 많이 쓴 것 → 짧은 것 */
+export function canonicalType(variants, count = () => 0, listed = []) {
+  const by = (a, b) => listed.includes(b) - listed.includes(a) || count(b) - count(a) || a.length - b.length || a.localeCompare(b, "ko");
+  return ([...variants].sort(by)[0] || "").replace(/\s+/g, " ").trim();
+}
+/** 같은 유형으로 보이는 이름 묶음 [{ key, names, to }] */
+export function typeDuplicates(names, count = () => 0, listed = []) {
+  const m = new Map(); for (const n0 of names) { if (!n0) continue; const k = typeKey(n0); if (!k) continue; if (!m.has(k)) m.set(k, new Set()); m.get(k).add(n0); }
+  return [...m.entries()].filter(([, v]) => v.size > 1).map(([key, v]) => { const names2 = [...v]; return { key, names: names2, to: canonicalType(names2, count, listed) }; });
+}
+/** 유형별 건수(같은 유형은 하나로) → [{ name, key, n, open }] 많은 순 */
+export function typeCounts(list) {
+  const m = new Map();
+  for (const d of list) { const k = d.type ? typeKey(d.type) : ""; const e = m.get(k) || { key: k, names: new Map(), n: 0, open: 0 }; e.n++; if (isOpen(d)) e.open++; if (d.type) e.names.set(d.type, (e.names.get(d.type) || 0) + 1); m.set(k, e); }
+  return [...m.values()].map((e) => ({ key: e.key, n: e.n, open: e.open, name: e.key ? canonicalType([...e.names.keys()], (x) => e.names.get(x) || 0) : "" }))
+    .sort((a, b) => (!a.key) - (!b.key) || b.n - a.n || a.name.localeCompare(b.name, "ko"));
 }
 /** 도면 매칭: plan.dongs(빈 배열=전체), plan.floors "3-25, B1" */
 export function planMatches(plan, dong, floor) {
