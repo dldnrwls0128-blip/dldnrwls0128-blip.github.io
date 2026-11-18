@@ -35,6 +35,10 @@ export const DEFAULT_PARTS = ["바닥", "벽", "천장", "문", "창", "가구",
 export const DEFAULT_COMMONS = ["지하주차장", "부대복리시설", "조경", "기계/전기실", "주출입구", "관리동", "단지 외부", "기타"];
 /** 동별 공용부(동 + 선택 층 + 세부위치): 예) 301동 12층 계단실 */
 export const DEFAULT_DONG_COMMONS = ["계단실", "복도/세대현관 앞", "EV홀", "피트(PIT)실", "옥상", "지하층/필로티", "출입구/로비", "방풍실", "외벽", "기타"];
+/** 1.2.8 관리 탭(현장마다, 이름 바꾸기·여러 개). 하자는 d.tabs = [탭 id…] 로 여러 탭에 들어갈 수 있음 */
+export const DEFAULT_TABS = [{ id: "focus", name: "중점관리" }];
+export const tabsOf = (p) => (Array.isArray(p?.tabs) ? p.tabs : DEFAULT_TABS);
+export const inTab = (d, id) => Array.isArray(d?.tabs) && d.tabs.includes(id);
 export const dongCommonsOf = (p) => (Array.isArray(p?.dongCommons) ? p.dongCommons : DEFAULT_DONG_COMMONS);
 /** 동 공용부 하자: 동이 있고 호가 없으며 공용부(세부위치)가 있는 건 */
 export const isDongCommon = (d) => !!(d.dong && !d.ho && d.common);
@@ -194,8 +198,11 @@ export function applyFilter(list, f = {}, ctx = {}) {
   const today = todayStr();
   const text = (f.text || "").trim().toLowerCase();
   const facets = FACET_KEYS.map((k) => [k, fArr(f[k])]).filter(([, vs]) => vs.length);
+  const exF = FACET_KEYS.map((k) => [k, fArr(f["x_" + k])]).filter(([, vs]) => vs.length); const exW = fArr(f.exw).map(exNorm).filter(Boolean);
   return list.filter((d) => {
     for (const [k, vs] of facets) if (!vs.some((v) => facetMatch(d, k, v))) return false;
+    for (const [k, vs] of exF) if (vs.some((v) => facetMatch(d, k, v))) return false;
+    if (exW.length) { const hay = exNorm(`${d.trade || ""} ${d.subTrade || ""} ${d.content || ""} ${locText(d)} ${ctx.vendorName?.(d) || ""} ${d.type || ""}`); if (exW.some((w) => hay.includes(w))) return false; }
     if (f.ho && (d.ho || locParts(d).ho) !== String(f.ho)) return false;
     if (f.room && roomOf(d) !== f.room) return false;
     if (f.common && (f.common === "_any" ? d.ho : f.common === "_bare" ? d.ho || d.common : d.common !== f.common)) return false;
@@ -218,7 +225,11 @@ export function facetCounts(list, f, k, values, ctx = {}) {
   for (const v of values) m.set(v, base.filter((d) => facetMatch(d, k, v)).length);
   return m;
 }
-export const filterCount = (f) => [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
+/** 1.2.8 제외: 단어(exw — 공종·세부공종·내용·위치·업체·유형에 들어 있으면 뺌) · 항목 값(x_업체, x_공종 …) */
+export const EX_KEYS = FACET_KEYS.map((k) => "x_" + k);
+const exNorm = (t) => String(t || "").toLowerCase().replace(/\s+/g, "");
+export const exFilterCount = (f) => fArr(f.exw).length + EX_KEYS.reduce((a, k) => a + fArr(f[k]).length, 0);
+export const filterCount = (f) => exFilterCount(f) + [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
 
 export function countBy(list, key) {
   const m = new Map();

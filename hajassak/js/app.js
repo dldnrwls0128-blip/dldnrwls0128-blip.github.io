@@ -184,7 +184,7 @@ function defectCard(d, { sel = false } = {}) {
   const pc = photoCount(d); const od = M.isOverdue(d); const on = sel && S.select.has(d.id);
   return `<article class="dcard ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
-    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span>${pill(d.status)}</div>
+    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${pill(d.status)}</div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
@@ -209,6 +209,8 @@ function bindCards(root = view()) {
       });
       chk.addEventListener("keydown", (e) => e.stopPropagation());
     }
+    $(".dtag", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) tabSheet([d], () => rerender()); });
+    $(".dtag", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     const open = () => go(`#/item?id=${c.dataset.id}`);
     c.addEventListener("click", open);
     c.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === c) open(); });
@@ -219,7 +221,7 @@ const selItems = () => S.defects.filter((d) => S.select.has(d.id));
 function selBarHtml({ all = false, core = false } = {}) {
   return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자"><span id="selcount"></span>
     ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
-    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
+    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm" data-sa="tabadd">★ 탭에 추가</button><button type="button" class="btn btn-sm" data-sa="tabdel">탭에서 빼기</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
 }
 /** 체크 상태를 화면(카드·그룹 전체칸·그룹 보내기 버튼·하단 바)에 반영 */
 /** 묶음 ‘전체’ 체크 대상: data-gall="@묶음키"면 목록 묶음 지도에서(큰 목록에서 HTML이 커지지 않게), 아니면 쉼표 목록 */
@@ -250,11 +252,79 @@ function bindSelBar(pool = []) {
     if (a === "req") return requestImageFor(sel);
     if (a === "move") return transferSheet(sel);
     if (a === "core") return coreAssign(sel);
+    if (a === "tabadd" || a === "tabdel") return tabBulk(sel, a === "tabadd");
     const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((x) => ({ label: x, value: x })));
     if (!st) return;
     for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
     toast(`${sel.length}건을 ‘${st}’(으)로 바꿨어요`); S.select.clear(); rerender();
   }));
+}
+/* ---------- 1.2.8 관리 탭: 특정 건을 따로 모아 관리(현장마다 탭 여러 개 · 이름 바꾸기 · 한 건이 여러 탭) ---------- */
+const TABS = () => M.tabsOf(P());
+const tabCount = (id) => { let k = 0; for (const d of PD()) if (M.inTab(d, id)) k++; return k; };
+async function saveTabs(list) { const p = P(); p.tabs = list.map((t) => ({ id: t.id, name: t.name })); await saveProject(p); }
+async function setTabs(items, id, on) {
+  let k = 0;
+  for (const d of items) { const cur = Array.isArray(d.tabs) ? d.tabs : []; const has = cur.includes(id); if (has === on) continue; d.tabs = on ? [...cur, id] : cur.filter((x) => x !== id); await saveDefect(d); k++; }
+  return k;
+}
+async function newTab() {
+  if (isViewerNow()) { toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요"); return null; }
+  const r = await formSheet({ title: "새 관리 탭", ok: "만들기", hint: "예: 중점관리, 입주 전 필수, 소장 확인", fields: [{ k: "name", label: "탭 이름", placeholder: "예: 입주 전 필수" }],
+    validate: ({ name }) => (!name.trim() ? "이름을 입력하세요" : name.trim().length > 20 ? "20자 이내로" : TABS().some((t) => t.name === name.trim()) ? "이미 있는 탭이에요" : "") });
+  if (!r) return null; const t = { id: M.uid("t"), name: r.name.trim() }; await saveTabs([...TABS(), t]); return t.id;
+}
+/** 카드·상세의 ★: 탭마다 체크(여러 건이면 일부만 들어 있는 탭은 ‘일부’) */
+function tabSheet(items, onDone = () => {}) {
+  const draw = () => TABS().map((t) => { const k = items.filter((d) => M.inTab(d, t.id)).length; const st = k === 0 ? "" : k === items.length ? "all" : "some";
+    return `<label class="tb-row"><input type="checkbox" data-tb="${esc(t.id)}" data-st="${st}" ${st === "all" ? "checked" : ""}><span>${esc(t.name)}</span><small class="help">${n(tabCount(t.id))}건</small></label>`; }).join("") || '<p class="help">탭이 없어요. ＋ 새 탭으로 만드세요.</p>';
+  const s = openSheet({ title: items.length > 1 ? `관리 탭 · ${items.length}건` : "관리 탭", cls: "tb-sheet",
+    html: `<div class="tb-list" id="tb-list">${draw()}</div><div class="row wrap"><button type="button" class="btn btn-sm" id="tb-new">＋ 새 탭</button><button type="button" class="btn btn-sm btn-ghost" id="tb-cfg">탭 이름·순서 관리</button></div>`,
+    footer: `<button type="button" class="btn" data-close>취소</button><button type="button" class="btn btn-primary" id="tb-ok">저장</button>` });
+  const marks = () => $$("[data-tb]", s.el).forEach((c) => { if (c.dataset.st === "some" && !c.dataset.touched) c.indeterminate = true; c.addEventListener("change", () => { c.dataset.touched = "1"; }); });
+  marks();
+  $("#tb-new", s.el).addEventListener("click", async () => { const keep = new Map($$("[data-tb]", s.el).filter((c) => c.dataset.touched).map((c) => [c.dataset.tb, c.checked])); const id = await newTab(); if (id) keep.set(id, true);
+    $("#tb-list", s.el).innerHTML = draw(); marks(); for (const c of $$("[data-tb]", s.el)) if (keep.has(c.dataset.tb)) { c.checked = keep.get(c.dataset.tb); c.indeterminate = false; c.dataset.touched = "1"; } });
+  $("#tb-cfg", s.el).addEventListener("click", async () => { await s.close(); tabManager(onDone); });
+  $("#tb-ok", s.el).addEventListener("click", async () => {
+    if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+    let k = 0; for (const c of $$("[data-tb]", s.el)) { if (!c.dataset.touched) continue; k += await setTabs(items, c.dataset.tb, c.checked); }
+    await s.close(); if (k) toast("관리 탭을 바꿨어요"); onDone();
+  });
+  return s;
+}
+/** 체크한 건을 탭에 넣기/빼기 */
+async function tabBulk(items, add) {
+  if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+  const opts = TABS().filter((t) => add || items.some((d) => M.inTab(d, t.id))).map((t) => ({ icon: "★", label: t.name, sub: `지금 ${n(tabCount(t.id))}건${add ? "" : ` · 체크한 것 중 ${items.filter((d) => M.inTab(d, t.id)).length}건 들어 있음`}`, value: t.id }));
+  if (!add && !opts.length) return toast("체크한 하자가 들어 있는 탭이 없어요");
+  let id = await choose(add ? `${items.length}건을 어느 탭에 넣을까요?` : `${items.length}건을 어느 탭에서 뺄까요?`, add ? [...opts, { icon: "＋", label: "새 탭 만들기", value: "_new" }] : opts);
+  if (!id) return; if (id === "_new") { id = await newTab(); if (!id) return; }
+  const k = await setTabs(items, id, add); const nm = TABS().find((t) => t.id === id)?.name || "";
+  toast(add ? `‘${nm}’에 ${k}건 넣었어요` : `‘${nm}’에서 ${k}건 뺐어요`); S.select.clear(); rerender();
+}
+/** 탭 만들기·이름 바꾸기·지우기·순서 */
+function tabManager(onDone = () => rerender()) {
+  const ro = isViewerNow();
+  const draw = () => `${TABS().map((t, i, a) => `<div class="tm-row" data-tid="${esc(t.id)}"><b>${esc(t.name)}</b><small class="help">${n(tabCount(t.id))}건</small><span class="sp"></span>
+      <button type="button" class="btn btn-sm" data-tm="up" ${i === 0 || ro ? "disabled" : ""} aria-label="${esc(t.name)} 위로">↑</button><button type="button" class="btn btn-sm" data-tm="down" ${i === a.length - 1 || ro ? "disabled" : ""} aria-label="${esc(t.name)} 아래로">↓</button>
+      <button type="button" class="btn btn-sm" data-tm="ren" ${ro ? "disabled" : ""}>이름</button><button type="button" class="btn btn-sm btn-warn" data-tm="del" ${ro ? "disabled" : ""}>삭제</button></div>`).join("") || '<p class="help">탭이 없어요.</p>'}
+    <button type="button" class="btn btn-block" id="tm-new" ${ro ? "disabled" : ""}>＋ 새 탭</button><p class="help small">탭을 지워도 하자는 그대로예요(그 탭에서만 빠져요). 탭은 팀원과 함께 써요.</p>`;
+  const s = openSheet({ title: "관리 탭 설정", cls: "tm-sheet", html: `<div id="tm-body">${draw()}</div>`, footer: `<button type="button" class="btn btn-primary" data-close>닫기</button>` });
+  s.onClose = () => onDone();
+  const body = () => { $("#tm-body", s.el).innerHTML = draw(); };
+  s.el.addEventListener("click", async (e) => {
+    if (e.target.closest("#tm-new")) { if (await newTab()) body(); return; }
+    const b = e.target.closest("[data-tm]"); if (!b) return; const id = b.closest("[data-tid]").dataset.tid; const list = [...TABS()]; const i = list.findIndex((t) => t.id === id); const t = list[i];
+    if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+    if (b.dataset.tm === "up" || b.dataset.tm === "down") { const j = b.dataset.tm === "up" ? i - 1 : i + 1; [list[i], list[j]] = [list[j], list[i]]; await saveTabs(list); return body(); }
+    if (b.dataset.tm === "ren") { const r = await formSheet({ title: "탭 이름 바꾸기", ok: "바꾸기", fields: [{ k: "name", label: "탭 이름", value: t.name }], validate: ({ name }) => (!name.trim() ? "이름을 입력하세요" : name.trim().length > 20 ? "20자 이내로" : list.some((x) => x.id !== id && x.name === name.trim()) ? "이미 있는 탭이에요" : "") });
+      if (!r) return; t.name = r.name.trim(); await saveTabs(list); return body(); }
+    if (b.dataset.tm === "del") { const k = tabCount(id);
+      if (!(await ask(`‘${t.name}’ 탭을 지울까요?\n하자 ${k}건은 지워지지 않고 이 탭에서만 빠져요.`, { ok: "탭 삭제", danger: true }))) return;
+      await setTabs(PD().filter((d) => M.inTab(d, id)), id, false); await saveTabs(list.filter((x) => x.id !== id)); if (LS.get("listTab", "") === id) LS.set("listTab", ""); toast("탭을 지웠어요"); return body(); }
+  });
+  return s;
 }
 /** 1.2.7 코어 지정: 동 공용부(호 없는) 하자에 코어를 한꺼번에(호 있는 하자는 라인으로 자동이라 건너뜀) */
 async function coreAssign(items) {
@@ -357,8 +427,10 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간", core: "코어", room: "실" };
+const FILTER_LABEL = { exw: "제외", x_vendorId: "제외 업체", x_dong: "제외 동", x_floor: "제외 층", x_core: "제외 코어", x_trade: "제외 공종", x_type: "제외 유형", x_status: "제외 상태", x_severity: "제외 중요도", x_category: "제외 구분", x_createdBy: "제외 등록자", dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간", core: "코어", room: "실" };
 function filterChipText(k, v) {
+  if (k.startsWith("x_")) return filterChipText(k.slice(2), v);
+  if (k === "exw") return v;
   if (k === "status") return v === "_open" ? "미조치" : v === "_done" ? "완료(조치·확인)" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
   if (k === "overdue") return "기한초과";
@@ -396,19 +468,19 @@ function listGroupsHtml(list, grp, sorted = false) {
   let keys = sorted ? [...m.keys()].sort((a, b) => (!a || a === "_none") - (!b || b === "_none")) : [...m.keys()].sort((a, b) => (!a || a === "_none") - (!b || b === "_none") || m.get(b).length - m.get(a).length || String(a).localeCompare(String(b), "ko"));
   if (navKind() === "re" || navKind() === "pop") keys = [...prev.filter((k) => m.has(k)), ...keys.filter((k) => !prev.includes(k))];
   S.grpOrder.set(okey, keys);
-  const closed = new Set(LS.get("listGrpClosed", [])); let left = S.listLimit;
-  /* 1.2.7 업체별: 펼치고 접기(이번 실행 동안 기억). 묶음이 많으면(6개 넘게) 처음엔 접힘. 접힌 묶음은 카드를 그리지 않아 큰 목록도 빠름 */
-  const sess = grp === "vendor"; S.vgOpen ||= new Map(); const defOpen = keys.length <= 6;
-  const isOpen = (gk) => (sess ? (S.vgOpen.has(gk) ? S.vgOpen.get(gk) : defOpen) : !closed.has(gk));
+  let left = S.listLimit; S.lgTrunc = false; S.lgHid = 0;
+  /* 1.2.8 모든 묶음: 펼치고 접기(이번 실행 동안 기억, 1.2.7 업체별과 같게). 처음엔 펼침 — 결과가 적거나(60건 이하) 필터·검색 중이거나 묶음이 6개 이하면.
+   * 묶음이 하나뿐이면 늘 펼침. 접힌 묶음은 카드를 그리지 않고 ‘더 보기’ 개수에도 안 셈 */
+  S.vgOpen ||= new Map(); const defOpen = keys.length <= 6 || list.length <= 60 || M.filterCount(S.filter || {}) > 0;
+  const isOpen = (gk) => keys.length === 1 || (S.vgOpen.has(gk) ? S.vgOpen.get(gk) : defOpen);
   S.lgItems = new Map();
-  const bar = sess ? `<div class="lg-bar" id="lg-bar"><span class="help">업체 ${n(keys.length)}곳</span><span class="sp"></span><button type="button" class="btn btn-sm" id="lg-openall">모두 펼치기</button><button type="button" class="btn btn-sm" id="lg-closeall">모두 접기</button></div>` : "";
+  const bar = keys.length > 1 ? `<div class="lg-bar" id="lg-bar"><span class="help">${grp === "vendor" ? `업체 ${n(keys.length)}곳` : `묶음 ${n(keys.length)}개`}</span><span class="sp"></span><button type="button" class="btn btn-sm" id="lg-openall">모두 펼치기</button><button type="button" class="btn btn-sm" id="lg-closeall">모두 접기</button></div>` : "";
   return bar + keys.map((k, gi) => {
     const items = m.get(k); const gk = `${grp}:${k}`; const op = isOpen(gk); const shown = op ? items.slice(0, Math.max(0, left)) : []; if (op) left -= shown.length; const lb = label(k, items);
+    const hid = op ? items.length - shown.length : 0; if (hid) { S.lgTrunc = true; S.lgHid += hid; }
     S.lgItems.set(gk, items.map((d) => d.id)); const openN = items.filter(M.isOpen).length;
-    if (sess) return `<details class="lgrp vgrp" id="lg-${grp}-${gi}" data-gk="${esc(gk)}" ${op ? "open" : ""}><summary class="grp-hd"><label class="gchk" title="이 업체 전체 선택"><input type="checkbox" data-gall="@${esc(gk)}" aria-label="${esc(lb)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(lb)}</b> <span class="help">${n(items.length)}건 · 미조치 <b class="${openN ? "warn-t" : ""}">${n(openN)}</b></span></div></summary>
-      ${shown.map((d) => defectCard(d, { sel: true })).join("")}${op && shown.length < items.length ? `<p class="help small lg-more">+${n(items.length - shown.length)}건은 아래 ‘더 보기’</p>` : ""}</details>`;
-    return `<details class="lgrp" id="lg-${grp}-${gi}" data-gk="${esc(gk)}" ${closed.has(gk) ? "" : "open"}><summary class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="@${esc(gk)}" aria-label="${esc(lb)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(lb)}</b> <span class="help">${n(items.length)}건 · 미조치 ${n(items.filter(M.isOpen).length)}</span></div></summary>
-      ${shown.map((d) => defectCard(d, { sel: true })).join("")}${shown.length < items.length ? `<p class="help small lg-more">+${n(items.length - shown.length)}건은 아래 ‘더 보기’</p>` : ""}</details>`;
+    return `<details class="lgrp vgrp" data-gk="${esc(gk)}" ${op ? "open" : ""}><summary class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="@${esc(gk)}" aria-label="${esc(lb)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(lb)}</b> <span class="help">${n(items.length)}건 · 미조치 <b class="${openN ? "warn-t" : ""}">${n(openN)}</b></span></div></summary>
+      ${shown.map((d) => defectCard(d, { sel: true })).join("")}${hid ? `<p class="help small lg-more">+${n(hid)}건은 아래 ‘더 보기’</p>` : ""}</details>`;
   }).join("");
 }
 /** 1.2.7 위치 칸 글자·값: v1 = 위치(d:동 / _none / c:단지 공용 공간), v2 = 세부 위치(f:층 / h:층|호 / c:동 공용부 / r:세부실) */
@@ -467,7 +539,9 @@ function locIndex() {
 ROUTES.list = async () => {
   setTab("list");
   setHeader("하자 목록", { backBtn: navDepth() > 1 });
-  const f = S.filter; const all = PD();
+  /* 1.2.8 관리 탭: [전체] [중점관리 n] … — 고른 탭 안에서 필터·정렬·묶음·보내기 그대로 */
+  const allP = PD(); const tabs = TABS(); let ltab = LS.get("listTab", ""); if (ltab && !tabs.some((t) => t.id === ltab)) { ltab = ""; LS.set("listTab", ""); }
+  const f = S.filter; const all = ltab ? allP.filter((d) => M.inTab(d, ltab)) : allP;
   /* 1.2.5 정렬(기억) — 위치·코어 묶음에서 ‘기본’이면 안에서 층·호 순 */
   const grp = LS.get("listGroup", ""); const srt = { mode: "", dir: "", ...LS.get("listSort", {}) };
   const effMode = srt.mode || (grp === "core" ? "core" : grp === "loc" ? "loc" : ""); const effDir = srt.dir || M.sortDefaultDir(effMode);
@@ -484,6 +558,7 @@ ROUTES.list = async () => {
   const coreFix = grp === "core" || srt.mode === "core" ? list.filter((d) => { const lp = M.locParts(d); return lp.dong && lp.line == null && !lp.core; }) : [];
   const lb = locLabels(f); const locBase = () => M.applyFilter(all, fNoLoc, { vendorName: vName });
   view().innerHTML = `
+    <div class="ltabs" id="ltabs" role="tablist" aria-label="관리 탭"><button type="button" class="ltab ${ltab ? "" : "on"}" role="tab" aria-selected="${!ltab}" data-ltab="">전체 <small>${n(allP.length)}</small></button>${tabs.map((t) => `<button type="button" class="ltab ${ltab === t.id ? "on" : ""}" role="tab" aria-selected="${ltab === t.id}" data-ltab="${esc(t.id)}">★ ${esc(t.name)} <small>${n(tabCount(t.id))}</small></button>`).join("")}<button type="button" class="ltab ltab-cfg" id="ltab-cfg" aria-label="관리 탭 설정" title="탭 만들기·이름·순서">⚙</button></div>
     <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="검색 · 312-802 · 지하주차장 휀룸" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
       <button type="button" class="btn" id="btn-filter">필터${M.filterCount(f) ? ` <b class="badge">${M.filterCount(f)}</b>` : ""}</button></form>
     <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
@@ -499,7 +574,7 @@ ROUTES.list = async () => {
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
     <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
-    ${list.length > S.listLimit ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(list.length - S.listLimit)}건 남음)</button>` : ""}
+    ${(grp ? S.lgTrunc : list.length > S.listLimit) ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(grp ? S.lgHid : list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true, core: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
   /* 1.2.7 위치 고르기: [위치 ▾] → [세부 위치 ▾] (→ [실 ▾]) · 고르면 바로 걸림 · 목록이 길면 안에서 검색 */
@@ -553,17 +628,18 @@ ROUTES.list = async () => {
     if (pick) return applySugg(pick);
     S.filter = { ...S.filter, text: q }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
   $("#btn-filter").addEventListener("click", () => filterSheet());
+  $$("[data-ltab]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltab); S.listLimit = 60; S.select.clear(); S.noRestore = true; rerender(); }));
+  $("#ltab-cfg").addEventListener("click", () => tabManager());
   $("#core-fix")?.addEventListener("click", () => coreAssign(coreFix));
   $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (k === "_all") S.filter = {}; else if (b.dataset.rv != null && Array.isArray(S.filter[k])) { S.filter[k] = S.filter[k].filter((x) => x !== b.dataset.rv); if (!S.filter[k].length) delete S.filter[k]; } else delete S.filter[k]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
   $("#btn-more")?.addEventListener("click", () => { S.listLimit += 120; rerender(); });
   $("#lgroup").addEventListener("change", (e) => { LS.set("listGroup", e.target.value); S.noRestore = true; rerender(); });
   $("#lsort").addEventListener("change", (e) => { LS.set("listSort", { mode: e.target.value, dir: M.sortDefaultDir(e.target.value) }); S.noRestore = true; rerender(); });
   $("#lsdir")?.addEventListener("click", () => { LS.set("listSort", { mode: srt.mode || effMode, dir: effDir === "desc" ? "asc" : "desc" }); S.noRestore = true; rerender(); });
-  $$("details.vgrp", view()).forEach((dd) => dd.addEventListener("toggle", () => { if (dd.open === (dd.dataset.wasOpen === "1")) return; dd.dataset.wasOpen = dd.open ? "1" : "0"; S.vgOpen.set(dd.dataset.gk, dd.open); if (dd.open && !dd.querySelector(".dcard")) rerender(); }));
+  $$("details.vgrp", view()).forEach((dd) => dd.addEventListener("toggle", () => { if (dd.open === (dd.dataset.wasOpen === "1")) return; dd.dataset.wasOpen = dd.open ? "1" : "0"; S.vgOpen.set(dd.dataset.gk, dd.open); if ((dd.open && !dd.querySelector(".dcard")) || (!dd.open && S.lgTrunc)) rerender(); }));
   $$("details.vgrp", view()).forEach((dd) => { dd.dataset.wasOpen = dd.open ? "1" : "0"; });
   const vgAll = (op) => { for (const dd of $$("details.vgrp", view())) S.vgOpen.set(dd.dataset.gk, op); rerender(); };
   $("#lg-openall")?.addEventListener("click", () => vgAll(true)); $("#lg-closeall")?.addEventListener("click", () => vgAll(false));
-  $$("details.lgrp:not(.vgrp)", view()).forEach((dd) => dd.addEventListener("toggle", () => { const c = new Set(LS.get("listGrpClosed", [])); if (dd.open) c.delete(dd.dataset.gk); else c.add(dd.dataset.gk); LS.set("listGrpClosed", [...c].slice(-200)); }));
   $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = gallIds(g); for (const x of ids) S.select[g.checked ? "add" : "delete"](x); syncChecks(); }));
   $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
   $("#btn-agg").addEventListener("click", () => aggSheet(list));
@@ -574,7 +650,7 @@ ROUTES.list = async () => {
 function activeChips(f) {
   return Object.entries(f).flatMap(([k, v]) => {
     if (!v || (Array.isArray(v) && !v.length)) return [];
-    if (Array.isArray(v)) return v.map((x) => `<button type="button" class="chip on" data-rm="${k}" data-rv="${esc(x)}">${esc(FILTER_LABEL[k] || k)}: ${esc(filterChipText(k, x))} ✕</button>`);
+    if (Array.isArray(v)) return v.map((x) => `<button type="button" class="chip on ${k === "exw" || k.startsWith("x_") ? "ex" : ""}" data-rm="${k}" data-rv="${esc(x)}">${esc(FILTER_LABEL[k] || k)}: ${esc(filterChipText(k, x))} ✕</button>`);
     return [`<button type="button" class="chip on" data-rm="${k}">${esc(FILTER_LABEL[k] || k)}: ${esc(filterChipText(k, v))} ✕</button>`];
   }).join("");
 }
@@ -615,6 +691,10 @@ function filterSheet() {
       <div class="chips scroll" id="fl-active"></div>
       <div class="fl-toggles"><label class="check"><input type="checkbox" id="fl-overdue" ${nf.overdue ? "checked" : ""}> ⏰ 기한초과만 <small class="fn" id="fl-odn"></small></label>
         <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label></div>
+      <section class="fl-ex" id="fl-ex"><div class="fl-ex-hd"><b>제외</b> <small class="help">이 단어가 공종·세부공종·내용·위치·업체·유형에 있으면 빼요</small></div>
+        <form class="row" id="fl-exw-f" autocomplete="off"><input class="inp" id="fl-exw" placeholder="예: 코킹, 마이다판 (쉼표·Enter)" aria-label="제외 단어"><button type="submit" class="btn btn-sm">추가</button></form>
+        <div class="chips" id="fl-exw-chips"></div>
+        <label class="check"><input type="checkbox" id="fl-exmode"> 아래 칩을 <b class="ex-t">제외</b>로 고르기 <small class="help">(칩을 길게 눌러도 제외)</small></label></section>
       ${facets.map(facetHtml).join("")}
       <details class="fc" data-fc="_loc" ${nf.ho || nf.from || nf.to ? "open" : ""}><summary><b>호 · 기간</b></summary>
         <div class="grid2"><label class="fld"><span>호</span><input class="inp" id="fl-ho" inputmode="numeric" value="${esc(nf.ho || "")}" placeholder="예: 1203"></label><span></span>
@@ -634,20 +714,28 @@ function filterSheet() {
     const f0 = clean(); const res = M.applyFilter(all, f0, ctx).length;
     $("#fl-n", el).textContent = n(res); $("#fl-apply", el).textContent = `${n(res)}건 보기`;
     for (const fc of facets) {
-      const cnt = M.facetCounts(all, f0, fc.k, fc.o.map(([v]) => v), ctx);
-      for (const b of $$(`.fchip[data-fk="${fc.k}"]`, el)) { const c = cnt.get(b.dataset.fv) || 0; b.querySelector(".fn").textContent = n(c); const on = has(fc.k, b.dataset.fv); b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); b.classList.toggle("zero", !c && !on); }
-      const sel = M.fArr(nf[fc.k]); $(`[data-sel-of="${fc.k}"]`, el).textContent = sel.length ? sel.map((v) => filterChipText(fc.k, v)).join(", ") : "";
+      const cnt = M.facetCounts(all, { ...f0, ["x_" + fc.k]: [] }, fc.k, fc.o.map(([v]) => v), ctx); // 제외 칩은 ‘빠지는 건수’
+      for (const b of $$(`.fchip[data-fk="${fc.k}"]`, el)) { const c = cnt.get(b.dataset.fv) || 0; b.querySelector(".fn").textContent = n(c); const on = has(fc.k, b.dataset.fv); const ex = has("x_" + fc.k, b.dataset.fv); b.classList.toggle("on", on); b.classList.toggle("ex", ex); b.setAttribute("aria-pressed", on || ex); b.classList.toggle("zero", !c && !on && !ex); }
+      const sel = [...M.fArr(nf[fc.k]).map((v) => filterChipText(fc.k, v)), ...M.fArr(nf["x_" + fc.k]).map((v) => "−" + filterChipText(fc.k, v))]; $(`[data-sel-of="${fc.k}"]`, el).textContent = sel.join(", ");
     }
     $("#fl-odn", el).textContent = n(M.applyFilter(all, { ...f0, overdue: true }, ctx).length);
     $("#fl-urgent", el).checked = has("severity", "긴급");
     $("#fl-active", el).innerHTML = activeChips(f0) || '<span class="help">조건 없음 · 전체</span>';
+    $("#fl-exw-chips", el).innerHTML = M.fArr(nf.exw).map((w) => `<button type="button" class="chip on ex" data-exw="${esc(w)}" aria-label="제외 ${esc(w)} 지우기">−${esc(w)} ✕</button>`).join("");
     $$("[data-rm]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (b.dataset.rv != null && Array.isArray(nf[k])) nf[k] = nf[k].filter((x) => x !== b.dataset.rv); else delete nf[k]; syncInputs(); refresh(); }));
   };
   const syncInputs = () => { $("#fl-overdue", el).checked = !!nf.overdue; $("#fl-ho", el).value = nf.ho || ""; $("#fl-from", el).value = nf.from || ""; $("#fl-to", el).value = nf.to || "";
     for (const i of $$("[data-k]", el)) { if (i.type === "checkbox") i.checked = !!nf[i.dataset.k]; else i.value = nf[i.dataset.k] || ""; } };
   const toggle = (k, v) => { const cur = M.fArr(nf[k]); nf[k] = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]; };
+  /* 1.2.8 칩: 보통은 ‘포함’, 제외 모드(또는 길게 누르기)면 ‘제외’(빨간 −칩). 한 값은 둘 중 하나만 */
+  const pickChip = (k, v, ex) => { const a = ex ? "x_" + k : k, b2 = ex ? k : "x_" + k; nf[b2] = M.fArr(nf[b2]).filter((x) => x !== v); toggle(a, v); refresh(); };
+  onLongPress(el, ".fchip", (b) => pickChip(b.dataset.fk, b.dataset.fv, true));
+  const addExw = () => { const inp = $("#fl-exw", el); const ws = inp.value.split(/[,，\n]/).map((x) => x.trim()).filter(Boolean); if (!ws.length) return; nf.exw = [...new Set([...M.fArr(nf.exw), ...ws])]; inp.value = ""; refresh(); };
+  $("#fl-exw-f", el).addEventListener("submit", (e) => { e.preventDefault(); addExw(); });
+  $("#fl-exw", el).addEventListener("input", (e) => { if (/[,，]/.test(e.target.value)) addExw(); });
   el.addEventListener("click", (e) => {
-    const b = e.target.closest(".fchip"); if (b) { toggle(b.dataset.fk, b.dataset.fv); refresh(); return; }
+    const xw = e.target.closest("[data-exw]"); if (xw) { nf.exw = M.fArr(nf.exw).filter((x) => x !== xw.dataset.exw); refresh(); return; }
+    const b = e.target.closest(".fchip"); if (b) { const exOn = $("#fl-exmode", el).checked; if (!exOn && has("x_" + b.dataset.fk, b.dataset.fv)) pickChip(b.dataset.fk, b.dataset.fv, true); else pickChip(b.dataset.fk, b.dataset.fv, exOn); return; }
     const per = e.target.closest("[data-per]"); if (per) { if (per.dataset.per === "") { delete nf.from; delete nf.to; } else { nf.from = day(+per.dataset.per); nf.to = day(0); } syncInputs(); refresh(); }
   });
   $("#fl-overdue", el).addEventListener("change", (e) => { nf.overdue = e.target.checked || undefined; refresh(); });
@@ -656,7 +744,7 @@ function filterSheet() {
   for (const i of $$("[data-k]", el)) i.addEventListener(i.type === "checkbox" ? "change" : "input", () => { nf[i.dataset.k] = i.type === "checkbox" ? (i.checked ? "1" : "") : i.value.trim(); refresh(); });
   $$("[data-a]", el).forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.a === "reset") { for (const k of Object.keys(nf)) delete nf[k]; syncInputs(); refresh(); return; }
-    S.filter = clean(); LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; await s.close();
+    addExw(); S.filter = clean(); LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; await s.close();
     if (location.hash.split("?")[0] !== "#/list") go("#/list"); else rerender();
   }));
   refresh();
@@ -709,12 +797,17 @@ ROUTES.unit = async (qq) => {
   const gKey = (g) => `${g.trade}|${g.vendorId}`; S.grpOrder ||= new Map(); const prevOrder = S.grpOrder.get(location.hash);
   if (prevOrder && (navKind() === "re" || navKind() === "pop")) { const ix = (g) => { const i = prevOrder.indexOf(gKey(g)); return i < 0 ? 1e6 : i; }; groups.sort((a, b) => ix(a) - ix(b)); }
   S.grpOrder.set(location.hash, [...groups.map(gKey), ...(prevOrder || []).filter((k) => !groups.some((g) => gKey(g) === k))]);
+  /* 1.2.8 업체 묶음 펼치고 접기(이번 실행 동안 세대별 기억). 묶음이 6개 넘으면 처음엔 접힘 */
+  S.ugOpen ||= new Map(); const ugK = (g) => `${dong}|${ho}|${gKey(g)}`; const ugDef = groups.length <= 6;
+  const ugOpen = (g) => (S.ugOpen.has(ugK(g)) ? S.ugOpen.get(ugK(g)) : ugDef);
   view().innerHTML = `
     <div class="unit-hd"><div><b>${n(all.filter(M.isOpen).length)}</b> 미조치 / ${n(all.length)}건 · 기한초과 ${all.filter((d) => M.isOverdue(d)).length}</div>
       <div class="chips"><button type="button" class="chip ${onlyOpen ? "on" : ""}" data-o="1">미조치</button><button type="button" class="chip ${!onlyOpen ? "on" : ""}" data-o="0">전체</button></div></div>
     <button type="button" class="btn btn-primary btn-block" id="btn-add">＋ 이 세대에 하자 등록</button>
-    ${groups.map((g, gi) => `<section class="group"><header class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="${g.items.map((d) => d.id).join(",")}" data-gi="${gi}" aria-label="${esc(g.trade)} · ${esc(g.vendor)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(g.trade)}</b> · ${esc(g.vendor)} <span class="help">${g.items.length}건</span></div>
-      <button type="button" class="btn btn-sm btn-primary" data-g="${gi}">보내기</button></header>${g.items.map((d) => defectCard(d, { sel: true })).join("")}</section>`).join("") ||
+    ${groups.length > 1 ? `<div class="lg-bar" id="ug-bar"><span class="help">업체 묶음 ${groups.length}개</span><span class="sp"></span><button type="button" class="btn btn-sm" id="ug-openall">모두 펼치기</button><button type="button" class="btn btn-sm" id="ug-closeall">모두 접기</button></div>` : ""}
+    ${groups.map((g, gi) => { const op = ugOpen(g); const openN = g.items.filter(M.isOpen).length;
+      return `<details class="group lgrp vgrp ugrp" data-uk="${esc(gKey(g))}" ${op ? "open" : ""}><summary class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="${g.items.map((d) => d.id).join(",")}" data-gi="${gi}" aria-label="${esc(g.trade)} · ${esc(g.vendor)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(g.trade)}</b> · ${esc(g.vendor)} <span class="help">${g.items.length}건${openN !== g.items.length ? ` · 미조치 ${openN}` : ""}</span></div>
+      <button type="button" class="btn btn-sm btn-primary" data-g="${gi}">보내기</button></summary>${g.items.map((d) => defectCard(d, { sel: true })).join("")}</details>`; }).join("") ||
       `<div class="card empty-card"><p>${onlyOpen ? "미조치 하자가 없어요 👍" : "등록된 하자가 없어요."}</p></div>`}
     ${selBarHtml()}`;
   bindCards(); bindSelBar();
@@ -722,7 +815,13 @@ ROUTES.unit = async (qq) => {
   syncChecks();
   $("#btn-add").addEventListener("click", () => { startDraft({ dong, ho, floor: M.floorOfHo(ho) }); go("#/new"); });
   $$("[data-o]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("unitOpen", b.dataset.o === "1"); rerender(); }));
-  $$("[data-g]", view()).forEach((b) => b.addEventListener("click", () => { const g = groups[+b.dataset.g]; const picked = g.items.filter((d) => S.select.has(d.id)).map((d) => d.id);
+  const ugSet = (k, v) => S.ugOpen.set(`${dong}|${ho}|${k}`, v);
+  $$("details.ugrp", view()).forEach((dd) => { dd.dataset.wasOpen = dd.open ? "1" : "0"; dd.addEventListener("toggle", () => { if (dd.open === (dd.dataset.wasOpen === "1")) return; dd.dataset.wasOpen = dd.open ? "1" : "0"; ugSet(dd.dataset.uk, dd.open); }); });
+  // 전체 체크·보내기는 펼침/접힘을 바꾸지 않음
+  $$("details.ugrp > summary .gchk, details.ugrp > summary [data-g]", view()).forEach((x) => x.addEventListener("click", (e) => e.stopPropagation()));
+  const ugAll = (op) => { for (const dd of $$("details.ugrp", view())) { ugSet(dd.dataset.uk, op); dd.dataset.wasOpen = op ? "1" : "0"; dd.open = op; } };
+  $("#ug-openall")?.addEventListener("click", () => ugAll(true)); $("#ug-closeall")?.addEventListener("click", () => ugAll(false));
+  $$("[data-g]", view()).forEach((b) => b.addEventListener("click", (e) => { e.preventDefault(); const g = groups[+b.dataset.g]; const picked = g.items.filter((d) => S.select.has(d.id)).map((d) => d.id);
     sendSheet({ items: g.items, vendor: V(g.vendorId), preselect: picked.length ? picked : null }); }));
 };
 
@@ -1371,6 +1470,7 @@ ROUTES.item = async (qq) => {
     ${v ? `<div class="contact-row">${(() => { const vp = M.vendorPhones(v); if (!vp.length) return ""; if (vp.length === 1) { const ph = vp[0].phone; return `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`; } return `<button type="button" class="btn" id="btn-dtel">📞 전화 ▾</button><button type="button" class="btn" id="btn-dsms">💬 문자 ▾</button>`; })()}
       <button type="button" class="btn btn-kakao" id="btn-kakao">카톡으로 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 보내기</button>`}
     <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-reqimg">🧾 요청서 만들기</button><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button></div>
+    <button type="button" class="btn btn-block btn-tags ${d.tabs?.length ? "on" : ""}" id="btn-tags">${d.tabs?.length ? "★" : "☆"} 관리 탭${(() => { const nm = TABS().filter((t) => M.inTab(d, t.id)).map((t) => t.name); return nm.length ? ` · ${esc(nm.join(", "))}` : " 넣기"; })()}</button>
     ${stepsHtml(d, photos)}
     <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
       <button type="button" class="ph-add cam" data-add="before" aria-label="조치 전 사진 바로 촬영">📷<span>${before.length ? "한 장 더" : "촬영"}</span></button></div>
@@ -1389,6 +1489,7 @@ ROUTES.item = async (qq) => {
   $("#btn-stany").addEventListener("click", async () => { const st = await choose("상태 선택", M.STATUSES.map((s2) => ({ label: s2, value: s2, sub: s2 === d.status ? "현재" : "" }))); if (st) changeStatus(d, st); });
   $("#btn-kakao").addEventListener("click", () => sendSheet({ items: [d], vendor: v }));
   $("#btn-reqimg").addEventListener("click", () => requestImageFor([d], v || null));
+  $("#btn-tags").addEventListener("click", () => tabSheet([d], () => rerender()));
   $("#btn-move").addEventListener("click", () => transferSheet([d])); $("#btn-move-kv").addEventListener("click", () => transferSheet([d]));
   $("[data-sms]", view())?.addEventListener("click", () => setTimeout(() => markSent([d], "문자"), 300));
   $("#btn-dtel", view())?.addEventListener("click", async () => { const ph = await pickPhone(V(d.vendorId), "전화"); if (ph) location.href = M.telHref(ph); });
