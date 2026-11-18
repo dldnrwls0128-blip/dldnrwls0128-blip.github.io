@@ -173,7 +173,7 @@ export function parseQuery(p, q) {
 /* ---------- 필터 ---------- */
 /* 1.2.4 필터: 업체·동·층·공종·유형·상태·중요도·구분·등록자는 여러 개 고르기(배열, 한 항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’). 예전 한 개 값(문자열)도 그대로 */
 export const fArr = (v) => (Array.isArray(v) ? v.filter((x) => x !== "" && x != null) : v ? [v] : []);
-export const FACET_KEYS = ["vendorId", "dong", "floor", "trade", "type", "status", "severity", "category", "createdBy"];
+export const FACET_KEYS = ["vendorId", "dong", "floor", "core", "trade", "type", "status", "severity", "category", "createdBy"];
 export const localDay = (iso) => { if (!iso) return ""; const t = new Date(iso); if (isNaN(t)) return String(iso).slice(0, 10); const z = new Date(t.getTime() - t.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); };
 const statusOk = (d, v) => (v === "_open" ? isOpen(d) : v === "_done" ? d.status === "조치완료" || d.status === "확인완료" : d.status === v);
 const floorOk = (d, v) => (v === "_none" ? !(d.floor || d.ho) : (d.floor || floorOfHo(d.ho)) === v);
@@ -186,6 +186,7 @@ export function facetMatch(d, k, v) {
     case "type": return v === "_none" ? !d.type : d.type === v || sameType(d.type, v);
     case "status": return statusOk(d, v);
     case "createdBy": return v === "_none" ? !d.createdBy : d.createdBy === v;
+    case "core": return coreKey(CORE_P, d) === v;
     default: return v === "_none" ? !d[k] : d[k] === v;
   }
 }
@@ -339,6 +340,62 @@ export function typeCounts(list) {
   for (const d of list) { const k = d.type ? typeKey(d.type) : ""; const e = m.get(k) || { key: k, names: new Map(), n: 0, open: 0 }; e.n++; if (isOpen(d)) e.open++; if (d.type) e.names.set(d.type, (e.names.get(d.type) || 0) + 1); m.set(k, e); }
   return [...m.values()].map((e) => ({ key: e.key, n: e.n, open: e.open, name: e.key ? canonicalType([...e.names.keys()], (x) => e.names.get(x) || 0) : "" }))
     .sort((a, b) => (!a.key) - (!b.key) || b.n - a.n || a.name.localeCompare(b.name, "ko"));
+}
+/* ---------- 1.2.5 위치 정렬(동→층→호) · 코어 ---------- */
+const LOC_CACHE = new WeakMap();
+/** 동·층·호·라인을 구조 필드에서, 없으면 위치 글자(예: ‘312동 2803호 부부욕실’, ‘지하2층’)에서 */
+export function locParts(d) {
+  if (LOC_CACHE.has(d) && LOC_CACHE.get(d).sig === `${d.dong}|${d.ho}|${d.floor}|${d.locEtc}|${d.common}`) return LOC_CACHE.get(d).v;
+  const txt = `${d.locEtc || ""} ${d.common || ""} ${d.room || ""}`;
+  let dong = d.dong || (txt.match(/(\d{2,4})\s*동/) || [])[1] && `${txt.match(/(\d{2,4})\s*동/)[1]}동` || "";
+  let ho = String(d.ho || (txt.match(/(\d{3,4})\s*호/) || [])[1] || "").trim();
+  let floor = String(d.floor || floorOfHo(ho) || "");
+  if (!floor) { const b = txt.match(/(?:지하|B)\s*(\d{1,2})\s*층?/i); const f = txt.match(/(?<![\dB])(\d{1,2})\s*층/); floor = b ? `B${b[1]}` : /옥상/.test(txt) ? "옥상" : f ? f[1] : ""; }
+  const dm = String(dong).match(/\d+/); const fm = String(floor).match(/^B(\d+)$/i);
+  const floorNum = !floor ? null : fm ? -Number(fm[1]) : floor === "옥상" ? 999 : Number.isFinite(Number(floor)) ? Number(floor) : null;
+  const hoNum = /^\d+$/.test(ho) ? Number(ho) : null;
+  const v = { dong, dongNum: dm ? Number(dm[0]) : null, floor, floorNum, ho, hoNum, line: hoNum != null && hoNum >= 100 ? hoNum % 100 : null };
+  LOC_CACHE.set(d, { sig: `${d.dong}|${d.ho}|${d.floor}|${d.locEtc}|${d.common}`, v });
+  return v;
+}
+/** 코어: 현장 설정(p.coreCfg.dongs[동][라인]) → 동 데이터의 cores([{core, lines:[..]}]) → 기본 규칙(라인 per개씩 한 코어, 기본 2) */
+export const coreRule = (p) => ({ per: 2, dongs: {}, ...(p?.coreCfg || {}) });
+export function coreOf(p, d) {
+  const lp = locParts(d); if (!lp.dong || lp.line == null) return null;
+  const cfg = coreRule(p); const m = cfg.dongs?.[lp.dong];
+  if (m && m[lp.line] != null && m[lp.line] !== "") return Number(m[lp.line]) || null;
+  const dg = p?.dongs?.find((x) => x.name === lp.dong);
+  const c = dg?.cores?.find?.((x) => (x.lines || []).map(Number).includes(lp.line)); if (c) return Number(c.core) || null;
+  return cfg.per > 0 ? Math.ceil(lp.line / cfg.per) : null;
+}
+export const coreKey = (p, d) => { const c = coreOf(p, d); return c ? `${locParts(d).dong}|${c}` : "_none"; };
+export const coreLabel = (k) => (k === "_none" || !k ? "코어 미지정" : `${k.split("|")[0]} ${k.split("|")[1]}코어`);
+let CORE_P = null; export const setCoreProject = (p) => { CORE_P = p; };
+export const SORTS = [["", "기본순"], ["new", "등록순"], ["due", "기한순"], ["loc", "위치순"], ["dong", "동별"], ["floor", "층별"], ["ho", "호수별(라인)"], ["core", "코어별"]];
+export const sortDefaultDir = (mode) => (mode === "new" ? "desc" : "asc");
+/** 정렬: 비어 있는 값(동·층·호 없음)은 오름·내림 상관없이 항상 뒤로 */
+export function sortList(list, mode = "", dir = "", p = CORE_P) {
+  const today = todayStr(); const sg = (dir || sortDefaultDir(mode)) === "desc" ? -1 : 1;
+  const numC = (a, b) => (a == null && b == null ? 0 : a == null ? 1 : b == null ? -1 : (a - b) * sg);
+  const strC = (a, b) => (!a && !b ? 0 : !a ? 1 : !b ? -1 : a.localeCompare(b, "ko", { numeric: true }) * sg);
+  const newest = (a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0);
+  const L = (d) => locParts(d);
+  const dongC = (a, b) => numC(L(a).dongNum, L(b).dongNum) || strC(L(a).dong, L(b).dong);
+  const floorC = (a, b) => numC(L(a).floorNum, L(b).floorNum);
+  const lineC = (a, b) => numC(L(a).line, L(b).line);
+  const hoC = (a, b) => numC(L(a).hoNum, L(b).hoNum);
+  const coreC = (a, b) => numC(coreOf(p, a), coreOf(p, b));
+  const cmp = {
+    "": (a, b) => (isOverdue(b, today) - isOverdue(a, today)) || newest(a, b),
+    new: (a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0) * sg,
+    due: (a, b) => strC(a.due, b.due) || newest(a, b),
+    loc: (a, b) => dongC(a, b) || floorC(a, b) || lineC(a, b) || hoC(a, b) || newest(a, b),
+    dong: (a, b) => dongC(a, b) || newest(a, b),
+    floor: (a, b) => floorC(a, b) || dongC(a, b) || lineC(a, b) || newest(a, b),
+    ho: (a, b) => lineC(a, b) || dongC(a, b) || floorC(a, b) || newest(a, b),
+    core: (a, b) => dongC(a, b) || coreC(a, b) || floorC(a, b) || lineC(a, b) || newest(a, b),
+  }[mode] || ((a, b) => newest(a, b));
+  return [...list].sort(cmp);
 }
 /** 도면 매칭: plan.dongs(빈 배열=전체), plan.floors "3-25, B1" */
 export function planMatches(plan, dong, floor) {

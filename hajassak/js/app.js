@@ -341,7 +341,7 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간" };
+const FILTER_LABEL = { dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간", core: "코어" };
 function filterChipText(k, v) {
   if (k === "status") return v === "_open" ? "미조치" : v === "_done" ? "완료(조치·확인)" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
@@ -353,25 +353,29 @@ function filterChipText(k, v) {
   if (k === "mine") return "다음 공정 보낼 차례";
   if (k === "floor") return v === "_none" ? "층 미지정" : M.floorLabel(v);
   if (k === "text") return `“${v}”`;
+  if (k === "core") return M.coreLabel(v);
   if (k === "from") return `${v}부터`;
   if (k === "to") return `${v}까지`;
   if (v === "_none") return { dong: "동 없음", trade: "공종 없음", type: "유형 없음", createdBy: "기록 없음", severity: "없음", category: "없음" }[k] || "없음";
   return v;
 }
 /** 1.2.4 목록 묶어 보기: 유형별·공종·업체별·위치(동)별. 묶음 순서는 다시 그려도 유지(보던 자리 유지) */
-function listGroupsHtml(list, grp) {
+function listGroupsHtml(list, grp, sorted = false) {
   const keyOf = grp === "type" ? (d) => (d.type ? M.typeKey(d.type) : "")
+    : grp === "core" ? (d) => M.coreKey(P(), d)
     : grp === "tv" ? (d) => `${d.trade ? M.tradeKey(d.trade) : ""}|${d.vendorId || ""}`
-    : (d) => d.dong || (d.common ? "공용:" + d.common : d.locEtc ? "기타" : "");
+    : (d) => M.locParts(d).dong || (d.common ? "공용:" + d.common : d.locEtc ? "기타" : "");
   const m = new Map();
   for (const d of list) { const k = keyOf(d); if (!m.has(k)) m.set(k, []); m.get(k).push(d); }
   const label = (k, items) => {
     if (grp === "type") return k ? M.typeCounts(items)[0].name : "유형 없음";
     if (grp === "tv") { const d = items[0]; return `${d.trade || "공종 미지정"} · ${vName(d) || "업체 미지정"}`; }
+    if (grp === "core") return M.coreLabel(k);
     return !k ? "위치 미지정" : k.startsWith("공용:") ? k.slice(3) : k;
   };
-  const okey = `lg:${grp}`; S.grpOrder ||= new Map(); const prev = S.grpOrder.get(okey) || [];
-  let keys = [...m.keys()].sort((a, b) => (!a) - (!b) || m.get(b).length - m.get(a).length || String(a).localeCompare(String(b), "ko"));
+  const okey = `lg:${grp}:${sorted ? LS.get("listSort", {}).mode || "auto" : ""}`; S.grpOrder ||= new Map(); const prev = S.grpOrder.get(okey) || [];
+  // 정렬을 골랐으면 정렬 순서대로(처음 나온 순), 아니면 건수 많은 순
+  let keys = sorted ? [...m.keys()].sort((a, b) => (!a || a === "_none") - (!b || b === "_none")) : [...m.keys()].sort((a, b) => (!a || a === "_none") - (!b || b === "_none") || m.get(b).length - m.get(a).length || String(a).localeCompare(String(b), "ko"));
   if (navKind() === "re" || navKind() === "pop") keys = [...prev.filter((k) => m.has(k)), ...keys.filter((k) => !prev.includes(k))];
   S.grpOrder.set(okey, keys);
   const closed = new Set(LS.get("listGrpClosed", [])); let left = S.listLimit;
@@ -385,21 +389,25 @@ ROUTES.list = async () => {
   setTab("list");
   setHeader("하자 목록", { backBtn: navDepth() > 1 });
   const f = S.filter; const all = PD();
-  const list = M.applyFilter(all, f, { vendorName: vName }).sort((a, b) => (M.isOverdue(b) - M.isOverdue(a)) || (a.createdAt < b.createdAt ? 1 : -1));
+  /* 1.2.5 정렬(기억) — 위치·코어 묶음에서 ‘기본’이면 안에서 층·호 순 */
+  const grp = LS.get("listGroup", ""); const srt = { mode: "", dir: "", ...LS.get("listSort", {}) };
+  const effMode = srt.mode || (grp === "core" ? "core" : grp === "loc" ? "loc" : ""); const effDir = srt.dir || M.sortDefaultDir(effMode);
+  M.setCoreProject(P());
+  const list = M.sortList(M.applyFilter(all, f, { vendorName: vName }), effMode, effDir);
   /* 1.2.4 유형 칩(건수: 유형 조건만 뺀 목록 기준) + 묶어 보기 */
   const tcs = M.typeCounts(M.applyFilter(all, { ...f, type: [] }, { vendorName: vName })); const fTypes = M.fArr(f.type);
   const tOn = (t) => fTypes.some((v) => (t.key ? M.sameType(v, t.name) || v === t.name : v === "_none"));
   const typeChips = tcs.length > 1 || fTypes.length ? `<div class="chips scroll ty-chips" id="ty-chips" role="group" aria-label="하자 유형"><button type="button" class="chip ${fTypes.length ? "" : "on"}" data-ty="">유형 전체 <small>${n(tcs.reduce((a, t) => a + t.n, 0))}</small></button>${tcs.map((t) => `<button type="button" class="chip ${tOn(t) ? "on" : ""}" data-ty="${t.key ? esc(t.name) : "_none"}">${t.key ? esc(t.name) : "유형 없음"} <small>${n(t.n)}</small></button>`).join("")}</div>` : "";
-  const grp = LS.get("listGroup", "");
   const chips = activeChips(f);
   view().innerHTML = `
     <form class="search" id="lsearch" role="search"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="내용·위치·업체 검색" aria-label="목록 검색">
       <button type="button" class="btn" id="btn-filter">필터${M.filterCount(f) ? ` <b class="badge">${M.filterCount(f)}</b>` : ""}</button></form>
     <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
-    <div class="ty-row"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select>${typeChips}</div>
+    <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
+    <div class="ty-row">${typeChips}</div>
     <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
-    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
+    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
     ${list.length > S.listLimit ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
@@ -410,6 +418,8 @@ ROUTES.list = async () => {
   $$("[data-ty]", view()).forEach((b) => b.addEventListener("click", () => { const v = b.dataset.ty; const cur = M.fArr(S.filter.type);
     if (!v) delete S.filter.type; else if (b.classList.contains("on")) { const nx = cur.filter((x) => !(x === v || (v !== "_none" && M.sameType(x, v)))); if (nx.length) S.filter.type = nx; else delete S.filter.type; } else S.filter.type = [...cur, v]; LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; rerender(); }));
   $("#lgroup").addEventListener("change", (e) => { LS.set("listGroup", e.target.value); S.noRestore = true; rerender(); });
+  $("#lsort").addEventListener("change", (e) => { LS.set("listSort", { mode: e.target.value, dir: M.sortDefaultDir(e.target.value) }); S.noRestore = true; rerender(); });
+  $("#lsdir")?.addEventListener("click", () => { LS.set("listSort", { mode: srt.mode || effMode, dir: effDir === "desc" ? "asc" : "desc" }); S.noRestore = true; rerender(); });
   $$("details.lgrp", view()).forEach((dd) => dd.addEventListener("toggle", () => { const c = new Set(LS.get("listGrpClosed", [])); if (dd.open) c.delete(dd.dataset.gk); else c.add(dd.dataset.gk); LS.set("listGrpClosed", [...c].slice(-200)); }));
   $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = g.dataset.gall.split(","); for (const x of ids) S.select[g.checked ? "add" : "delete"](x); syncChecks(); }));
   $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
@@ -439,6 +449,7 @@ function facetOptions(p, all) {
     { k: "vendorId", t: "업체", o: [...vendors.map((v) => [v.id, v.name]), ["_none", "업체 미지정"]] },
     { k: "dong", t: "동", o: [...dongs.map((x) => [x, x]), ...(all.some((d) => !d.dong) ? [["_none", "동 없음(단지 공용 등)"]] : [])] },
     { k: "floor", t: "층", o: [...floors.map((x) => [x, M.floorLabel(x)]), ...(all.some((d) => !(d.floor || d.ho)) ? [["_none", "층 미지정"]] : [])], fold: true },
+    { k: "core", t: "코어", o: (() => { M.setCoreProject(p); const ks = [...new Set(M.sortList(all, "core", "asc", p).map((d) => M.coreKey(p, d)))]; return [...ks.filter((k) => k !== "_none"), ...(ks.includes("_none") ? ["_none"] : [])].map((k) => [k, M.coreLabel(k)]); })(), fold: true },
     { k: "trade", t: "공종", o: tradeNames.map((x) => [x, x]) },
     { k: "type", t: "유형", o: [...typeNames.map((x) => [x, x]), ...(all.some((d) => !d.type) ? [["_none", "유형 없음"]] : [])] },
     { k: "severity", t: "중요도", o: M.SEVERITIES.map((x) => [x, x]) },
@@ -510,16 +521,16 @@ function filterSheet() {
 /** 1.2.4 집계: 지금 목록을 업체·동·공종·유형 × 상태 건수 표로. 칸을 누르면 그 조건으로 목록 */
 function aggSheet(list, base = null) {
   let row = LS.get("aggRow", "vendorId");
-  const ROWS = { vendorId: "업체", dong: "동", trade: "공종", type: "유형" };
+  const ROWS = { vendorId: "업체", dong: "동", core: "코어", trade: "공종", type: "유형" }; if (!ROWS[row]) row = "vendorId"; M.setCoreProject(P());
   const COLS = [["_open", "미조치"], ...M.STATUSES.map((x) => [x, x])];
-  const keyOf = { vendorId: (d) => d.vendorId || "_none", dong: (d) => d.dong || "_none", trade: (d) => (d.trade ? M.tradeKey(d.trade) : "_none"), type: (d) => (d.type ? M.typeKey(d.type) : "_none") };
+  const keyOf = { vendorId: (d) => d.vendorId || "_none", dong: (d) => d.dong || "_none", core: (d) => M.coreKey(P(), d), trade: (d) => (d.trade ? M.tradeKey(d.trade) : "_none"), type: (d) => (d.type ? M.typeKey(d.type) : "_none") };
   const table = () => {
     const m = new Map(); const nameOf = new Map();
     for (const d of list) { const k = keyOf[row](d); if (!m.has(k)) m.set(k, []); m.get(k).push(d);
-      if (!nameOf.has(k)) nameOf.set(k, row === "vendorId" ? (k === "_none" ? "업체 미지정" : vLabel(k)) : k === "_none" ? "없음" : row === "dong" ? k : row === "trade" ? d.trade : d.type); }
+      if (!nameOf.has(k)) nameOf.set(k, row === "core" ? M.coreLabel(k) : row === "vendorId" ? (k === "_none" ? "업체 미지정" : vLabel(k)) : k === "_none" ? "없음" : row === "dong" ? k : row === "trade" ? d.trade : d.type); }
     if (row === "type") for (const [k, items] of m) if (k !== "_none") nameOf.set(k, M.typeCounts(items)[0].name);
-    const rows = [...m.entries()].sort((a, b) => (a[0] === "_none") - (b[0] === "_none") || b[1].filter(M.isOpen).length - a[1].filter(M.isOpen).length || b[1].length - a[1].length);
-    const fv = (k, items) => (k === "_none" ? "_none" : row === "vendorId" || row === "dong" ? k : row === "trade" ? items[0].trade : nameOf.get(k));
+    const rows = [...m.entries()].sort((a, b) => (a[0] === "_none") - (b[0] === "_none") || (row === "core" ? a[0].localeCompare(b[0], "ko", { numeric: true }) : 0) || b[1].filter(M.isOpen).length - a[1].filter(M.isOpen).length || b[1].length - a[1].length);
+    const fv = (k, items) => (k === "_none" ? "_none" : row === "vendorId" || row === "dong" || row === "core" ? k : row === "trade" ? items[0].trade : nameOf.get(k));
     const cell = (items, rk, c) => { const v = c === "_open" ? items.filter(M.isOpen).length : c === "_od" ? items.filter((d) => M.isOverdue(d)).length : c === "_all" ? items.length : items.filter((d) => d.status === c).length;
       return `<td>${v ? `<button type="button" class="agg-c ${c === "_od" ? "bad" : ""}" data-rk="${esc(rk)}" data-c="${c}">${n(v)}</button>` : '<span class="z">·</span>'}</td>`; };
     return `<table class="agg-t"><thead><tr><th>${ROWS[row]}</th>${COLS.map(([, t]) => `<th>${t}</th>`).join("")}<th>기한초과</th><th>합계</th></tr></thead><tbody>
@@ -1696,6 +1707,52 @@ async function typeMergeSheet() {
   return s;
 }
 
+/* ---------- 1.2.5 코어 설정: 동마다 호 라인 → 코어 (기본: 라인 2개씩 한 코어). 현장 문서에 저장 → 팀 현장이면 동기화 ---------- */
+async function coreSheet() {
+  const p = P(); if (!p) return;
+  const ro = isViewerNow();
+  const cfg = JSON.parse(JSON.stringify(M.coreRule(p))); cfg.dongs ||= {};
+  let dn = p.dongs[0]?.name || "";
+  const dongOf = (name) => p.dongs.find((d) => d.name === name);
+  const linesFor = (name) => { const d = dongOf(name); const ls = d ? M.linesOf(d) : []; if (ls.length) return ls; return [...new Set(PD().filter((x) => M.locParts(x).dong === name).map((x) => M.locParts(x).line).filter((x) => x != null))].sort((a, b) => a - b); };
+  const ruleCore = (l) => (cfg.per > 0 ? Math.ceil(l / cfg.per) : null);
+  const coreFor = (name, l) => { const m = cfg.dongs[name]; if (m && m[l] != null && m[l] !== "") return Number(m[l]); const c = dongOf(name)?.cores?.find?.((x) => (x.lines || []).map(Number).includes(l)); return c ? Number(c.core) : ruleCore(l); };
+  const pad = (l) => String(l).padStart(2, "0");
+  const linesHtml = () => { const ls = linesFor(dn); const maxC = Math.max(4, ...ls.map((l) => coreFor(dn, l) || 0)) + 1;
+    if (!ls.length) return '<p class="help">이 동은 라인 정보가 없어요(동 설정에서 층·라인을 넣거나 하자를 등록하면 나와요).</p>';
+    const cnt = new Map(); for (const d of PD()) { const lp = M.locParts(d); if (lp.dong === dn && lp.line != null) { const c = coreFor(dn, lp.line); cnt.set(c, (cnt.get(c) || 0) + 1); } }
+    return `<div class="co-lines">${ls.map((l) => { const own = cfg.dongs[dn]?.[l] != null && cfg.dongs[dn]?.[l] !== "";
+      return `<label class="co-line ${own ? "own" : ""}"><span>${pad(l)}호 라인</span><select class="inp inp-sm" data-line="${l}" ${ro ? "disabled" : ""}><option value="">기본${ruleCore(l) ? ` (${ruleCore(l)}코어)` : " (미지정)"}</option>${Array.from({ length: maxC }, (_, i) => i + 1).map((c) => `<option value="${c}" ${own && Number(cfg.dongs[dn][l]) === c ? "selected" : ""}>${c}코어</option>`).join("")}</select></label>`; }).join("")}</div>
+      <p class="help small" id="co-sum">이 동: ${[...new Set(ls.map((l) => coreFor(dn, l)))].filter(Boolean).sort((a, b) => a - b).map((c) => `${c}코어 = ${ls.filter((l) => coreFor(dn, l) === c).map(pad).join("·")}호 (하자 ${cnt.get(c) || 0}건)`).join(" · ") || "코어 미지정"}</p>`; };
+  const s = openSheet({ title: "코어 설정", full: true, cls: "co-sheet",
+    html: `${ro ? '<p class="warnbox help">보기 전용 멤버라 바꿀 수 없어요.</p>' : ""}
+      <p class="help">호수 끝 두 자리(라인)로 코어를 정해요. 예: 01·02호 = 1코어, 03·04호 = 2코어. 동마다 다르면 아래에서 바꾸세요. 호가 없는 하자(공용부 등)는 ‘코어 미지정’이에요.</p>
+      <label class="fld"><span>기본 규칙: 라인 몇 개씩 한 코어 (0 = 기본 규칙 쓰지 않음)</span><input class="inp" id="co-per" type="number" min="0" max="10" value="${cfg.per}" ${ro ? "disabled" : ""}></label>
+      <label class="fld"><span>동</span><select class="inp" id="co-dong">${p.dongs.map((d) => `<option ${d.name === dn ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select></label>
+      <div id="co-body">${linesHtml()}</div>
+      <div class="row wrap"><button type="button" class="btn" id="co-reset" ${ro ? "disabled" : ""}>이 동 기본 규칙으로</button><button type="button" class="btn" id="co-copy" ${ro ? "disabled" : ""}>다른 동에 복사</button></div>`,
+    footer: `<button type="button" class="btn" data-close>취소</button><button type="button" class="btn btn-primary" id="co-save" ${ro ? "disabled" : ""}>저장</button>` });
+  const el = s.el; const body = () => { $("#co-body", el).innerHTML = linesHtml(); };
+  el.addEventListener("change", (e) => { const sel = e.target.closest("[data-line]"); if (!sel) return; cfg.dongs[dn] ||= {}; if (sel.value === "") delete cfg.dongs[dn][sel.dataset.line]; else cfg.dongs[dn][sel.dataset.line] = Number(sel.value); if (!Object.keys(cfg.dongs[dn]).length) delete cfg.dongs[dn]; body(); });
+  $("#co-per", el).addEventListener("input", (e) => { cfg.per = Math.max(0, Math.min(10, Number(e.target.value) || 0)); body(); });
+  $("#co-dong", el).addEventListener("change", (e) => { dn = e.target.value; body(); });
+  $("#co-reset", el).addEventListener("click", () => { delete cfg.dongs[dn]; body(); });
+  $("#co-copy", el).addEventListener("click", async () => {
+    const n0 = linesFor(dn).length; const same = p.dongs.filter((d) => d.name !== dn && linesFor(d.name).length === n0);
+    const v = await choose(`${dn} 코어 설정을 복사`, [{ label: `라인 수가 같은 동 (${same.length}개)`, value: "same", icon: "🏢", sub: same.map((d) => d.name).slice(0, 8).join(", ") }, { label: `모든 동 (${p.dongs.length - 1}개)`, value: "all", icon: "🏙" }]);
+    if (!v) return; const targets = v === "same" ? same : p.dongs.filter((d) => d.name !== dn);
+    const src = {}; for (const l of linesFor(dn)) src[l] = coreFor(dn, l);
+    for (const d of targets) cfg.dongs[d.name] = { ...src };
+    toast(`${targets.length}개 동에 복사했어요 — 저장을 누르면 적용돼요`); body();
+  });
+  $("#co-save", el).addEventListener("click", async () => {
+    if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+    p.coreCfg = { per: cfg.per, dongs: cfg.dongs }; try { await saveProject(p); } catch (e) { return toast(e.readOnly ? e.message : "저장하지 못했어요: " + e.message); }
+    await s.close(); toast("코어 설정을 저장했어요"); rerender();
+  });
+  return s;
+}
+
 /* ---------- 1.2.3 업체 이관: 다른 업체로 넘기기(공종 변경·사유·접수로 되돌리기) + 이력 ---------- */
 const isViewerNow = () => !!(Sync.attached() && Sync.state.ws?.role === "viewer");
 async function transferSheet(items) {
@@ -2122,6 +2179,8 @@ ROUTES.project = async () => {
     <h3 class="sec">동 <small>${p.dongs.length}개 · 줄임말은 빠른 검색용(예: 9동 → 109동)</small></h3>
     <div class="slist">${p.dongs.map((d) => `<button type="button" class="sitem" data-dong="${d.id}"><span class="si-ico">🏢</span><span><b>${esc(d.name)}${d.alias ? ` <small class="tag">줄임 ${esc(d.alias)}</small>` : ""}</b><small>지하${d.basement || 0} · ${d.floors}층 · ${d.lines}호 라인 · 세대 ${d.unitStart || 1}층부터${d.units?.length ? ` · 실제 세대 ${d.units.length}개(데이터 기준)` : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
     <div class="row"><button type="button" class="btn" id="btn-adddong">＋ 동 추가</button><button type="button" class="btn" id="btn-bulkdong">＋ 여러 동 한 번에</button></div>
+    <h3 class="sec">코어 <small>계단·엘리베이터 코어 — 목록 코어별 정렬·묶음·필터</small></h3>
+    <div class="slist"><button type="button" class="sitem" id="si-core"><span class="si-ico">🧱</span><span><b>코어 설정</b><small>${(() => { const c = M.coreRule(p); const nd = Object.keys(c.dongs || {}).filter((k) => Object.keys(c.dongs[k] || {}).length).length; return c.per > 0 ? `기본: 라인 ${c.per}개씩 한 코어 (01·02호 = 1코어${c.per === 2 ? ", 03·04호 = 2코어" : ""})${nd ? ` · 직접 정한 동 ${nd}개` : ""}` : `기본 규칙 끔${nd ? ` · 직접 정한 동 ${nd}개` : ""}`; })()}</small></span><span class="chev">›</span></button></div>
     <h3 class="sec">목록 편집</h3><div class="slist">
       ${[["dongCommons", "🏢", "동 공용부(계단실·EV홀 등)", M.dongCommonsOf(p)], ["commons", "🅿", "단지 공용", p.commons], ["trades", "🧱", "공종·세부공종", p.trades.map((t) => t.name)], ["types", "🏷", "하자 유형", p.types], ["categories", "🗂", "구분", M.catsOf(p)], ["rooms", "🚪", "실", p.rooms], ["parts", "🧩", "부위", p.parts]]
         .map(([k, ico, t, arr]) => `<button type="button" class="sitem" data-list="${k}"><span class="si-ico">${ico}</span><span><b>${t}</b><small>${esc(arr.slice(0, 6).join(", "))}${arr.length > 6 ? " …" : ""}</small></span><span class="chev">›</span></button>`).join("")}</div>
@@ -2130,6 +2189,7 @@ ROUTES.project = async () => {
     <div class="row wrap"><button type="button" class="btn" id="btn-addplan">＋ 도면 이미지 추가</button><button type="button" class="btn" id="btn-bulkplan">🗂 도면 가져오기(PDF·이미지)</button><button type="button" class="btn" id="btn-planrooms">🚪 도면에서 실 목록 자동 채우기</button></div>
     <p class="help">설계 도면 <b>PDF</b>(여러 개·여러 쪽·PDF 묶은 .zip)를 고르면 도면 이름·동·층·평형을 읽고, 실·공용부 이름과 위치를 자동으로 뽑아 하자 등록 위치를 만들어요(인터넷 없이 이 기기 안에서만). 사진·스캔 이미지는 글자를 못 읽어 실은 직접 추가해야 해요. 이미지 zip에 매핑표(TSV/CSV)·rooms.json을 넣어도 돼요.</p>
     <button type="button" class="btn btn-danger btn-block" id="btn-delproj">이 현장 삭제</button>`;
+  $("#si-core").addEventListener("click", () => coreSheet());
   $("#pj-name").addEventListener("change", async (e) => { p.name = e.target.value.trim() || p.name; await saveProject(p); toast("저장"); });
   $("#pj-due").addEventListener("change", async (e) => { p.dueDays = Math.max(0, Number(e.target.value) || 0); await saveProject(p); toast("저장"); });
   $$("[data-dong]", view()).forEach((b) => b.addEventListener("click", () => go(`#/dong?id=${b.dataset.dong}`)));
