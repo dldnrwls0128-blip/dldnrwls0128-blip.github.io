@@ -2335,7 +2335,7 @@ async function workOrderSheet({ items, filter = null }) {
       <div class="wo-who"><label>출력자 <input class="inp" id="wo-name" value="${esc(who.name)}" placeholder="이름" maxlength="20"></label><label>팀 <input class="inp" id="wo-team" value="${esc(who.team)}" placeholder="(선택)" maxlength="20"></label></div>
       <div class="wo-prev" id="wo-prev"></div>
       <div class="send-grid wo-share"><button type="button" class="btn btn-kakao btn-lg" data-w="share">카톡으로 공유 <small>이미지</small></button>
-        <button type="button" class="btn btn-lg" data-w="copy">🖼 이미지 복사</button><button type="button" class="btn btn-lg" data-w="save">💾 이미지 저장</button><button type="button" class="btn btn-lg" data-w="pdf">📄 PDF 저장(인쇄)</button></div>
+        <button type="button" class="btn btn-lg" data-w="copy">🖼 이미지 복사</button><button type="button" class="btn btn-lg" data-w="save">💾 이미지 저장</button><button type="button" class="btn btn-lg" data-w="pdf">🖨 PDF 저장(인쇄)</button><button type="button" class="btn btn-kakao btn-lg" data-w="pdffile">📄 PDF 파일 <small>사진 포함 · ${isMobileDevice() ? "공유" : "저장"}</small></button></div>
       <p class="help small">인쇄·PDF는 A4 가로, 쪽마다 표 머리글이 반복돼요(PDF는 인쇄 창에서 ‘PDF로 저장’). 이미지는 장당 ${W.IMG_ROWS}건씩 여러 장으로 나눠요.</p>` });
   const el = s.el;
   const draw = () => { const r = rows(); $("#wo-prev", el).innerHTML = W.woHtml({ rows: r, meta: meta() }); fit(); window.__wo = { n: r.length, high, rows: r.map((x) => ({ no: x.no, stage: x.stage, dong: x.dong, ho: x.ho, utype: x.utype, movein: x.movein, room: x.room, trade: x.trade, core: x.core, head: x.head, text: x.text, status: x.status, date: x.date })), meta: meta() }; imgs = null; };
@@ -2360,6 +2360,10 @@ async function workOrderSheet({ items, filter = null }) {
     const k = b.dataset.w;
     if (k === "close") return s.close();
     if (k === "print" || k === "pdf") return print();
+    if (k === "pdffile") { busy(true, "확인서 만드는 중…"); let pages; try { pages = await W.renderWoImages({ rows: rows(), meta: meta() }); } catch (e) { busy(false); return toast("확인서를 만들지 못했어요"); } busy(false);
+      const rs = rows(); const byId = new Map(items.map((d) => [d.id, d])); const list = rs.map((r) => byId.get(r.id)).filter(Boolean); const no = new Map(rs.map((r) => [r.id, r.no]));
+      const vs = [...new Set(items.map((d) => d.vendorId || ""))]; const Pd = await import("./pdfdoc.js"); window.__woImg = window.__woImg || {};
+      return pdfSend({ title: W.WO_TITLE, fileName: `작업지시확인서_${vs.length === 1 && vs[0] ? Pd.safeName(vLabel(vs[0])) + "_" : ""}${ymdCompact()}.pdf`, docPages: pages.map((p) => p.canvas), landscape: true, photos: await pdfPhotos(list, (d) => no.get(d.id) || ""), log: window.__woImg, shareText: `${W.WO_TITLE} ${items.length}건` }); }
     const im = await makeImgs(); if (!im) return;
     if (k === "share") {
       if (canShareFiles(im.files)) { try { await navigator.share({ files: im.files, title: W.WO_TITLE, text: `${W.WO_TITLE} ${items.length}건` }); window.__woImg.shared = true; return; } catch (er) { if (er?.name === "AbortError") return; } }
@@ -2371,6 +2375,31 @@ async function workOrderSheet({ items, filter = null }) {
   const ro = new ResizeObserver(fit); ro.observe($("#wo-prev", el)); s.onClose = () => ro.disconnect();
   draw(); return s;
 }
+/* ---------- 1.3.2 사진 포함 PDF (요청서·확인서) ---------- */
+/** 하자 순서대로 사진(조치 전, 하자당 최대 4장) + 설명 */
+async function pdfPhotos(list, noOf, max = 4) { const out = [];
+  for (const d of list) { const ph = (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, max);
+    for (const x of ph) out.push({ blob: await photoOut(x, d), no: noOf(d), loc: M.locText(d), trade: M.tradeText(d), content: d.content || "" }); }
+  return out; }
+const ymdCompact = () => M.todayStr().replace(/-/g, "");
+/** PDF 만들고 보내기: 폰은 공유창(파일 1개), PC는 저장(다운로드) + 되면 클립보드에 파일 복사. 반환 "shared" | "saved" | null */
+async function pdfSend({ title, fileName, docPages, landscape = false, photos, log = {}, shareText = "", onSent = null }) {
+  busy(true, "PDF 만드는 중…"); let r;
+  try { const Pd = await import("./pdfdoc.js"); r = await Pd.buildPdf({ title, docPages, landscape, photos }); }
+  catch (e) { busy(false); console.error(e); toast("PDF를 만들지 못했어요: " + (e.message || e)); return null; }
+  busy(false);
+  const file = new File([r.blob], fileName, { type: "application/pdf" });
+  Object.assign(log, { pdf: { name: fileName, pages: r.pages, docPages: r.docPages, photoPages: r.photoPages, photos: r.photos, bytes: r.bytes, q: r.q } }); window.__pdfBlob = r.blob;
+  const mb = (r.bytes / 1048576).toFixed(1);
+  if (isMobileDevice() && canShareFiles([file])) {
+    try { await navigator.share({ files: [file], title, text: shareText }); log.pdf.shared = true; return "shared"; } catch (er) { if (er?.name === "AbortError") return null; }
+  }
+  downloadBlob(file, fileName); log.pdf.saved = true;
+  let clip = false; try { if (window.ClipboardItem?.supports?.("application/pdf")) { await navigator.clipboard.write([new ClipboardItem({ "application/pdf": r.blob })]); clip = true; } } catch {}
+  log.pdf.clip = clip;
+  toast(`PDF ${r.pages}쪽(${mb}MB)을 저장했어요${clip ? " · 클립보드에도 복사(카톡 PC에 Ctrl+V)" : ""} — 카톡 PC 대화방에 파일을 끌어다 놓으세요`, { ms: 10000, ...(onSent ? { action: "보냄으로 표시", onAction: onSent } : {}) });
+  return "saved"; }
+
 async function requestImageFor(items, vendor = null) {
   items = items.filter(Boolean); if (!items.length) return toast("요청서에 넣을 하자를 고르세요");
   if (!vendor) {
@@ -2386,11 +2415,11 @@ async function requestImageFor(items, vendor = null) {
 }
 async function requestImageSheet({ vendor, items }) {
   busy(true, "요청서 이미지 만드는 중…");
-  let pages = [], urls = [], jpgs = [], pngs = [], docNo = "", text = "";
+  let pages = [], urls = [], jpgs = [], pngs = [], docNo = "", text = ""; const photosAll = new Map();
   try {
     const R = await import("./reqimg.js");
     const { no, today } = nextDocNo(); docNo = no;
-    const photos = new Map(); const single = items.length === 1;
+    const photos = photosAll; const single = items.length === 1;
     for (const d of items) {
       const ph = (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 4); const bl = [];
       for (const x of ph) bl.push(single ? await photoOut(x, d) : x.thumb || x.blob);
@@ -2407,12 +2436,15 @@ async function requestImageSheet({ vendor, items }) {
   window.__reqImg = { docNo, n: pages.length, sizes: pages.map((p) => [p.w, p.h]), jpg: jpgs.map((b) => b.size), text, items: items.map((d) => d.id) };
   const mobile = isMobileDevice(); const canFiles = canShareFiles(files); const canClip = !!(window.ClipboardItem && navigator.clipboard?.write);
   const vps = M.vendorPhones(vendor);
+  const hasPh = [...photosAll.values()].some((l) => l.length);
+  const btnPdf = hasPh ? `<button type="button" class="btn btn-kakao btn-lg" data-r="pdf">📄 ${mobile ? "PDF로 공유" : "PDF 저장"} <small>사진 크게 포함 · 파일 1개</small></button>` : "";
   const btnShare = `<button type="button" class="btn btn-kakao btn-lg" data-r="share">카톡으로 공유 <small>이미지 첨부</small></button>`;
   const btnCopy = canClip ? `<button type="button" class="btn ${mobile ? "" : "btn-kakao"} btn-lg" data-r="copy" data-i="0">🖼 이미지 복사${mobile ? "" : " <small>카톡 PC에 Ctrl+V</small>"}</button>` : "";
   const s = openSheet({ title: `요청서 이미지 · ${vendor?.name || "업체 미지정"} ${items.length}건`, full: true, cls: "req-sheet",
     html: `<p class="help small">문서번호 <b>${esc(docNo)}</b>${pages.length > 1 ? ` · ${pages.length}장(장당 6건)` : ""}. 내용을 고치려면 하자를 수정한 뒤 다시 만드세요.</p>
       <div class="req-prev" id="req-prev">${urls.map((u, i) => `<figure><img src="${u}" alt="요청서 이미지 ${i + 1}">${pages.length > 1 && canClip ? `<button type="button" class="btn btn-sm" data-r="copy" data-i="${i}">${i + 1}장 복사</button>` : ""}</figure>`).join("")}</div>
-      <div class="send-grid">${mobile ? btnShare + btnCopy : btnCopy + btnShare}
+      ${hasPh ? `<p class="help small pdf-tip">사진이 있는 요청서는 <b>PDF 한 파일</b>(요청서 → 사진 크게, 한 쪽에 2장)로 보내면 사진이 모두 가요.</p>` : ""}
+      <div class="send-grid">${btnPdf}${mobile ? btnShare + btnCopy : btnCopy + btnShare}
         <button type="button" class="btn btn-lg" data-r="save">💾 이미지 저장</button>
         <button type="button" class="btn btn-lg" data-r="text">📋 문구 복사</button>
         <button type="button" class="btn btn-lg" data-r="wo">📋 작업지시서(표) 형식</button>
@@ -2445,6 +2477,10 @@ async function requestImageSheet({ vendor, items }) {
     }
     if (k === "save") { save(); return toast("이미지를 저장했어요", { ms: 6000, action: "보냄으로 표시", onAction: () => done("요청서 이미지(저장)") }); }
     if (k === "text") return toast((await copyText(text)) ? "문구를 복사했어요" : "복사 실패");
+    if (k === "pdf") { const list = [...items].sort(M.sortDefects); const noOf = (d) => list.indexOf(d) + 1;
+      const r = await pdfSend({ title: `하자 조치 요청서 ${docNo}`, fileName: `요청서_${(await import("./pdfdoc.js")).safeName(vendor?.name || "업체미지정")}_${ymdCompact()}.pdf`, docPages: pages.map((p) => p.canvas), photos: await pdfPhotos(list, noOf), log: window.__reqImg, shareText: text, onSent: () => done("요청서 PDF") });
+      if (r === "shared") return done("요청서 PDF(카톡·공유)");
+      return; }
     if (k === "wo") { await s.close(); cleanup(); return workOrderSheet({ items }); }
     if (k === "sms") { e.preventDefault(); S.lastSms = b.getAttribute("href"); if (!window.__noNav) location.href = S.lastSms; return toast("문자 앱에서 이미지를 직접 첨부해 주세요", { ms: 7000, action: "보냄으로 표시", onAction: () => done("요청서 이미지(문자)") }); }
   }));

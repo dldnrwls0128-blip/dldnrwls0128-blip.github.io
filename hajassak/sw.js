@@ -1,11 +1,11 @@
-/* hajassak-v1.3.1 (build-deploy.sh가 version.js에서 찍음) */
+/* hajassak-v1.3.2 (build-deploy.sh가 version.js에서 찍음) */
 /* 하자싹 서비스 워커 — 앱 셸 캐시(오프라인). 사용자 데이터는 IndexedDB(+선택 시 Firebase 동기화)에 있고 SW는 캐시하지 않음. Firebase 요청(다른 도메인)은 가로채지 않음 */
 importScripts("./version.js"); // 버전 유일 출처
 const VERSION = self.HAJASSAK_VERSION || "0";
 const CACHE = "hajassak-v" + VERSION;
 const PRECACHE = ["./", "./index.html", "./version.js", "./manifest.webmanifest", "./css/app.css",
   "./js/app.js", "./js/ui.js", "./js/db.js", "./js/model.js", "./js/photo.js", "./js/share.js", "./js/pro.js", "./js/speech.js",
-  "./js/backup.js", "./js/sync.js", "./js/importer.js", "./js/import-worker.js", "./js/exporter.js", "./js/sample.js", "./js/pdfplan.js", "./js/help.js", "./js/reqimg.js", "./js/workorder.js",
+  "./js/backup.js", "./js/sync.js", "./js/importer.js", "./js/import-worker.js", "./js/exporter.js", "./js/sample.js", "./js/pdfplan.js", "./js/help.js", "./js/reqimg.js", "./js/workorder.js", "./js/pdfdoc.js",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/maskable-192.png", "./icons/maskable-512.png", "./icons/apple-touch-icon.png",
   "./vendor/jszip/jszip.min.js", "./vendor/xlsx/xlsx.mjs", "./vendor/firebase/firebase-app.js", "./vendor/firebase/firebase-auth.js", "./vendor/firebase/firebase-firestore.js", "./privacy.html"];
 // 1.1.0 도면 PDF 읽기(pdf.js): 버전 고정 캐시에 한 번만 받아 두고 앱 업데이트 때 다시 받지 않음(시작 속도·데이터 절약). cmaps·글꼴은 쓸 때 저장
