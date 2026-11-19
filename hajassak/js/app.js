@@ -582,7 +582,7 @@ ROUTES.list = async () => {
       ${lb.room3 ? `<button type="button" class="dd-btn ${f.room ? "on" : ""}" id="dd-room" aria-haspopup="listbox"><small>실</small><b>${esc(f.room || "전체")}</b></button>` : ""}
       <button type="button" class="dd-btn ${fTypes.length ? "on" : ""}" id="dd-type" aria-haspopup="listbox"><small>유형</small><b>${esc(typeLabel)}</b></button>
     </div>
-    <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
+    <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><button type="button" class="btn btn-sm tg-done ${f.hideDone ? "on" : ""}" id="btn-hidedone" aria-pressed="${!!f.hideDone}" title="조치완료·확인완료 건 숨기기">${f.hideDone ? "✓ " : ""}완료 건 숨기기</button><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
     <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
@@ -664,6 +664,7 @@ ROUTES.list = async () => {
   $("#lg-openall")?.addEventListener("click", () => vgAll(true)); $("#lg-closeall")?.addEventListener("click", () => vgAll(false));
   $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = gallIds(g); for (const x of ids) S.select[g.checked ? "add" : "delete"](x); syncChecks(); }));
   $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
+  $("#btn-hidedone").addEventListener("click", () => { const nf = { ...S.filter }; if (nf.hideDone) delete nf.hideDone; else nf.hideDone = true; S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
   $("#btn-agg").addEventListener("click", () => aggSheet(list));
   if (S.openFilter) { S.openFilter = false; setTimeout(() => filterSheet(), 50); }
   $("#btn-sendlist").addEventListener("click", () => sendSheet({ items: list }));
@@ -672,6 +673,7 @@ ROUTES.list = async () => {
 function activeChips(f, { collapse = 3 } = {}) {
   return Object.entries(f).flatMap(([k, v]) => {
     if (!v || (Array.isArray(v) && !v.length)) return [];
+    if (k === "hideDone") return [`<button type="button" class="chip on ex" data-rm="hideDone" aria-label="완료 숨김 끄기">완료 숨김 ✕</button>`];
     /* 1.2.9 한 항목에 4개 이상이면 칩 하나로(누르면 필터 패널의 그 항목, ✕는 그 항목 모두 지우기) */
     if (Array.isArray(v) && collapse && v.length > collapse) { const ex = k === "exw" || k.startsWith("x_"); const lb = FILTER_LABEL[k] || k;
       return [`<span class="chip on cgrp ${ex ? "ex" : ""}"><button type="button" class="cg-open" data-fopen="${k}" title="${esc(v.map((x) => filterChipText(k, x)).join(", "))}">${esc(lb)} ${n(v.length)}개</button><button type="button" class="cg-x" data-rm="${k}" aria-label="${esc(lb)} 조건 모두 지우기">✕</button></span>`]; }
@@ -775,12 +777,13 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   const has = (k, v) => M.fArr(nf[k]).includes(v);
   const day = (dd) => { const t = new Date(Date.now() - dd * 864e5); return M.localDay(t.toISOString()); };
   const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length && !M.fArr(nf["x_" + fc.k]).length && focus !== fc.k && focus !== "x_" + fc.k ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
-    ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
+    ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}${fc.k === "status" ? `<div class="fc-tools"><button type="button" class="btn btn-sm" id="fl-openonly">미조치만</button><small class="help">칩을 <b>길게 누르면 제외</b>(빨간 −칩) · 맨 위 ‘제외로 고르기’를 켜도 돼요</small></div>` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
   const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
     html: `${presetRowHtml("panel")}<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
       <div class="chips scroll" id="fl-active"></div>
       <div class="fl-toggles"><label class="check"><input type="checkbox" id="fl-overdue" ${nf.overdue ? "checked" : ""}> ⏰ 기한초과만 <small class="fn" id="fl-odn"></small></label>
-        <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label></div>
+        <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label>
+        <label class="check"><input type="checkbox" id="fl-hidedone" ${nf.hideDone ? "checked" : ""}> ✅ 완료 건 숨기기 <small class="help">(조치완료·확인완료)</small></label></div>
       <section class="fl-ex" id="fl-ex"><div class="fl-ex-hd"><b>제외</b> <small class="help">이 단어가 공종·세부공종·내용·위치·업체·유형에 있으면 빼요</small></div>
         <form class="row" id="fl-exw-f" autocomplete="off"><input class="inp" id="fl-exw" placeholder="예: 코킹, 마이다판 (쉼표·Enter)" aria-label="제외 단어"><button type="submit" class="btn btn-sm">추가</button></form>
         <div class="chips" id="fl-exw-chips"></div>
@@ -810,7 +813,7 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
       const sel = [...M.fArr(nf[fc.k]).map((v) => filterChipText(fc.k, v)), ...M.fArr(nf["x_" + fc.k]).map((v) => "−" + filterChipText(fc.k, v))]; $(`[data-sel-of="${fc.k}"]`, el).textContent = sel.join(", ");
     }
     $("#fl-odn", el).textContent = n(M.applyFilter(all, { ...f0, overdue: true }, ctx).length);
-    $("#fl-urgent", el).checked = has("severity", "긴급");
+    $("#fl-urgent", el).checked = has("severity", "긴급"); $("#fl-hidedone", el).checked = !!nf.hideDone;
     $("#fl-active", el).innerHTML = activeChips(f0) || '<span class="help">조건 없음 · 전체</span>';
     $("#fl-exw-chips", el).innerHTML = M.fArr(nf.exw).map((w) => `<button type="button" class="chip on ex" data-exw="${esc(w)}" aria-label="제외 ${esc(w)} 지우기">−${esc(w)} ✕</button>`).join("");
     $$("[data-fopen]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => goFacet(b.dataset.fopen)));
@@ -832,6 +835,9 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
     const per = e.target.closest("[data-per]"); if (per) { if (per.dataset.per === "") { delete nf.from; delete nf.to; } else { nf.from = day(+per.dataset.per); nf.to = day(0); } syncInputs(); refresh(); }
   });
   $("#fl-overdue", el).addEventListener("change", (e) => { nf.overdue = e.target.checked || undefined; refresh(); });
+  $("#fl-hidedone", el).addEventListener("change", (e) => { nf.hideDone = e.target.checked || undefined; refresh(); });
+  /* 1.3.1 미조치만 = 완료 상태(조치완료·확인완료) 제외 */
+  $("#fl-openonly", el)?.addEventListener("click", () => { const done = ["조치완료", "확인완료"]; nf.status = M.fArr(nf.status).filter((x) => !done.includes(x)); nf.x_status = [...new Set([...M.fArr(nf.x_status), ...done])]; refresh(); });
   $("#fl-urgent", el).addEventListener("change", (e) => { const cur = M.fArr(nf.severity).filter((x) => x !== "긴급"); nf.severity = e.target.checked ? [...cur, "긴급"] : cur; refresh(); });
   for (const [id, k] of [["#fl-ho", "ho"], ["#fl-from", "from"], ["#fl-to", "to"]]) $(id, el).addEventListener("input", (e) => { nf[k] = e.target.value.trim(); refresh(); });
   for (const i of $$("[data-k]", el)) i.addEventListener(i.type === "checkbox" ? "change" : "input", () => { nf[i.dataset.k] = i.type === "checkbox" ? (i.checked ? "1" : "") : i.value.trim(); refresh(); });

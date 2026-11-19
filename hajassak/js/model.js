@@ -58,6 +58,8 @@ export const hasSame = (arr, v, except = null) => arr.some((x) => x !== except &
 export const CATEGORY_HINT = { 시공불량: "공사 중", 사전점검: "입주 전", 입주자하자: "입주 후", AS: "사후" };
 export const SEVERITIES = ["긴급", "보통", "경미"];
 export const STATUSES = ["접수", "업체전달", "조치중", "조치완료", "확인완료", "재접수"];
+/** 1.3.1 ‘완료 건 숨기기’가 빼는 상태 */
+export const DONE_STATUSES = new Set(["조치완료", "확인완료", "완료"]);
 export const OPEN_STATUSES = new Set(["접수", "업체전달", "조치중", "재접수"]);
 export const STATUS_CLS = { 접수: "s0", 업체전달: "s1", 조치중: "s2", 조치완료: "s3", 확인완료: "s4", 재접수: "s5" };
 /** 다음 단계(주 흐름) */
@@ -215,6 +217,7 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.chain && !hasSteps(d)) return false;
     if (f.mine && !isMyTurn(d)) return false;
     if (f.overdue && !isOverdue(d, today)) return false;
+    if (f.hideDone && DONE_STATUSES.has(d.status)) return false;
     if (f.from && localDay(d.createdAt) < f.from) return false;
     if (f.to && localDay(d.createdAt) > f.to) return false;
     if (text) {
@@ -234,7 +237,7 @@ export function facetCounts(list, f, k, values, ctx = {}) {
 export const EX_KEYS = FACET_KEYS.map((k) => "x_" + k);
 const exNorm = (t) => String(t || "").toLowerCase().replace(/\s+/g, "");
 export const exFilterCount = (f) => fArr(f.exw).length + EX_KEYS.reduce((a, k) => a + fArr(f[k]).length, 0);
-export const filterCount = (f) => exFilterCount(f) + [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
+export const filterCount = (f) => exFilterCount(f) + [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "hideDone", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
 
 export function countBy(list, key) {
   const m = new Map();
