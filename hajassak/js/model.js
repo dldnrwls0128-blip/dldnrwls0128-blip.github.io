@@ -236,6 +236,9 @@ export function facetCounts(list, f, k, values, ctx = {}) {
 /** 1.2.8 제외: 단어(exw — 공종·세부공종·내용·위치·업체·유형에 들어 있으면 뺌) · 항목 값(x_업체, x_공종 …) */
 export const EX_KEYS = FACET_KEYS.map((k) => "x_" + k);
 const exNorm = (t) => String(t || "").toLowerCase().replace(/\s+/g, "");
+/** 1.3.3 제외 조건(x_ 항목·제외 단어·완료 숨김)만 뺀 필터 — ‘제외로 빠진 건수’와 포함 칩 건수에 씀 */
+export const stripEx = (f = {}) => Object.fromEntries(Object.entries(f).filter(([k]) => !k.startsWith("x_") && k !== "exw" && k !== "hideDone"));
+export const hasEx = (f = {}) => exFilterCount(f) > 0 || !!f.hideDone;
 export const exFilterCount = (f) => fArr(f.exw).length + EX_KEYS.reduce((a, k) => a + fArr(f[k]).length, 0);
 export const filterCount = (f) => exFilterCount(f) + [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "hideDone", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
 

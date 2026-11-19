@@ -559,6 +559,7 @@ ROUTES.list = async () => {
   const effMode = srt.mode || (grp === "core" ? "core" : grp === "loc" ? "loc" : ""); const effDir = srt.dir || M.sortDefaultDir(effMode);
   M.setCoreProject(P());
   const list = M.sortList(M.applyFilter(all, f, { vendorName: vName }), effMode, effDir);
+  const exGone = M.hasEx(f) ? M.applyFilter(all, M.stripEx(f), { vendorName: vName }).length - list.length : 0; // 1.3.3 제외로 빠진 건수
   /* 1.2.4 유형 칩(건수: 유형 조건만 뺀 목록 기준) + 묶어 보기 */
   const tcs = M.typeCounts(M.applyFilter(all, { ...f, type: [] }, { vendorName: vName })); const fTypes = M.fArr(f.type);
   const tOn = (t) => fTypes.some((v) => (t.key ? M.sameType(v, t.name) || v === t.name : v === "_none"));
@@ -583,7 +584,7 @@ ROUTES.list = async () => {
       <button type="button" class="dd-btn ${fTypes.length ? "on" : ""}" id="dd-type" aria-haspopup="listbox"><small>유형</small><b>${esc(typeLabel)}</b></button>
     </div>
     <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><button type="button" class="btn btn-sm tg-done ${f.hideDone ? "on" : ""}" id="btn-hidedone" aria-pressed="${!!f.hideDone}" title="조치완료·확인완료 건 숨기기">${f.hideDone ? "✓ " : ""}완료 건 숨기기</button><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
-    <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b><span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
+    <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b>${M.hasEx(f) ? `<span class="ex-gone" id="res-ex">제외 −${n(exGone)}</span>` : ""}<span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
     <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
@@ -779,7 +780,7 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length && !M.fArr(nf["x_" + fc.k]).length && focus !== fc.k && focus !== "x_" + fc.k ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
     ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}${fc.k === "status" ? `<div class="fc-tools"><button type="button" class="btn btn-sm" id="fl-openonly">미조치만</button><small class="help">칩을 <b>길게 누르면 제외</b>(빨간 −칩) · 맨 위 ‘제외로 고르기’를 켜도 돼요</small></div>` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
   const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
-    html: `${presetRowHtml("panel")}<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
+    html: `${presetRowHtml("panel")}<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <span class="ex-gone" id="fl-exn" hidden></span> <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
       <div class="chips scroll" id="fl-active"></div>
       <div class="fl-toggles"><label class="check"><input type="checkbox" id="fl-overdue" ${nf.overdue ? "checked" : ""}> ⏰ 기한초과만 <small class="fn" id="fl-odn"></small></label>
         <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label>
@@ -807,9 +808,14 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   const refresh = () => {
     const f0 = clean(); const res = M.applyFilter(all, f0, ctx).length;
     $("#fl-n", el).textContent = n(res); $("#fl-apply", el).textContent = `${n(res)}건 보기`;
+    /* 1.3.3 제외로 빠진 건수를 따로 보여 줌(전에는 포함 칩 건수도 제외 뒤 숫자라 ‘312동 1,615 = 결과 1,615’처럼 제외가 안 먹은 듯 보였음) */
+    const fIn = M.stripEx(f0); const exOn = M.hasEx(f0); const gone = exOn ? M.applyFilter(all, fIn, ctx).length - res : 0;
+    const exn = $("#fl-exn", el); exn.hidden = !exOn; exn.textContent = exOn ? `(${n(res + gone)}건 중 제외 −${n(gone)}건)` : "";
     for (const fc of facets) {
-      const cnt = M.facetCounts(all, { ...f0, ["x_" + fc.k]: [] }, fc.k, fc.o.map(([v]) => v), ctx); // 제외 칩은 ‘빠지는 건수’
-      for (const b of $$(`.fchip[data-fk="${fc.k}"]`, el)) { const c = cnt.get(b.dataset.fv) || 0; b.querySelector(".fn").textContent = n(c); const on = has(fc.k, b.dataset.fv); const ex = has("x_" + fc.k, b.dataset.fv); b.classList.toggle("on", on); b.classList.toggle("ex", ex); b.setAttribute("aria-pressed", on || ex); b.classList.toggle("zero", !c && !on && !ex); }
+      const vals = fc.o.map(([v]) => v);
+      const cnt = M.facetCounts(all, fIn, fc.k, vals, ctx); // 포함 칩: 제외 전 건수
+      const xc = M.fArr(nf["x_" + fc.k]).length ? M.facetCounts(all, { ...f0, ["x_" + fc.k]: [] }, fc.k, vals, ctx) : null; // 제외 칩: ‘빠지는 건수’
+      for (const b of $$(`.fchip[data-fk="${fc.k}"]`, el)) { const c = (xc && has("x_" + fc.k, b.dataset.fv) ? xc : cnt).get(b.dataset.fv) || 0; b.querySelector(".fn").textContent = n(c); const on = has(fc.k, b.dataset.fv); const ex = has("x_" + fc.k, b.dataset.fv); b.classList.toggle("on", on); b.classList.toggle("ex", ex); b.setAttribute("aria-pressed", on || ex); b.classList.toggle("zero", !c && !on && !ex); }
       const sel = [...M.fArr(nf[fc.k]).map((v) => filterChipText(fc.k, v)), ...M.fArr(nf["x_" + fc.k]).map((v) => "−" + filterChipText(fc.k, v))]; $(`[data-sel-of="${fc.k}"]`, el).textContent = sel.join(", ");
     }
     $("#fl-odn", el).textContent = n(M.applyFilter(all, { ...f0, overdue: true }, ctx).length);
