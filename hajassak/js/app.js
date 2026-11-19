@@ -529,7 +529,7 @@ function ddPick(btn, { title, opts, value, onPick, hint = "" }) {
   $$(".dd-opt", el).forEach((b) => b.addEventListener("click", () => { close(); onPick(b.dataset.v); }));
   const q = $(".dd-q", el); if (q) { if (wide) q.focus();
     q.addEventListener("input", () => { const t = M.sameKey(q.value); let lastG = null, shownInG = 0;
-      const items = [...$(".dd-list", el).children]; for (const c of items) { if (c.classList.contains("dd-grp")) { if (lastG) lastG.hidden = !shownInG; lastG = c; shownInG = 0; continue; } const ok = !t || M.sameKey(c.textContent + " " + (c.dataset.kw || "")).includes(t) || !c.dataset.v; c.hidden = !ok; if (ok) shownInG++; }
+      const items = [...$(".dd-list", el).children]; for (const c of items) { if (c.classList.contains("dd-grp")) { if (lastG) lastG.hidden = !shownInG; lastG = c; shownInG = 0; continue; } const ok = !t || (M.sameKey(c.textContent + " " + (c.dataset.kw || "")).includes(t) || M.koMatch(c.querySelector("span")?.textContent || "", q.value)) || !c.dataset.v; c.hidden = !ok; if (ok) shownInG++; }
       if (lastG) lastG.hidden = !shownInG; }); }
   $(".dd-opt.on", el)?.scrollIntoView({ block: "nearest" });
   window.__ddOpen = title; return el;
@@ -775,7 +775,7 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   const has = (k, v) => M.fArr(nf[k]).includes(v);
   const day = (dd) => { const t = new Date(Date.now() - dd * 864e5); return M.localDay(t.toISOString()); };
   const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length && !M.fArr(nf["x_" + fc.k]).length && focus !== fc.k && focus !== "x_" + fc.k ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
-    <div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
+    ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
   const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
     html: `${presetRowHtml("panel")}<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
       <div class="chips scroll" id="fl-active"></div>
@@ -822,6 +822,7 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   /* 1.2.8 칩: 보통은 ‘포함’, 제외 모드(또는 길게 누르기)면 ‘제외’(빨간 −칩). 한 값은 둘 중 하나만 */
   const pickChip = (k, v, ex) => { const a = ex ? "x_" + k : k, b2 = ex ? k : "x_" + k; nf[b2] = M.fArr(nf[b2]).filter((x) => x !== v); toggle(a, v); refresh(); };
   onLongPress(el, ".fchip", (b) => pickChip(b.dataset.fk, b.dataset.fv, true));
+  $$("[data-fq]", el).forEach((qi) => qi.addEventListener("input", () => { for (const b of $$(`.fchip[data-fk="${qi.dataset.fq}"]`, el)) b.hidden = !!qi.value.trim() && !M.koMatch(b.firstChild?.textContent || b.textContent, qi.value) && !b.classList.contains("on"); }));
   const addExw = () => { const inp = $("#fl-exw", el); const ws = inp.value.split(/[,，\n]/).map((x) => x.trim()).filter(Boolean); if (!ws.length) return; nf.exw = [...new Set([...M.fArr(nf.exw), ...ws])]; inp.value = ""; refresh(); };
   $("#fl-exw-f", el).addEventListener("submit", (e) => { e.preventDefault(); addExw(); });
   $("#fl-exw", el).addEventListener("input", (e) => { if (/[,，]/.test(e.target.value)) addExw(); });
@@ -1236,6 +1237,29 @@ function matchPlans(dr) {
   const score = (pl) => (pl.rooms?.some((r) => want.includes(r.name)) ? 4 : 0) + (pl.utype ? 2 : 0) + (pl.dongs?.length ? 1 : 0);
   return S.plans.filter(ok).sort((a, b) => score(b) - score(a));
 }
+/** 1.3.1 업체 찾기 콤보: 글자·초성(ㄷㅎ)으로 바로 추리기, ↑↓·Enter, ‘업체 미지정’도 고를 수 있음. 앞쪽: 자동 지정·공종 업체 → 많이 맡은 업체 */
+function vendorUse() { const all = PD(); const key = `${S.pid}|${all.length}`; if (!S.vUse || S.vUse.key !== key) { const m = new Map(); for (const d of all) if (d.vendorId) m.set(d.vendorId, (m.get(d.vendorId) || 0) + 1); S.vUse = { key, m }; } return S.vUse.m; }
+function vendorCombo(inp, { current = () => "", first = () => [], onPick, max = 30 }) {
+  if (!inp) return; const list = inp.parentElement.querySelector(".vc-list"); let items = [], act = -1;
+  const draw = () => {
+    const q = inp.value.trim(); const use = vendorUse(); const pri = first().filter(Boolean);
+    const rank = (v) => { const i = pri.indexOf(v.id); return i < 0 ? 1e3 : i; };
+    const vs = S.vendors.filter((v) => !q || M.koMatch(v.name, q) || M.koMatch((v.trades || []).join(" "), q)).sort((a, b) => rank(a) - rank(b) || (use.get(b.id) || 0) - (use.get(a.id) || 0) || a.name.localeCompare(b.name, "ko")).slice(0, max);
+    items = [...(!q || M.koMatch("업체 미지정", q) ? [{ id: "", name: "업체 미지정" }] : []), ...vs]; act = q && items.length ? (items[0].id === "" && items.length > 1 ? 1 : 0) : -1;
+    list.innerHTML = items.map((v, i) => `<button type="button" class="vc-opt ${i === act ? "act" : ""} ${v.id === current() ? "on" : ""}" role="option" aria-selected="${i === act}" data-vc="${esc(v.id)}" tabindex="-1"><b>${esc(v.name)}</b>${v.id ? `<small>${esc([(v.trades || []).slice(0, 3).join(","), pri[0] === v.id ? "자동 지정" : pri.includes(v.id) ? "공종 업체" : "", use.get(v.id) ? `${use.get(v.id)}건` : ""].filter(Boolean).join(" · "))}</small>` : ""}</button>`).join("") || '<p class="help small vc-none">맞는 업체가 없어요</p>';
+    list.hidden = false; inp.setAttribute("aria-expanded", "true"); window.__vcList = items.map((v) => v.name);
+    $$("[data-vc]", list).forEach((b) => b.addEventListener("mousedown", (e) => { e.preventDefault(); pick(b.dataset.vc); }));
+  };
+  const close = () => { list.hidden = true; inp.setAttribute("aria-expanded", "false"); };
+  const pick = (id) => { close(); inp.value = ""; onPick(id); };
+  const mark = () => $$(".vc-opt", list).forEach((b, i) => { b.classList.toggle("act", i === act); b.setAttribute("aria-selected", i === act); if (i === act) b.scrollIntoView({ block: "nearest" }); });
+  inp.addEventListener("input", draw); inp.addEventListener("focus", draw); inp.addEventListener("blur", () => setTimeout(close, 150));
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (list.hidden) draw(); if (!items.length) return; act = (act + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; mark(); }
+    else if (e.key === "Enter") { e.preventDefault(); if (act >= 0 && items[act]) pick(items[act].id); }
+    else if (e.key === "Escape") { close(); }
+  });
+}
 /** 1.3.0 공종·세부공종 → 업체 자동 지정(설정 표 + 기록 학습 + 업체 담당 공종) */
 function vendorLearned() { const all = PD(); const key = `${S.pid}|${all.length}|${all.at(-1)?.id}|${all.at(-1)?.vendorId}`; if (!S.vLearn || S.vLearn.key !== key) S.vLearn = { key, m: M.learnVendorMap(all) }; return S.vLearn.m; }
 function autoVendorOf(dr, cands = null) {
@@ -1278,6 +1302,7 @@ function renderForm() {
       ${speechSupported() ? `<button type="button" class="mic" id="btn-mic" aria-label="음성으로 입력">🎤</button>` : ""}</div></label></section>
     <section class="fsec" id="fs-save"><h3 class="fsec-h"><span class="n">4</span>업체·기한 · 저장</h3>
     <label class="fld"><span>담당업체 ${sug && dr.vendorAuto ? `<small class="sugg auto" title="${esc(sug.why)}">자동 지정 · ${esc(sug.why)}</small>` : sug ? `<small class="sugg">${esc(sug.why)}</small>` : ""}</span>
+      <div class="vcombo"><input class="inp vc-q" id="f-vq" type="search" role="combobox" aria-expanded="false" aria-controls="f-vlist" aria-autocomplete="list" autocomplete="off" placeholder="🔍 업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기(초성 가능)"><div class="vc-list" id="f-vlist" role="listbox" hidden></div></div>
       <select class="inp" id="f-vendor"><option value="">업체 미지정</option>${S.vendors.map((v) => `<option value="${v.id}" ${v.id === dr.vendorId ? "selected" : ""}>${esc(v.name)}${(v.trades || []).length ? " · " + esc(v.trades.slice(0, 2).join(",")) : ""}</option>`).join("")}<option value="_new">＋ 새 업체 등록…</option></select></label>
     ${hint ? `<button type="button" class="btn btn-sm vhint" id="v-auto-hint" data-vid="${esc(hint.id)}">→ ${esc(V(hint.id)?.name || "")} 로 ${dr.vendorId ? "변경" : "지정"} <small>${esc(hint.why)}</small></button>` : ""}
     ${cands.length > 1 ? `<div class="chips vsw" id="v-switch"><small class="help">‘${esc(dr.trade)}’ 다른 업체:</small>${cands.filter((v) => v.id !== dr.vendorId).map((v) => `<button type="button" class="chip" data-vsw="${v.id}">${esc(v.name)}</button>`).join("")}</div>` : ""}
@@ -1337,6 +1362,7 @@ function renderForm() {
   $("#btn-cam").addEventListener("click", () => addPh(true));
   $("#btn-alb").addEventListener("click", () => addPh(false));
   $$("[data-rmph]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.photos.splice(+b.dataset.rmph, 1); renderForm(); }));
+  vendorCombo($("#f-vq"), { current: () => dr.vendorId, first: () => [auto?.id, ...cands.map((v) => v.id)], onPick: (id) => { sync(); dr.vendorId = id; dr.vendorAuto = false; window.__vcPicked = id; renderForm(); } });
   $("#v-auto-hint")?.addEventListener("click", (e) => { sync(); dr.vendorId = e.currentTarget.dataset.vid; dr.vendorAuto = true; renderForm(); });
   $$("[data-vsw]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.vendorId = b.dataset.vsw; dr.vendorAuto = false; renderForm(); }));
   $("#f-vendor").addEventListener("change", async (e) => {
@@ -2221,14 +2247,14 @@ async function transferSheet(items) {
   const tradeNames = () => [...new Set([...p.trades.map((t) => t.name), ...items.map((d) => d.trade).filter(Boolean)])];
   const fitTrade = (v) => { if (!v) return ""; const names = tradeNames(); const vts = [...(v.trades || [])].sort((a, b) => (b === tf) - (a === tf)); for (const vt of vts) { const hit = names.find((n0) => n0 === vt) || names.find((n0) => vt && (n0.includes(vt) || vt.includes(n0))); if (hit) return hit; } return ""; };
   const vTrades = [...new Set(S.vendors.flatMap((v) => v.trades || []).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko"));
-  const vlist = () => S.vendors.filter((v) => (!q || M.sameKey(v.name + (v.trades || []).join("") + M.contactsText(v)).includes(M.sameKey(q))) && (!tf || (v.trades || []).includes(tf)))
+  const vlist = () => S.vendors.filter((v) => (!q || M.sameKey(v.name + (v.trades || []).join("") + M.contactsText(v)).includes(M.sameKey(q)) || M.koMatch(v.name, q)) && (!tf || (v.trades || []).includes(tf)))
     .sort((a, b) => (curV.includes(a.id) - curV.includes(b.id)) || a.name.localeCompare(b.name, "ko"));
   const optHtml = () => vlist().map((v) => `<button type="button" class="tv-opt ${to === v.id ? "on" : ""}" data-v="${v.id}" ${curV.length === 1 && curV[0] === v.id ? "disabled" : ""} aria-pressed="${to === v.id}"><b>${esc(v.name)}</b><small>${esc([(v.trades || []).join(", ") || "공종 미지정", M.contactSummary ? M.contactSummary(v) : ""].filter(Boolean).join(" · "))}${curV.length === 1 && curV[0] === v.id ? " · 현재 업체" : ""}</small></button>`).join("") || '<p class="help">맞는 업체가 없어요. 아래 ‘＋ 새 업체 등록’</p>';
   const subsOf = (t) => p.trades.find((x) => x.name === t)?.subs || [];
   const s = openSheet({ title: `🔁 업체 이관 · ${items.length}건`, full: true, cls: "tv-sheet",
     html: `<p class="tv-cur">지금: <b>${esc(curV.map((id) => (id ? vLabel(id) : "업체 미지정")).join(", "))}</b>${curTrades.length ? ` · ${esc(curTrades.join(", "))}` : ""}${items.length === 1 ? ` · ${esc(M.locText(items[0]))}` : ""}</p>
       <h4 class="sec">1. 넘길 업체</h4>
-      <input class="inp" id="tv-q" type="search" placeholder="업체·공종·담당자 검색" aria-label="업체 검색">
+      <input class="inp" id="tv-q" type="search" placeholder="업체·공종·담당자 검색 · 초성 가능(ㄷㅎ)" aria-label="업체 검색">
       <div class="chips scroll" id="tv-tf"><button type="button" class="chip on" data-tf="">전체</button>${vTrades.map((t) => `<button type="button" class="chip" data-tf="${esc(t)}">${esc(t)}</button>`).join("")}</div>
       <div class="tv-list" id="tv-list">${optHtml()}</div>
       <button type="button" class="btn btn-block" id="tv-new">＋ 새 업체 등록</button>

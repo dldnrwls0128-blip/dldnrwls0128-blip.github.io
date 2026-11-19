@@ -48,6 +48,11 @@ export const catsOf = (p) => (Array.isArray(p?.categories) && p.categories.lengt
 /** 기본 제공 목록(직접 추가 항목 판별용) */
 export const defaultsOf = (k) => ({ commons: [...DEFAULT_COMMONS, "코어(계단·EV홀)", "옥상", "외벽", "커뮤니티"], dongCommons: DEFAULT_DONG_COMMONS, types: DEFAULT_TYPES, rooms: DEFAULT_ROOMS, parts: DEFAULT_PARTS, categories: CATEGORIES, trades: DEFAULT_TRADES.map((t) => t.name) }[k] || []);
 /** 목록 중복 검사용 키(공백·대소문자 무시) */
+/* 1.3.1 초성 검색: ‘ㄷㅎ’ → 동화케이팅, ‘ㅇㅌㅇ’ → (주)아티오 — (주)·주식회사·띄어쓰기·기호 무시 */
+const CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+export function choseong(s) { let o = ""; for (const ch of String(s ?? "")) { const c = ch.charCodeAt(0); o += c >= 0xac00 && c <= 0xd7a3 ? CHO[Math.floor((c - 0xac00) / 588)] : ch; } return o; }
+export const nameKey = (s) => String(s ?? "").replace(/\(\s*주\s*\)|㈜|주식회사|\(\s*유\s*\)|유한회사|\(\s*합\s*\)|\(\s*재\s*\)/g, "").replace(/[\s()（）·.,\-_/[\]]/g, "").toLowerCase();
+export function koMatch(text, q) { const qn = nameKey(q); if (!qn) return true; const tn = nameKey(text); if (tn.includes(qn)) return true; return /[ㄱ-ㅎ]/.test(qn) && choseong(tn).includes(choseong(qn)); }
 export const sameKey = (s) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
 export const hasSame = (arr, v, except = null) => arr.some((x) => x !== except && sameKey(x) === sameKey(v));
 export const CATEGORY_HINT = { 시공불량: "공사 중", 사전점검: "입주 전", 입주자하자: "입주 후", AS: "사후" };
