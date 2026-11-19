@@ -184,7 +184,7 @@ function defectCard(d, { sel = false } = {}) {
   const pc = photoCount(d); const od = M.isOverdue(d); const on = sel && S.select.has(d.id);
   return `<article class="dcard ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
-    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${pill(d.status)}</div>
+    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${pill(d.status)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기(복사해서 등록 등)" title="복사해서 등록 · 수정 …">⋯</button></div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
@@ -192,6 +192,7 @@ function defectCard(d, { sel = false } = {}) {
   </article>`;
 }
 function bindCards(root = view()) {
+  if (!root.__cardLp) { root.__cardLp = true; onLongPress(root, ".dcard", (c) => { const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardMenu(d); }); }
   $$(".dcard", root).forEach((c) => {
     const chk = $(".dchk", c);
     if (chk) {
@@ -211,6 +212,8 @@ function bindCards(root = view()) {
     }
     $(".dtag", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) tabSheet([d], () => rerender()); });
     $(".dtag", c)?.addEventListener("keydown", (e) => e.stopPropagation());
+    $(".dmore", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardMenu(d); });
+    $(".dmore", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     const open = () => go(`#/item?id=${c.dataset.id}`);
     c.addEventListener("click", open);
     c.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === c) open(); });
@@ -221,7 +224,7 @@ const selItems = () => S.defects.filter((d) => S.select.has(d.id));
 function selBarHtml({ all = false, core = false } = {}) {
   return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자"><span id="selcount"></span>
     ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
-    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm" data-sa="tabadd">★ 탭에 추가</button><button type="button" class="btn btn-sm" data-sa="tabdel">탭에서 빼기</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
+    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm" data-sa="tabadd">★ 탭에 추가</button><button type="button" class="btn btn-sm" data-sa="copyto">📋 선택 위치들에 복사</button><button type="button" class="btn btn-sm" data-sa="tabdel">탭에서 빼기</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
 }
 /** 체크 상태를 화면(카드·그룹 전체칸·그룹 보내기 버튼·하단 바)에 반영 */
 /** 묶음 ‘전체’ 체크 대상: data-gall="@묶음키"면 목록 묶음 지도에서(큰 목록에서 HTML이 커지지 않게), 아니면 쉼표 목록 */
@@ -252,6 +255,7 @@ function bindSelBar(pool = []) {
     if (a === "req") return requestImageFor(sel);
     if (a === "move") return transferSheet(sel);
     if (a === "core") return coreAssign(sel);
+    if (a === "copyto") return bulkCopySheet(sel);
     if (a === "tabadd" || a === "tabdel") return tabBulk(sel, a === "tabadd");
     const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((x) => ({ label: x, value: x })));
     if (!st) return;
@@ -1050,6 +1054,82 @@ ROUTES.dash = async () => {
 };
 
 /* ---------- 하자 등록/수정 ---------- */
+/* ---------- 1.3.1 복사해서 등록 · 같은 내용으로 하나 더 · 최근 내용 · 선택 위치들에 복사 ---------- */
+const COPY_KEYS = ["trade", "subTrade", "type", "severity", "category", "content", "vendorId"];
+/** 기한 규칙: 원래 하자의 ‘등록일 → 기한’ 일수(없으면 현장 기본) */
+function dueDaysOf(d) { if (!d?.due) return P()?.dueDays ?? 7; const a = new Date(M.localDay(d.createdAt || new Date().toISOString()) + "T00:00:00"), b = new Date(d.due + "T00:00:00"); const n = Math.round((b - a) / 864e5); return Number.isFinite(n) && n >= 0 && n <= 365 ? n : P()?.dueDays ?? 7; }
+const locOf = (d) => ({ dong: d.dong || "", core: d.core || "", floor: d.floor || "", ho: d.ho || "", common: d.common || "", room: d.room || "", part: d.part || "", locEtc: d.locEtc || "" });
+/** 새 등록 초안을 src 내용으로. keepLoc=false면 위치 비움, focusLoc면 위치 고르기부터 */
+function startCopyDraft(src, { keepLoc = true, focusLoc = true, photos = [] } = {}) {
+  startDraft(keepLoc ? locOf(src) : {});
+  const dr = S.draft; for (const k of COPY_KEYS) dr[k] = src[k] || (k === "severity" ? "보통" : "");
+  dr.due = M.addDays(src._dueDays ?? dueDaysOf(src)); dr.vendorAuto = !dr.vendorId; dr.photos = photos;
+  dr._copy = { from: src.id || "", focusLoc, opened: false, dueDays: src._dueDays ?? dueDaysOf(src) };
+  window.__copyDraft = { from: dr._copy.from, keepLoc, focusLoc, photos: photos.length };
+}
+async function copyPhotosOf(d) {
+  const out = []; for (const ph of (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").slice(0, 10)) out.push({ blob: ph.blob, thumb: ph.thumb || ph.blob, w: ph.w, h: ph.h, at: ph.at, stamp: ph.stamp || "1", url: URL.createObjectURL(ph.thumb || ph.blob) });
+  return out;
+}
+/** 상세·카드 메뉴: 복사해서 등록(위치 바꾸기/그대로 · 사진도 복사) */
+async function copyToNewSheet(d) {
+  const nph = photoCount(d).before || 0;
+  const s = openSheet({ title: "복사해서 등록", cls: "dialog copy-sheet", html: `<p class="help">공종·세부공종·유형·중요도·내용·담당업체·기한 규칙을 그대로 넣은 새 등록 화면을 열어요.</p>
+      <div class="copy-sum"><b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` · ${esc(d.type)}` : ""}<br><small>${esc(d.content || "")}</small><br><small class="help">${esc(M.locText(d) || "위치 미지정")} · ${esc(vName(d) || "업체 미지정")}</small></div>
+      <label class="check"><input type="radio" name="cp-loc" value="change" checked> 위치 바꾸기 <small class="help">(동·호·실만 다시 고르기)</small></label>
+      <label class="check"><input type="radio" name="cp-loc" value="keep"> 같은 위치 그대로</label>
+      <label class="check"><input type="checkbox" id="cp-ph" ${nph ? "" : "disabled"}> 사진도 복사 <small class="help">${nph ? `(조치 전 ${nph}장)` : "(사진 없음)"}</small></label>`,
+    footer: `<button type="button" class="btn" data-close>취소</button><button type="button" class="btn btn-primary" id="cp-go">등록 화면 열기</button>` });
+  $("#cp-go", s.el).addEventListener("click", async () => {
+    const keep = $('[name=cp-loc]:checked', s.el).value === "keep"; const withPh = $("#cp-ph", s.el).checked;
+    const photos = withPh ? await copyPhotosOf(d) : [];
+    await s.close(); startCopyDraft(d, { keepLoc: true, focusLoc: !keep, photos }); go("#/new");
+  });
+  return s;
+}
+/** 카드 ⋯ / 길게 누르기 메뉴 */
+async function cardMenu(d) {
+  const k = await choose(`${M.locText(d) || "하자"} · ${M.tradeText(d) || ""}`, [{ icon: "📋", label: "복사해서 등록", sub: "같은 내용으로 다른 위치에", value: "copy" }, { icon: "✏️", label: "수정", value: "edit" }, { icon: "★", label: "관리 탭", value: "tab" }, { icon: "🧾", label: "요청서 만들기", value: "req" }]);
+  if (k === "copy") return copyToNewSheet(d);
+  if (k === "edit") { startDraft({}, d); return go(`#/edit?id=${d.id}`); }
+  if (k === "tab") return tabSheet([d], () => rerender());
+  if (k === "req") return requestImageFor([d], V(d.vendorId) || null);
+}
+/** 최근 내용 조합(공종·세부공종·유형·내용) — 최근 등록 순, 같은 조합은 하나 */
+function recentCombos(n = 8) {
+  const seen = new Set(); const out = []; const all = [...PD()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  for (const d of all) { if (!d.trade || !(d.content || d.type)) continue; const k = [d.trade, d.subTrade, d.type, d.content].map((x) => M.sameKey(x || "")).join("|"); if (seen.has(k)) continue; seen.add(k); out.push(d); if (out.length >= n) break; if (seen.size > 400) break; }
+  return out;
+}
+/** 1.3.1 선택 위치들에 복사: 한 하자 내용을 고른 세대·호(위치)마다 새로 등록. 무료 요금제 쓰기 한도 때문에 한 번에 최대 BULK_COPY_MAX건 */
+const BULK_COPY_MAX = 50;
+async function bulkCopySheet(sel) {
+  const tplOpts = [...new Map(sel.map((d) => [[d.trade, d.subTrade, d.type, d.content].join("|"), d])).values()].slice(0, 12);
+  const tid = await choose("어느 내용을 복사할까요?", tplOpts.map((d) => ({ icon: "📋", label: `${M.tradeText(d) || "공종 미지정"}${d.type ? " · " + d.type : ""}`, sub: `${(d.content || "").slice(0, 40)} · ${M.locText(d)}`, value: d.id })));
+  if (!tid) return; const tpl = S.defects.find((d) => d.id === tid);
+  const key = (d) => [d.dong, d.ho, d.floor, d.common, d.room].join("|");
+  const locs = [...new Map(sel.filter((d) => key(d) !== key(tpl)).map((d) => [key(d), locOf(d)])).values()];
+  if (!locs.length) return toast("다른 위치가 없어요 · 복사할 세대·호의 하자를 함께 체크하세요");
+  const n0 = Math.min(locs.length, BULK_COPY_MAX);
+  const s = openSheet({ title: "선택 위치들에 복사", cls: "dialog bulkcopy-sheet", html: `<p><b>${esc(M.tradeText(tpl))}${tpl.type ? " · " + esc(tpl.type) : ""}</b> — ${esc((tpl.content || "").slice(0, 60))}</p>
+      <p>체크한 하자의 위치 <b>${n(locs.length)}곳</b>에 같은 내용으로 새 하자를 <b>${n(n0)}건</b> 만들어요.${locs.length > BULK_COPY_MAX ? ` <span class="od">한 번에 최대 ${BULK_COPY_MAX}건 — 나머지 ${n(locs.length - BULK_COPY_MAX)}곳은 다시 해 주세요.</span>` : ""}</p>
+      <div class="chips wrap">${locs.slice(0, n0).map((l) => `<span class="chip">${esc(M.locText(l))}</span>`).join("")}</div>
+      <label class="check"><input type="checkbox" id="bc-room" checked> 실은 원래 하자의 실(${esc(tpl.room || "없음")})로</label>
+      <p class="help small">사진은 복사하지 않아요. 동기화 중이면 1건 = 쓰기 1번(무료 한도 하루 2만 번)이라 한 번에 ${BULK_COPY_MAX}건으로 묶었어요.</p>`,
+    footer: `<button type="button" class="btn" data-close>취소</button><button type="button" class="btn btn-primary" id="bc-go">${n(n0)}건 만들기</button>` });
+  $("#bc-go", s.el).addEventListener("click", async () => {
+    const sameRoom = $("#bc-room", s.el).checked; busy(true, "복사 중…"); const now = new Date().toISOString(); const due = M.addDays(dueDaysOf(tpl)); const made = [];
+    for (const l of locs.slice(0, n0)) {
+      const d = { id: M.uid("h"), projectId: P().id, createdAt: now, status: "접수", memo: "", origin: "local", ...l, ...(sameRoom ? { room: tpl.room || "", part: tpl.part || "" } : {}), pin: null, due,
+        history: [{ at: now, status: "접수", note: `복사 등록(${M.locText(tpl)}에서)` }] };
+      for (const k of COPY_KEYS) d[k] = tpl[k] || (k === "severity" ? "보통" : "");
+      await saveDefect(d); made.push(d.id);
+    }
+    busy(false); window.__bulkCopy = { n: made.length, ids: made, capped: locs.length > BULK_COPY_MAX }; await s.close(); S.select.clear();
+    toast(`${made.length}곳에 복사해서 등록했어요`); rerender();
+  });
+  return s;
+}
 function startDraft(loc = {}, base = null) {
   const p = P();
   S.draft = base ? { ...structuredClone({ ...base, history: undefined }), _editId: base.id, photos: [] } : {
@@ -1178,6 +1258,7 @@ function renderForm() {
   const prevPhotos = editing ? photoCount({ id: dr._editId }) : { before: 0, after: 0 };
   view().innerHTML = `<nav class="fstep" id="fstep" aria-label="등록 단계">${[["loc", "위치"], ["ph", "사진"], ["what", "공종·내용"], ["save", "저장"]].map(([k, t], i) => `<button type="button" class="fs-i" data-fs="${k}"><span class="n">${i + 1}</span>${t}</button>`).join('<span class="fs-ln"></span>')}</nav>
     <form id="dform" class="form fsteps" novalidate>
+    ${dr._copy && !editing ? `<div class="copy-bn" id="copy-bn" role="status">📋 <b>복사해서 등록</b> · ${dr._copy.focusLoc ? "위치를 바꿔 주세요" : "같은 위치"}${dr.photos.length ? ` · 사진 ${dr.photos.length}장` : ""}${dr._copy.focusLoc ? ' <button type="button" class="btn btn-sm" id="copy-keep">같은 위치 그대로</button>' : ""}</div>` : ""}
     <section class="fsec" id="fs-loc"><h3 class="fsec-h"><span class="n">1</span>위치 <em>*</em></h3>
     <label class="fld"><span class="sr-only">위치</span>
       <button type="button" class="inp loc-btn ${loc ? "" : "is-empty"}" id="btn-loc">${esc(loc || "동·층·호·실 선택")}<span>›</span></button></label>
@@ -1187,6 +1268,7 @@ function renderForm() {
         <button type="button" class="ph-add cam" id="btn-cam" aria-label="카메라로 바로 촬영">📷<span>${dr.photos.length ? "한 장 더" : "촬영"}</span></button></div>
       <div class="ph-more"><button type="button" class="btn btn-sm" id="btn-alb">🖼 앨범</button><small class="help">📷를 누르면 카메라가 바로 열려요</small></div></section>
     <section class="fsec" id="fs-what"><h3 class="fsec-h"><span class="n">3</span>공종·내용</h3>
+    ${!editing ? (() => { const rc = recentCombos(8); return rc.length ? `<div class="fld recent-c"><span>최근 내용 불러오기 <small class="help">누르면 공종·세부공종·유형·내용 채움</small></span><div class="chips scroll" id="recent-c">${rc.map((x) => `<button type="button" class="chip rcombo" data-rc="${x.id}" title="${esc(x.content || "")}"><b>${esc(M.tradeText(x))}</b>${x.type ? ` · ${esc(x.type)}` : ""} <small>${esc((x.content || "").slice(0, 18))}</small></button>`).join("")}</div></div>` : ""; })() : ""}
     <div class="fld"><span>구분</span>${chipRow("category", M.catsOf(p), dr.category, { allowAdd: true, ua: (o) => isUserItem("categories", o) })}</div>
     <div class="fld"><span>공종 <em>*</em></span>${chipRow("trade", p.trades.map((t) => t.name), dr.trade, { allowAdd: true, ua: (o) => isUserItem("trades", o) })}</div>
     ${trade?.subs?.length ? `<div class="fld"><span>세부공종</span>${chipRow("subTrade", trade.subs, dr.subTrade, { allowAdd: true })}</div>` : ""}
@@ -1234,6 +1316,9 @@ function renderForm() {
   }));
   onLongPress($("#dform"), "[data-chips] .chip[data-ua]", async (b) => { sync(); const LK = { trade: "trades", type: "types", category: "categories" }[b.closest("[data-chips]").dataset.chips]; if (LK) { await editListItem(LK, b.dataset.v); renderForm(); } });
   $("#btn-loc").addEventListener("click", () => { sync(); locationPicker(dr, () => renderForm()); });
+  $$("[data-rc]", view()).forEach((b) => b.addEventListener("click", () => { sync(); const x = S.defects.find((d) => d.id === b.dataset.rc); if (!x) return; for (const k of ["trade", "subTrade", "type", "content"]) dr[k] = x[k] || ""; if (!dr.vendorId) dr.vendorAuto = true; window.__recentPicked = x.id; renderForm(); toast("최근 내용을 넣었어요"); }));
+  $("#copy-keep")?.addEventListener("click", () => { dr._copy.focusLoc = false; dr._copy.opened = true; renderForm(); });
+  if (dr._copy && dr._copy.focusLoc && !dr._copy.opened && !editing) { dr._copy.opened = true; $("#fs-loc")?.scrollIntoView({ block: "start" }); setTimeout(() => { if (S.draft === dr && location.hash.split("?")[0] === "#/new") locationPicker(dr, () => renderForm(), { quick: true }); }, 80); }
   $("#btn-pin")?.addEventListener("click", () => { sync(); pinSheet(plans, dr, () => renderForm()); });
   $("#btn-mic")?.addEventListener("click", () => {
     const ta = $("#f-content"); const base = ta.value ? ta.value + " " : ""; const mic = $("#btn-mic"); mic.classList.add("on");
@@ -1282,8 +1367,9 @@ function renderForm() {
     const keep = { dong: d.dong, core: d.core || "", floor: d.floor, ho: d.ho, common: d.common, room: d.room, locEtc: d.locEtc || "" };
     S.draft = null;
     if (editing) { toast("수정했어요"); back(); return; }
-    if (next) { startDraft(keep); toast(`저장했어요 · ${M.locText(d)} 계속 등록`); renderForm(); window.scrollTo(0, 0); }
-    else { toast("저장했어요"); replace(`#/item?id=${d.id}`); }
+    const again = () => { S.justSaved = null; startCopyDraft(d, { keepLoc: true, focusLoc: true }); if (location.hash.split("?")[0] === "#/new") renderForm(); else go("#/new"); };
+    if (next) { startDraft(keep); toast(`저장했어요 · ${M.locText(d)} 계속 등록`, { ms: 7000, action: "같은 내용으로 하나 더", onAction: again }); renderForm(); window.scrollTo(0, 0); }
+    else { S.justSaved = d.id; toast("저장했어요", { ms: 7000, action: "같은 내용으로 하나 더", onAction: again }); replace(`#/item?id=${d.id}`); }
   };
   $("#dform").addEventListener("submit", (e) => { e.preventDefault(); save(false); });
   $("#btn-save-next")?.addEventListener("click", () => save(true));
@@ -1292,7 +1378,7 @@ function renderForm() {
 /* 위치 선택기: 동/공용부 → 층 → 호 → 실 → 부위 (단계마다 뒤로가기 한 칸).
  * 단계마다 '＋ 직접 추가'(현장 설정에 저장 → 선택 → 다음 단계), 직접 추가한 항목은 ✎/길게 눌러 이름 변경·삭제(미사용 시),
  * '기타 위치 직접 입력'은 저장하지 않는 1회용 위치 */
-function locationPicker(dr, onDone) {
+function locationPicker(dr, onDone, { quick = false } = {}) {
   const p = P(); if (!Array.isArray(p.dongCommons)) p.dongCommons = [...M.DEFAULT_DONG_COMMONS];
   const sel = { dong: dr.dong, core: dr.core || "", floor: dr.floor, ho: dr.ho, common: dr.common, room: dr.room, part: dr.part, locEtc: dr.locEtc || "", pin: dr.pin || null };
   /** 단지 공용 장소(지하주차장 등)에 도면 세부 위치가 있으면 층 → 세부 위치로 */
@@ -1524,7 +1610,8 @@ function locationPicker(dr, onDone) {
     if (sel.ho || !sel.dong) dr.core = ""; // 호는 라인으로 코어 자동
     await s.close(); onDone();
   });
-  const start = dr.part ? 4 : dr.room ? 4 : dr.ho ? 3 : dr.common ? 3 : dr.floor ? 2 : dr.dong ? 1 : 0;
+  /* 1.3.1 복사해서 등록: 같은 층의 호(세대) 고르기부터 — 뒤로 가면 층·동 */
+  const start = quick ? (dr.dong && dr.floor && dr.ho ? 2 : dr.dong ? 1 : 0) : dr.part ? 4 : dr.room ? 4 : dr.ho ? 3 : dr.common ? 3 : dr.floor ? 2 : dr.dong ? 1 : 0;
   // 바로 앞 단계에서 시작한 것처럼(뒤로 가면 동 공용부·호 고르는 화면으로)
   const prev = start === 4 ? 3 : start === 3 ? (sel.dong ? (sel.floor && !sel.common ? 2 : 1) : 0) : start === 2 ? 1 : 0;
   step = 0; draw(); if (prev) setStep(prev); if (start) setStep(start); // 뒤로 가기로 동 단계까지 차례로
@@ -1578,7 +1665,9 @@ ROUTES.item = async (qq) => {
       <button type="button" class="btn btn-lg" id="btn-stany">상태 선택</button></div>
     ${v ? `<div class="contact-row">${(() => { const vp = M.vendorPhones(v); if (!vp.length) return ""; if (vp.length === 1) { const ph = vp[0].phone; return `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`; } return `<button type="button" class="btn" id="btn-dtel">📞 전화 ▾</button><button type="button" class="btn" id="btn-dsms">💬 문자 ▾</button>`; })()}
       <button type="button" class="btn btn-kakao" id="btn-kakao">카톡으로 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 보내기</button>`}
+    ${S.justSaved === d.id ? `<button type="button" class="btn btn-primary btn-block" id="btn-again">➕ 같은 내용으로 하나 더 <small>위치만 바꿔서</small></button>` : ""}
     <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-reqimg">🧾 요청서 만들기</button><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button></div>
+    <button type="button" class="btn btn-block" id="btn-copy">📋 복사해서 등록</button>
     <button type="button" class="btn btn-block btn-tags ${d.tabs?.length ? "on" : ""}" id="btn-tags">${d.tabs?.length ? "★" : "☆"} 관리 탭${(() => { const nm = TABS().filter((t) => M.inTab(d, t.id)).map((t) => t.name); return nm.length ? ` · ${esc(nm.join(", "))}` : " 넣기"; })()}</button>
     ${stepsHtml(d, photos)}
     <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
@@ -1598,6 +1687,8 @@ ROUTES.item = async (qq) => {
   $("#btn-stany").addEventListener("click", async () => { const st = await choose("상태 선택", M.STATUSES.map((s2) => ({ label: s2, value: s2, sub: s2 === d.status ? "현재" : "" }))); if (st) changeStatus(d, st); });
   $("#btn-kakao").addEventListener("click", () => sendSheet({ items: [d], vendor: v }));
   $("#btn-reqimg").addEventListener("click", () => requestImageFor([d], v || null));
+  $("#btn-copy").addEventListener("click", () => copyToNewSheet(d));
+  $("#btn-again")?.addEventListener("click", () => { S.justSaved = null; startCopyDraft(d, { keepLoc: true, focusLoc: true }); go("#/new"); });
   $("#btn-tags").addEventListener("click", () => tabSheet([d], () => rerender()));
   $("#btn-move").addEventListener("click", () => transferSheet([d])); $("#btn-move-kv").addEventListener("click", () => transferSheet([d]));
   $("[data-sms]", view())?.addEventListener("click", () => setTimeout(() => markSent([d], "문자"), 300));
