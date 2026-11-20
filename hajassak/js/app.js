@@ -222,9 +222,18 @@ function bindCards(root = view()) {
 /* ---------- 체크 선택(세대·목록·업체 화면 공통) ---------- */
 const selItems = () => S.defects.filter((d) => S.select.has(d.id));
 function selBarHtml({ all = false, core = false } = {}) {
-  return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자"><span id="selcount"></span>
-    ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
-    <button type="button" class="btn btn-sm btn-primary" data-sa="send">보내기</button><button type="button" class="btn btn-sm" data-sa="req">요청서</button><button type="button" class="btn btn-sm" data-sa="move">이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm" data-sa="tabadd">★ 탭에 추가</button><button type="button" class="btn btn-sm" data-sa="copyto">📋 선택 위치들에 복사</button><button type="button" class="btn btn-sm" data-sa="tabdel">탭에서 빼기</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm btn-ghost" data-sa="clear">해제</button></div>`;
+  /* 1.3.4 주 버튼은 ‘요청서 보내기’ 하나 + ‘더보기’(나머지 동작은 위로 펼침). 가운데 ＋ 버튼에 가리지 않게 아래 여백 */
+  return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자">
+    <div class="sel-tray" id="sel-tray" ${window.__selTrayOpen ? "" : "hidden"}>
+      ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
+      <button type="button" class="btn btn-sm" data-sa="req">🧾 요청서 이미지·PDF</button><button type="button" class="btn btn-sm" data-sa="move">🔁 업체 이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm" data-sa="tabadd">★ 탭에 추가</button><button type="button" class="btn btn-sm" data-sa="tabdel">탭에서 빼기</button><button type="button" class="btn btn-sm" data-sa="copyto">📋 선택 위치들에 복사</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm" data-sa="clear">선택 해제</button>
+    </div>
+    <div class="sel-main"><span id="selcount"></span><button type="button" class="btn btn-sm btn-primary" data-sa="send">요청서 보내기</button><button type="button" class="btn btn-sm" id="sel-more" aria-expanded="false" aria-controls="sel-tray">더보기 ▴</button></div></div>`;
+}
+/** 하단 바 ‘더보기’ 펼치기/접기(테스트는 selMore(true)) */
+function selMore(open) {
+  const t = $("#sel-tray"); if (!t) return; const on = open === undefined ? t.hidden : !!open; t.hidden = !on;
+  const b = $("#sel-more"); if (b) { b.setAttribute("aria-expanded", String(on)); b.textContent = on ? "더보기 ▾" : "더보기 ▴"; }
 }
 /** 체크 상태를 화면(카드·그룹 전체칸·그룹 보내기 버튼·하단 바)에 반영 */
 /** 묶음 ‘전체’ 체크 대상: data-gall="@묶음키"면 목록 묶음 지도에서(큰 목록에서 HTML이 커지지 않게), 아니면 쉼표 목록 */
@@ -242,12 +251,13 @@ function syncChecks() {
 function updateSelBar() {
   const bar = $("#selbar"); if (!bar) return;
   const n0 = selItems().length; bar.hidden = !n0; document.body.classList.toggle("has-selbar", !!n0);
-  const c = $("#selcount"); if (c) c.textContent = `선택 ${n0}건`;
+  const c = $("#selcount"); if (c) c.textContent = `선택 ${n0}건`; if (!n0) selMore(false);
 }
 /** 하단 바 버튼. pool: ‘전체선택’ 대상 */
 function bindSelBar(pool = []) {
+  $("#sel-more", view())?.addEventListener("click", () => selMore());
   $$("[data-sa]", view()).forEach((b) => b.addEventListener("click", async () => {
-    const a = b.dataset.sa; const sel = selItems();
+    const a = b.dataset.sa; const sel = selItems(); if (b.closest("#sel-tray")) selMore(false);
     if (a === "all") { pool.forEach((d) => S.select.add(d.id)); return syncChecks(); }
     if (a === "clear") { S.select.clear(); return syncChecks(); }
     if (!sel.length) return toast("먼저 하자를 체크하세요");
@@ -372,7 +382,7 @@ ROUTES.home = async () => {
   const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
   const rate = list.length ? Math.round((done / list.length) * 100) : 0;
   view().innerHTML = `<div class="home2">
-    <form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="예: ${esc(exampleQuery(p))}  ·  동/호/내용 검색" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>
+    <form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>
     <section class="card home-stat">
       <div class="kpis">
         <button type="button" class="kpi" data-f='{"status":"_open"}'><b>${n(open.length)}</b><span>미조치</span></button>
@@ -388,7 +398,7 @@ ROUTES.home = async () => {
       <button type="button" class="act" data-go="#/list"><span class="act-i">📋</span><b>목록</b><small>${n(open.length)}건 미조치</small></button>
       <button type="button" class="act" data-go="#/grid"><span class="act-i">🏢</span><b>동현황</b><small>세대별 한눈에</small></button>
       <button type="button" class="act" id="home-find"><span class="act-i">🔎</span><b>건수 찾기</b><small>업체·동·유형별</small></button>
-      <button type="button" class="act" data-go="#/vendors"><span class="act-i">📲</span><b>보내기</b><small>${unsent ? `미전달 ${n(unsent)}건` : "업체에 카톡·문자"}</small></button>
+      <button type="button" class="act" id="home-send"><span class="act-i">📲</span><b>요청서 보내기</b><small>${unsent ? `미전달 ${n(unsent)}건 · 업체 고르기` : "업체에 카톡·PDF·문자"}</small></button>
     </div>
     <details class="more card" id="home-more"><summary>더보기 <small>대시보드 · 엑셀 · 현장 전환 · 사용법</small></summary>
       <div class="more-list">
@@ -406,6 +416,8 @@ ROUTES.home = async () => {
   $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
   $("#btn-proj").addEventListener("click", switchProject);
   $("#home-find")?.addEventListener("click", () => filterSheet());
+  $("#home-send")?.addEventListener("click", () => { const un = PD().filter((d) => d.status === "접수" || d.status === "재접수"); if (!un.length) { toast("미전달 건이 없어요 · 업체 화면으로 갈게요", { ms: 3000 }); return go("#/vendors"); } return sendChecked(un); });
+  { const qi = $("#qs"); if (qi) { const ex = qi.dataset.phEx, ph = qi.placeholder; qi.addEventListener("focus", () => { qi.placeholder = ex; }); qi.addEventListener("blur", () => { qi.placeholder = ph; }); } }
   $("[data-a=switch]", view())?.addEventListener("click", switchProject);
   $("#qsearch").addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#qs").value); });
 };
@@ -564,7 +576,8 @@ ROUTES.list = async () => {
   const tcs = M.typeCounts(M.applyFilter(all, { ...f, type: [] }, { vendorName: vName })); const fTypes = M.fArr(f.type);
   const tOn = (t) => fTypes.some((v) => (t.key ? M.sameType(v, t.name) || v === t.name : v === "_none"));
   const typeLabel = !fTypes.length ? "유형 전체" : fTypes.length > 1 ? `유형 ${fTypes.length}개` : fTypes[0] === "_none" ? "유형 없음" : (tcs.find((t) => t.key && M.sameType(t.name, fTypes[0]))?.name || fTypes[0]);
-  const chips = activeChips(f);
+  const chips = activeChips(f, { skipView: true }); const nUi = M.filterCountUi(f); const vOpen = M.viewOpen(f);
+  const odN = list.filter((d) => M.isOverdue(d)).length;
   /* 1.2.6 위치 바로 고르기 */
   const fNoLoc = Object.fromEntries(Object.entries(f).filter(([k]) => !M.LOC_KEYS.includes(k)));
   /* 1.2.7 코어별로 볼 때: 코어 안 정한 동 공용부(방풍실·계단실 등) 바로 지정 */
@@ -572,20 +585,21 @@ ROUTES.list = async () => {
   const lb = locLabels(f); const locBase = () => M.applyFilter(all, fNoLoc, { vendorName: vName });
   view().innerHTML = `
     <div class="ltabs" id="ltabs" role="tablist" aria-label="관리 탭"><button type="button" class="ltab ${ltab ? "" : "on"}" role="tab" aria-selected="${!ltab}" data-ltab="">전체 <small>${n(allP.length)}</small></button>${tabs.map((t) => `<button type="button" class="ltab ${ltab === t.id ? "on" : ""}" role="tab" aria-selected="${ltab === t.id}" data-ltab="${esc(t.id)}">★ ${esc(t.name)} <small>${n(tabCount(t.id))}</small></button>`).join("")}<button type="button" class="ltab ltab-cfg" id="ltab-cfg" aria-label="관리 탭 설정" title="탭 만들기·이름·순서">⚙</button></div>
-    <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="검색 · 312-802 · 지하주차장 휀룸" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
-      <button type="button" class="btn" id="btn-filter">필터${M.filterCount(f) ? ` <b class="badge">${M.filterCount(f)}</b>` : ""}</button></form>
+    <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="동·호·내용 검색" data-ph-ex="예: 312-802 · 지하주차장" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
+      <button type="button" class="btn" id="btn-filter">필터${nUi ? ` <b class="badge">${nUi}</b>` : ""}</button></form>
     ${presetRowHtml("list")}
-    <div class="chips scroll">${chips || '<span class="help">필터 없음 · 전체</span>'}${chips ? '<button type="button" class="chip" data-rm="_all">모두 지우기</button>' : ""}</div>
+    ${chips ? `<div class="chips scroll">${chips}<button type="button" class="chip" data-rm="_all">모두 지우기</button></div>` : ""}
     <div class="loc-row" id="loc-row">
       <button type="button" class="dd-btn ${lb.v1 ? "on" : ""}" id="dd-loc" aria-haspopup="listbox"><small>위치</small><b>${esc(lb.l1)}</b></button>
-      <button type="button" class="dd-btn ${lb.v2 ? "on" : ""}" id="dd-sub" aria-haspopup="listbox" ${lb.v1 && lb.v1 !== "_none" ? "" : "disabled"}><small>세부 위치</small><b>${esc(lb.l2)}</b></button>
+      ${lb.v1 && lb.v1 !== "_none" ? `<button type="button" class="dd-btn ${lb.v2 ? "on" : ""}" id="dd-sub" aria-haspopup="listbox"><small>세부 위치</small><b>${esc(lb.l2)}</b></button>` : ""}
       ${lb.cs3 ? `<button type="button" class="dd-btn ${lb.v3 ? "on" : ""}" id="dd-cs" aria-haspopup="listbox"><small>층·호·공용부</small><b>${esc(lb.l3)}</b></button>` : ""}
       ${lb.room3 ? `<button type="button" class="dd-btn ${f.room ? "on" : ""}" id="dd-room" aria-haspopup="listbox"><small>실</small><b>${esc(f.room || "전체")}</b></button>` : ""}
       <button type="button" class="dd-btn ${fTypes.length ? "on" : ""}" id="dd-type" aria-haspopup="listbox"><small>유형</small><b>${esc(typeLabel)}</b></button>
     </div>
-    <div class="list-ctl" id="list-ctl"><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><button type="button" class="btn btn-sm tg-done ${f.hideDone ? "on" : ""}" id="btn-hidedone" aria-pressed="${!!f.hideDone}" title="조치완료·확인완료 건 숨기기">${f.hideDone ? "✓ " : ""}완료 건 숨기기</button><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
-    <div class="list-hd"><b class="res-n" id="res-n">${M.filterCount(f) ? "검색 결과 " : ""}${n(list.length)}건</b>${M.hasEx(f) ? `<span class="ex-gone" id="res-ex">제외 −${n(exGone)}</span>` : ""}<span class="help">기한초과 ${n(list.filter((d) => M.isOverdue(d)).length)}</span>
-      <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">업체에 보내기</button></div>
+    <div class="list-ctl" id="list-ctl"><button type="button" class="btn btn-sm tg-done ${vOpen ? "on" : ""}" id="btn-hidedone" aria-pressed="${vOpen}" title="조치완료·확인완료 건은 숨기고 미조치만 봐요">${vOpen ? "✓ 미조치만" : "미조치만 보기"}</button><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
+    <div class="list-hd"><b class="res-n" id="res-n">${nUi ? "검색 결과 " : vOpen ? "미조치 " : ""}${n(list.length)}건</b>${M.hasEx(f) ? `<span class="ex-gone" id="res-ex">제외 −${n(exGone)}</span>` : ""}<button type="button" class="chip chip-od ${f.overdue ? "on" : ""}" id="btn-od" aria-pressed="${!!f.overdue}" aria-label="기한초과 ${n(odN)}건만 보기" title="기한초과 ${n(odN)}건">⏰ ${n(odN)}</button>
+      <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-listmore" aria-expanded="${!!window.__listMenuOpen}" aria-controls="list-menu" aria-label="집계·내보내기">⋯</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">요청서 보내기</button></div>
+    <div class="list-menu" id="list-menu" ${window.__listMenuOpen ? "" : "hidden"}><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기(엑셀·CSV)</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
     <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
     ${(grp ? S.lgTrunc : list.length > S.listLimit) ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(grp ? S.lgHid : list.length - S.listLimit)}건 남음)</button>` : ""}
@@ -614,7 +628,7 @@ ROUTES.list = async () => {
     if (cm.size) { opts.push({ group: "동 공용부" }); for (const [k, c] of [...cm.entries()].sort((a, b) => b[1] - a[1])) opts.push({ v: "c:" + k, label: k, n: c }); }
     return opts; };
   const pickHo = (v, from) => (!v ? setLoc({}, from) : v.startsWith("f:") ? setLoc({ floor: [v.slice(2)] }, from) : v.startsWith("h:") ? setLoc({ floor: [v.slice(2).split("|")[0]], ho: v.split("|")[1] }, from) : setLoc({ common: v.slice(2) }, from));
-  $("#dd-sub").addEventListener("click", (e) => { const cur = M.applyFilter(locBase(), { dong: M.fArr(f.dong), common: lb.v1.startsWith("c:") ? f.common : "" });
+  $("#dd-sub")?.addEventListener("click", (e) => { const cur = M.applyFilter(locBase(), { dong: M.fArr(f.dong), common: lb.v1.startsWith("c:") ? f.common : "" });
     if (lb.v1.startsWith("c:")) { const rm = new Map(), fl = new Map(); for (const d of cur) { const r = M.roomOf(d); if (r) rm.set(r, (rm.get(r) || 0) + 1); const fx = M.locParts(d).floor; if (fx) fl.set(fx, (fl.get(fx) || 0) + 1); }
       /* 1.3.0 단지 공용: 층(B1·B2…) → 세부실(도면 세부 위치·실) */
       const fnum = (x) => (/^B(\d+)$/i.test(x) ? -Number(x.slice(1)) : Number(x) || 0);
@@ -649,6 +663,7 @@ ROUTES.list = async () => {
     if (pick) return applySugg(pick);
     S.filter = { ...S.filter, text: q }; LS.set("filter", S.filter); S.noRestore = true; rerender(); });
   bindPresetRow(view());
+  { const ex = lsI.dataset.phEx, ph = lsI.placeholder; lsI.addEventListener("focus", () => { lsI.placeholder = ex; }); lsI.addEventListener("blur", () => { lsI.placeholder = ph; }); }
   $("#btn-filter").addEventListener("click", () => filterSheet({ prefill: true })); // 1.2.9 목록 ‘필터’는 지금 걸린 조건 그대로(건수 찾기는 초기화)
   $$("[data-fopen]", view()).forEach((b) => b.addEventListener("click", () => filterSheet({ prefill: true, focus: b.dataset.fopen })));
   $$("[data-ltab]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltab); S.listLimit = 60; S.select.clear(); S.noRestore = true; rerender(); }));
@@ -664,16 +679,20 @@ ROUTES.list = async () => {
   const vgAll = (op) => { for (const dd of $$("details.vgrp", view())) S.vgOpen.set(dd.dataset.gk, op); rerender(); };
   $("#lg-openall")?.addEventListener("click", () => vgAll(true)); $("#lg-closeall")?.addEventListener("click", () => vgAll(false));
   $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = gallIds(g); for (const x of ids) S.select[g.checked ? "add" : "delete"](x); syncChecks(); }));
-  $("#btn-export").addEventListener("click", () => exportSheet(list, "하자목록"));
-  $("#btn-hidedone").addEventListener("click", () => { const nf = { ...S.filter }; if (nf.hideDone) delete nf.hideDone; else nf.hideDone = true; S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
-  $("#btn-agg").addEventListener("click", () => aggSheet(list));
+  $("#btn-export").addEventListener("click", () => { listMore(false); exportSheet(list, "하자목록"); });
+  $("#btn-od").addEventListener("click", () => { const nf = { ...S.filter }; if (nf.overdue) delete nf.overdue; else nf.overdue = true; S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
+  const listMore = (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); };
+  $("#btn-listmore").addEventListener("click", () => listMore());
+  $("#btn-hidedone").addEventListener("click", () => { const nf = { ...S.filter }; if (M.viewOpen(nf)) { delete nf.hideDone; if (M.isOpenOnlyStatus(nf)) delete nf.status; } else { nf.hideDone = true; } S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
+  $("#btn-agg").addEventListener("click", () => { listMore(false); aggSheet(list); });
   if (S.openFilter) { S.openFilter = false; setTimeout(() => filterSheet(), 50); }
   $("#btn-sendlist").addEventListener("click", () => sendSheet({ items: list }));
 };
 /** 필터 칩(여러 값이면 값마다 칩) */
-function activeChips(f, { collapse = 3 } = {}) {
+function activeChips(f, { collapse = 3, skipView = false } = {}) {
   return Object.entries(f).flatMap(([k, v]) => {
     if (!v || (Array.isArray(v) && !v.length)) return [];
+    if (skipView && (k === "hideDone" || (k === "status" && M.isOpenOnlyStatus(f)))) return []; // 1.3.4 ‘미조치만 보기’ 토글이 상태를 보여 줌
     if (k === "hideDone") return [`<button type="button" class="chip on ex" data-rm="hideDone" aria-label="완료 숨김 끄기">완료 숨김 ✕</button>`];
     /* 1.2.9 한 항목에 4개 이상이면 칩 하나로(누르면 필터 패널의 그 항목, ✕는 그 항목 모두 지우기) */
     if (Array.isArray(v) && collapse && v.length > collapse) { const ex = k === "exw" || k.startsWith("x_"); const lb = FILTER_LABEL[k] || k;
@@ -778,17 +797,17 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   const has = (k, v) => M.fArr(nf[k]).includes(v);
   const day = (dd) => { const t = new Date(Date.now() - dd * 864e5); return M.localDay(t.toISOString()); };
   const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length && !M.fArr(nf["x_" + fc.k]).length && focus !== fc.k && focus !== "x_" + fc.k ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
-    ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}${fc.k === "status" ? `<div class="fc-tools"><button type="button" class="btn btn-sm" id="fl-openonly">미조치만</button><small class="help">칩을 <b>길게 누르면 제외</b>(빨간 −칩) · 맨 위 ‘제외로 고르기’를 켜도 돼요</small></div>` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
+    ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
   const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
     html: `${presetRowHtml("panel")}<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <span class="ex-gone" id="fl-exn" hidden></span> <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
       <div class="chips scroll" id="fl-active"></div>
+      <div class="fl-view" role="group" aria-label="보기"><span class="fl-view-l">보기</span><button type="button" class="vseg ${M.viewOpen(nf) ? "on" : ""}" id="fl-view-open" aria-pressed="${M.viewOpen(nf)}">미조치만 <small>완료 숨김</small></button><button type="button" class="vseg ${M.viewOpen(nf) ? "" : "on"}" id="fl-view-all" aria-pressed="${!M.viewOpen(nf)}">전체</button></div>
       <div class="fl-toggles"><label class="check"><input type="checkbox" id="fl-overdue" ${nf.overdue ? "checked" : ""}> ⏰ 기한초과만 <small class="fn" id="fl-odn"></small></label>
-        <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label>
-        <label class="check"><input type="checkbox" id="fl-hidedone" ${nf.hideDone ? "checked" : ""}> ✅ 완료 건 숨기기 <small class="help">(조치완료·확인완료)</small></label></div>
-      <section class="fl-ex" id="fl-ex"><div class="fl-ex-hd"><b>제외</b> <small class="help">이 단어가 공종·세부공종·내용·위치·업체·유형에 있으면 빼요</small></div>
+        <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label></div>
+      <label class="check fl-mode"><input type="checkbox" id="fl-exmode"><span class="fl-mode-t">아래 칩을 <b class="ex-t">제외</b>로 고르기 <small class="help">· 칩을 길게 눌러도 제외(빨간 −칩)</small></span></label>
+      <section class="fl-ex" id="fl-ex"><div class="fl-ex-hd"><b>제외할 단어</b> <small class="help">공종·내용·위치·업체·유형에 있으면 빼요</small></div>
         <form class="row" id="fl-exw-f" autocomplete="off"><input class="inp" id="fl-exw" placeholder="예: 코킹, 마이다판 (쉼표·Enter)" aria-label="제외 단어"><button type="submit" class="btn btn-sm">추가</button></form>
-        <div class="chips" id="fl-exw-chips"></div>
-        <label class="check"><input type="checkbox" id="fl-exmode"> 아래 칩을 <b class="ex-t">제외</b>로 고르기 <small class="help">(칩을 길게 눌러도 제외)</small></label></section>
+        <div class="chips" id="fl-exw-chips"></div></section>
       ${facets.map(facetHtml).join("")}
       <details class="fc" data-fc="_loc" ${nf.ho || nf.from || nf.to ? "open" : ""}><summary><b>호 · 기간</b></summary>
         <div class="grid2"><label class="fld"><span>호</span><input class="inp" id="fl-ho" inputmode="numeric" value="${esc(nf.ho || "")}" placeholder="예: 1203"></label><span></span>
@@ -819,7 +838,7 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
       const sel = [...M.fArr(nf[fc.k]).map((v) => filterChipText(fc.k, v)), ...M.fArr(nf["x_" + fc.k]).map((v) => "−" + filterChipText(fc.k, v))]; $(`[data-sel-of="${fc.k}"]`, el).textContent = sel.join(", ");
     }
     $("#fl-odn", el).textContent = n(M.applyFilter(all, { ...f0, overdue: true }, ctx).length);
-    $("#fl-urgent", el).checked = has("severity", "긴급"); $("#fl-hidedone", el).checked = !!nf.hideDone;
+    $("#fl-urgent", el).checked = has("severity", "긴급"); { const vo = M.viewOpen(nf); const a = $("#fl-view-open", el), b = $("#fl-view-all", el); a.classList.toggle("on", vo); b.classList.toggle("on", !vo); a.setAttribute("aria-pressed", String(vo)); b.setAttribute("aria-pressed", String(!vo)); }
     $("#fl-active", el).innerHTML = activeChips(f0) || '<span class="help">조건 없음 · 전체</span>';
     $("#fl-exw-chips", el).innerHTML = M.fArr(nf.exw).map((w) => `<button type="button" class="chip on ex" data-exw="${esc(w)}" aria-label="제외 ${esc(w)} 지우기">−${esc(w)} ✕</button>`).join("");
     $$("[data-fopen]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => goFacet(b.dataset.fopen)));
@@ -841,9 +860,9 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
     const per = e.target.closest("[data-per]"); if (per) { if (per.dataset.per === "") { delete nf.from; delete nf.to; } else { nf.from = day(+per.dataset.per); nf.to = day(0); } syncInputs(); refresh(); }
   });
   $("#fl-overdue", el).addEventListener("change", (e) => { nf.overdue = e.target.checked || undefined; refresh(); });
-  $("#fl-hidedone", el).addEventListener("change", (e) => { nf.hideDone = e.target.checked || undefined; refresh(); });
-  /* 1.3.1 미조치만 = 완료 상태(조치완료·확인완료) 제외 */
-  $("#fl-openonly", el)?.addEventListener("click", () => { const done = ["조치완료", "확인완료"]; nf.status = M.fArr(nf.status).filter((x) => !done.includes(x)); nf.x_status = [...new Set([...M.fArr(nf.x_status), ...done])]; refresh(); });
+  /* 1.3.4 보기: 미조치만(완료 숨김) / 전체 — 완료 건 숨기기·미조치만·상태 ‘미조치 전체’를 한 곳에서 */
+  $("#fl-view-open", el).addEventListener("click", () => { nf.hideDone = true; if (M.isOpenOnlyStatus(nf)) delete nf.status; refresh(); });
+  $("#fl-view-all", el).addEventListener("click", () => { delete nf.hideDone; if (M.isOpenOnlyStatus(nf)) delete nf.status; refresh(); });
   $("#fl-urgent", el).addEventListener("change", (e) => { const cur = M.fArr(nf.severity).filter((x) => x !== "긴급"); nf.severity = e.target.checked ? [...cur, "긴급"] : cur; refresh(); });
   for (const [id, k] of [["#fl-ho", "ho"], ["#fl-from", "from"], ["#fl-to", "to"]]) $(id, el).addEventListener("input", (e) => { nf[k] = e.target.value.trim(); refresh(); });
   for (const i of $$("[data-k]", el)) i.addEventListener(i.type === "checkbox" ? "change" : "input", () => { nf[i.dataset.k] = i.type === "checkbox" ? (i.checked ? "1" : "") : i.value.trim(); refresh(); });
@@ -962,23 +981,40 @@ ROUTES.grid = async (qq) => {
   const floors = []; for (let f = dong.floors; f >= (dong.unitStart || 1); f--) if (M.unitsOf(dong, String(f)).length) floors.push(f);
   const lines = M.linesOf(dong);
   const common = list.filter((d) => !d.ho);
+  /* 1.3.4 공용 하자를 동 현황 위쪽에: 이 동의 공용부(호수 없는 하자) · 단지 공용(동 없는 하자: 지하주차장·부대시설 등) — 미조치/전체, 누르면 해당 목록 */
+  const cnum = (g) => (th.basis === "all" ? g.all : g.open);
+  const commonZone = `<details class="cm-zone" id="cm-dong" ${common.length ? "open" : ""}><summary><b>${esc(dong.name)} 공용부</b> <small>계단실·복도·EV홀·필로티·옥상 등 · 미조치 ${common.filter(M.isOpen).length} / 전체 ${common.length}건</small></summary>
+    ${common.length ? `<div class="cm-all"><button type="button" class="btn btn-sm" id="cm-dong-all">${esc(dong.name)} 공용부 전체 목록 ›</button></div>` : ""}
+    <div class="cgrid" id="cgrid">${commonGroups(common).map((g) => { const n = cnum(g); const lv = M.heatLevel(n, th);
+      return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""}" data-cm="${esc(g.common)}" data-cf="${esc(g.floor)}" aria-label="${esc(g.label)} ${n}건"><span>${esc(g.label)}</span><b>${n}</b><small>${g.all}건${g.sub ? " · " + esc(g.sub) : ""}</small></button>`; }).join("") || '<p class="help">공용부 하자 없음 — 등록할 때 위치에서 동을 고른 뒤 ‘공용부’를 선택하세요.</p>'}</div></details>`;
+  const siteItems = PD().filter((d) => !M.locParts(d).dong); const sg = new Map();
+  for (const d of siteItems) { const nm = M.commonOf(d) || "기타(위치 미지정)"; const g = sg.get(nm) || { name: nm, all: 0, open: 0, od: 0 }; g.all++; if (M.isOpen(d)) g.open++; if (M.isOverdue(d)) g.od++; sg.set(nm, g); }
+  for (const nm of sitePlaces()) if (!sg.has(nm)) sg.set(nm, { name: nm, all: 0, open: 0, od: 0 });
+  const sgl = [...sg.values()].sort((a, b) => b.all - a.all || a.name.localeCompare(b.name, "ko"));
+  const siteZone = `<details class="cm-zone cm-site" id="cm-site" ${siteItems.length ? "open" : ""}><summary><b>단지 공용</b> <small>지하주차장·부대시설 등 동과 상관없는 곳 · 미조치 ${siteItems.filter(M.isOpen).length} / 전체 ${siteItems.length}건</small></summary>
+    ${siteItems.length ? `<div class="cm-all"><button type="button" class="btn btn-sm" id="cm-site-all">단지 공용 전체 목록 ›</button></div>` : ""}
+    <div class="cgrid" id="sgrid">${sgl.map((g) => { const n = cnum(g); const lv = M.heatLevel(n, th);
+      return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""} ${g.all ? "" : "zero"}" data-site="${esc(g.name)}" aria-label="${esc(g.name)} 미조치 ${g.open}건 전체 ${g.all}건"><span>${esc(g.name)}</span><b>${n}</b><small>미조치 ${g.open} / 전체 ${g.all}</small></button>`; }).join("")}</div></details>`;
   view().innerHTML = `
     <div class="chips wrap dong-chips">${p.dongs.map((d) => `<button type="button" class="chip ${d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div>
     <div class="list-hd"><b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span></div>
+    ${commonZone}${siteZone}
     ${heatLegendHtml(th)}
     <div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => { const us = new Set(M.unitsOf(dong, String(f))); return `<div class="hf">${f}F</div>` + lines.map((l) => String(f * 100 + l)).map((ho) => {
       if (!us.has(ho)) return `<span class="hc hx" aria-hidden="true"></span>`;
       const m = by.get(ho) || { open: 0, all: 0, od: 0 }; const n = cnt(m); const lv = M.heatLevel(n, th);
       return `<button type="button" class="hc h${lv} ${m.od ? "od" : ""} ${m.all && !m.open && th.basis !== "all" ? "done" : ""}" data-ho="${ho}" data-n="${n}" data-lv="${lv}" aria-label="${ho}호 ${th.basis === "all" ? "전체" : "미조치"} ${n}건"><span>${ho}</span>${m.all ? `<b>${n}</b>` : ""}</button>`;
     }).join(""); }).join("")}</div>
-    <h3 class="sec">공용부·세대 외 <small>${esc(dong.name)} · ${th.basis === "all" ? "전체" : "미조치"} ${common.filter(M.isOpen).length} / ${common.length}건</small></h3>
-    <div class="cgrid" id="cgrid">${commonGroups(common).map((g) => { const n = th.basis === "all" ? g.all : g.open; const lv = M.heatLevel(n, th);
-      return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""}" data-cm="${esc(g.common)}" data-cf="${esc(g.floor)}" aria-label="${esc(g.label)} ${n}건"><span>${esc(g.label)}</span><b>${n}</b><small>${g.all}건${g.sub ? " · " + esc(g.sub) : ""}</small></button>`; }).join("") || '<p class="help">공용부 하자 없음 — 등록할 때 위치에서 동을 고른 뒤 ‘공용부’를 선택하세요.</p>'}</div>
     ${common.slice(0, 30).map((d) => defectCard(d)).join("")}`;
   bindCards();
   $$("[data-d]", view()).forEach((b) => b.addEventListener("click", () => replace(`#/grid?dong=${encodeURIComponent(b.dataset.d)}`)));
   $$("[data-ho]", view()).forEach((b) => b.addEventListener("click", () => go(`#/unit?dong=${encodeURIComponent(dong.name)}&ho=${b.dataset.ho}`)));
   $$("[data-cm]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = { dong: dong.name, common: b.dataset.cm || "_bare", ...(b.dataset.cm ? {} : { floor: b.dataset.cf || "_none" }), ...(th.basis === "all" ? {} : { status: "_open" }) }; LS.set("filter", S.filter); go("#/list"); }));
+  /* 1.3.4 단지 공용·동 공용부 → 해당 목록 */
+  const openBasis = th.basis === "all" ? {} : { status: "_open" };
+  $$("[data-site]", view()).forEach((b) => b.addEventListener("click", () => { const g = sg.get(b.dataset.site); S.filter = { dong: ["_none"], common: b.dataset.site === "기타(위치 미지정)" ? "_any" : b.dataset.site, ...(g?.open ? openBasis : {}) }; LS.set("filter", S.filter); go("#/list"); }));
+  $("#cm-site-all", view())?.addEventListener("click", () => { S.filter = { dong: ["_none"], common: "_any" }; LS.set("filter", S.filter); go("#/list"); });
+  $("#cm-dong-all", view())?.addEventListener("click", () => { S.filter = { dong: [dong.name], common: "_any" }; LS.set("filter", S.filter); go("#/list"); });
   $("#heat-cfg", view())?.addEventListener("click", () => heatSheet());
 };
 function heatLegendHtml(th, { gear = true } = {}) {
@@ -1449,11 +1485,22 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
     const cs = M.coresOf(p, sel.dong, PD());
     return `<h4>${esc(sel.dong)} 코어 <small class="help">공용부가 어느 코어인지 — 모르면 미지정</small></h4><div class="tiles small co-tiles" id="lp-core">${tile("core:", "코어 미지정", !sel.core, "core")}${cs.map((c) => tile("core:" + c, `${c}코어`, Number(sel.core) === c, "core")).join("")}</div>`;
   }
+  const CLR_ORDER = ["dong", "core", "floor", "ho", "common", "room", "part"];
+  const CLR_STEP = { dong: 0, core: 1, floor: 1, ho: 2, common: 1, room: 3, part: 4 };
+  function clearFrom(k) {
+    if (k === "etc") { sel.locEtc = ""; return draw(); }
+    for (const x of CLR_ORDER.slice(CLR_ORDER.indexOf(k))) { sel[x] = x === "core" ? "" : ""; }
+    if (["dong", "core", "floor", "ho", "common"].includes(k)) sel.pin = null; else dropSpotPin();
+    const to = k === "common" && !sel.dong ? 0 : CLR_STEP[k];
+    if (to < step) setStep(to, false); else draw();
+  }
   const canSave = () => !!(sel.dong || sel.common || sel.locEtc?.trim() || sel.room || sel.part);
   function draw() {
     s.setBackVisible(step > 0);
     const box = $("#lp", s.el); const d = dongObj();
-    const crumbs = [sel.dong, !sel.ho && sel.core && `${sel.core}코어`, sel.floor && M.floorLabel(sel.floor), sel.ho && sel.ho + "호", sel.common, sel.room, sel.part, sel.locEtc && `(${sel.locEtc})`].filter(Boolean);
+    /* 1.3.4 선택 줄: 단계마다 ✕ — 누르면 그 단계부터(아래 단계까지) 지움 */
+    const crumbsK = [["dong", sel.dong], ["core", !sel.ho && sel.core && `${sel.core}코어`], ["floor", sel.floor && M.floorLabel(sel.floor)], ["ho", sel.ho && sel.ho + "호"], ["common", sel.common], ["room", sel.room], ["part", sel.part], ["etc", sel.locEtc && `(${sel.locEtc})`]].filter(([, t]) => t);
+    const crumbs = crumbsK.map(([, t]) => t);
     const K = STEPS[step]; const has = K === "dong" ? !!sel.dong : K === "floor" ? !!(sel.floor || (sel.dong && sel.common)) : !!sel[K];
     const skipLabel = K === "part" ? (has ? "완료 ✓" : "건너뛰고 완료 ✓") : has ? "다음 ›" : { dong: "동 건너뛰기 ›", floor: "층 건너뛰기 ›", ho: "호 건너뛰기 ›", room: "실 건너뛰기 ›" }[K];
     let h = `<div class="lp-top"><ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}" data-go="${i}">${t}</li>`).join("")}</ol><button type="button" class="btn btn-sm lp-skip" data-skip="1">${skipLabel}</button></div>`;
@@ -1489,7 +1536,8 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
     }
     h += `<button type="button" class="btn btn-block btn-etc" id="lp-etc">✎ ${sel.locEtc ? `기타 위치: ${esc(sel.locEtc)} (수정)` : "기타 위치 직접 입력 (저장 안 함)"}</button>`;
     box.innerHTML = h;
-    $("#lp-sum", s.el).textContent = crumbs.length ? "선택: " + crumbs.join(" · ") : "동 또는 공용부를 먼저 고르세요";
+    { const sm = $("#lp-sum", s.el); sm.innerHTML = crumbs.length ? "선택: " + crumbsK.map(([k, t]) => `<span class="lp-cr">${esc(t)}<button type="button" class="lp-x" data-clr="${k}" aria-label="${esc(t)} 지우기"></button></span>`).join(" · ") : "동 또는 공용부를 먼저 고르세요";
+      $$("[data-clr]", sm).forEach((b) => b.addEventListener("click", () => clearFrom(b.dataset.clr))); }
     const ok = $("#lp-ok", s.el); ok.disabled = !canSave();
     $$(".tile", box).forEach((b) => b.addEventListener("click", async (e) => {
       let v = b.dataset.v; const k = STEPS[step];
@@ -1510,12 +1558,14 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
       if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(sel.common ? 3 : nextAfterFloor(dongObj(), v)); }
       if (k === "ho") { sel.ho = v; sel.common = ""; return setStep(3); }
       if (k === "room") {
+        if (sel.room === v) { sel.room = ""; sel.part = ""; dropSpotPin(); return draw(); } // 1.3.4 다시 누르면 선택 풀림(아래 부위도 같이)
+        if (sel.room !== v) sel.part = ""; // 실을 바꾸면 부위는 새로 고름
         sel.room = v;
         if (b.dataset.pl && b.dataset.x !== "" && (!sel.pin || sel.pin.spot)) sel.pin = { planId: b.dataset.pl, x: Number(b.dataset.x), y: Number(b.dataset.y), spot: 1 };
         else dropSpotPin();
         return setStep(4);
       }
-      sel.part = v; draw();
+      sel.part = sel.part === v ? "" : v; draw(); // 1.3.4 다시 누르면 선택 풀림
     }));
     $("[data-skip]", box)?.addEventListener("click", () => {
       const k = STEPS[step];
@@ -1698,14 +1748,14 @@ ROUTES.item = async (qq) => {
         <dt>조치기한</dt><dd>${esc(d.due || "-")}</dd>${d.reqAt ? `<dt>요청서</dt><dd id="req-at">${esc(d.reqNo || "")} · ${fmtDT(d.reqAt)} 발송</dd>` : ""}<dt>등록</dt><dd>${fmtDT(d.createdAt)}${d.createdBy ? ` · <b class="who">${esc(d.createdBy)}</b>` : ""}${d.extId ? ` · 외부ID ${esc(d.extId)}` : ""}</dd>
          ${d.updatedBy ? `<dt>최근 수정</dt><dd id="who-upd"><b class="who">${esc(d.updatedBy)}</b> · ${fmtDT(d.updatedByAt || d.updatedAt)}</dd>` : ""}</dl></section>
     <ol class="flow" aria-label="상태 바로 바꾸기">${["접수", "업체전달", "조치중", "조치완료", "확인완료", ...(["재접수", "조치완료", "확인완료"].includes(d.status) ? ["재접수"] : [])].map((s2, i) => `<li class="${s2 === d.status ? "on" : i < idx && d.status !== "재접수" ? "done" : ""}${s2 === "재접수" ? " re" : ""}"><button type="button" class="flow-b" data-flow="${s2}" ${s2 === d.status ? 'aria-current="step"' : ""} aria-label="상태를 ${s2}(으)로">${s2}</button></li>`).join("")}</ol>
-    <div class="act-row">${nx ? `<button type="button" class="btn btn-primary btn-lg" data-st="${nx}">${nx === "업체전달" ? "업체에 보내기" : nx + " 처리"}</button>` : ""}
+    <button type="button" class="btn btn-primary btn-xl" id="btn-reqimg">📨 요청서 보내기</button><p class="help small cap">카톡·PDF·문자 중에서 고를 수 있어요 · 사진이 있으면 PDF 한 파일로</p>
+    <div class="act-row">${nx ? `<button type="button" class="btn btn-lg" data-st="${nx}">${nx === "업체전달" ? "업체전달로 표시" : nx + " 처리"}</button>` : ""}
       ${d.status === "조치완료" || d.status === "확인완료" ? `<button type="button" class="btn btn-lg btn-warn" data-st="재접수">재접수</button>` : ""}
       <button type="button" class="btn btn-lg" id="btn-stany">상태 선택</button></div>
     ${v ? `<div class="contact-row">${(() => { const vp = M.vendorPhones(v); if (!vp.length) return ""; if (vp.length === 1) { const ph = vp[0].phone; return `<a class="btn" href="${M.telHref(ph)}">📞 전화</a><a class="btn" href="${M.smsHref(ph, M.shareMessage({ project: P(), vendor: v, items: [d] }))}" data-sms>💬 문자</a>`; } return `<button type="button" class="btn" id="btn-dtel">📞 전화 ▾</button><button type="button" class="btn" id="btn-dsms">💬 문자 ▾</button>`; })()}
-      <button type="button" class="btn btn-kakao" id="btn-kakao">카톡으로 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 보내기</button>`}
+      <button type="button" class="btn btn-kakao" id="btn-kakao">카톡 문구 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 문구 보내기</button>`}
     ${S.justSaved === d.id ? `<button type="button" class="btn btn-primary btn-block" id="btn-again">➕ 같은 내용으로 하나 더 <small>위치만 바꿔서</small></button>` : ""}
-    <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-reqimg">🧾 요청서 만들기</button><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button></div>
-    <button type="button" class="btn btn-block" id="btn-copy">📋 복사해서 등록</button>
+    <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button><button type="button" class="btn btn-req" id="btn-copy">📋 복사해서 등록</button></div>
     <button type="button" class="btn btn-block btn-tags ${d.tabs?.length ? "on" : ""}" id="btn-tags">${d.tabs?.length ? "★" : "☆"} 관리 탭${(() => { const nm = TABS().filter((t) => M.inTab(d, t.id)).map((t) => t.name); return nm.length ? ` · ${esc(nm.join(", "))}` : " 넣기"; })()}</button>
     ${stepsHtml(d, photos)}
     <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
@@ -1755,6 +1805,8 @@ async function quickStatus(d, st) {
   if (!(await stepsGuard(d, st))) return;
   const prev = d.status; setStatus(d, st); await saveDefect(d); rerender();
   const hint = st === "조치완료" && !photoCount(d).after ? " · 조치 후 사진은 아래 📷에서 추가" : "";
+  /* 1.3.4 완료(조치완료·확인완료)로 바꿀 때는 ‘되돌리기’ 팝업 없음 — 상세에서 상태를 다시 바꾸면 돼요 */
+  if (M.DONE_STATUSES.has(st)) return toast(`‘${st}’(으)로 변경${hint}`, { ms: 2500 });
   toast(`‘${st}’(으)로 변경${hint}`, { ms: 3000, action: "되돌리기", onAction: async () => { setStatus(d, prev, "되돌리기"); await saveDefect(d); rerender(); } });
 }
 async function changeStatus(d, st) {
@@ -1768,6 +1820,7 @@ async function changeStatus(d, st) {
   let note = "";
   if (st === "재접수") { note = (await prompt2("재접수 사유", "", { placeholder: "예: 실리콘 재시공 필요", ok: "재접수" })); if (note === null) return; }
   const prev = d.status; setStatus(d, st, note); await saveDefect(d); rerender();
+  if (M.DONE_STATUSES.has(st)) return toast(`‘${st}’(으)로 변경`, { ms: 2500 });
   toast(`‘${st}’(으)로 변경`, { action: "되돌리기", onAction: async () => { setStatus(d, prev, "되돌리기"); await saveDefect(d); rerender(); } });
 }
 /* ---------- 1.0.8 후속 공정(공정 단계) ---------- */
@@ -1871,7 +1924,7 @@ async function setStepStatus(d, i, st) {
   const undo = async () => { step.status = prevSt; step.doneAt = ""; if (d.status !== prevDefect) setStatus(d, prevDefect, "되돌리기"); await saveDefect(d); rerender(); };
   if (st !== "완료") return toast(`${i + 1}단계 ‘${step.trade}’ ${st}`, { action: "되돌리기", onAction: undo });
   const next = d.steps.find((x, k) => k > i && x.status !== "완료");
-  if (!next) return toast(`모든 공정 완료 → ‘조치완료’${photoCount(d).after ? "" : " · 조치 후 사진은 📷에서"}`, { ms: 3500, action: "되돌리기", onAction: undo });
+  if (!next) return toast(`모든 공정 완료 → ‘조치완료’${photoCount(d).after ? "" : " · 조치 후 사진은 📷에서"}`, { ms: 3500 });
   await sendNextStep(d, i, next);
 }
 /** 다음 공정 업체에 카톡·문자로 보내기(앞 공정 사진 첨부) */
@@ -2329,6 +2382,7 @@ async function workOrderSheet({ items, filter = null }) {
   const W = await import("./workorder.js"); M.setCoreProject(P());
   if (!document.getElementById("wo-css")) { const st = document.createElement("style"); st.id = "wo-css"; st.textContent = W.WO_CSS; document.head.appendChild(st); }
   const p = P(); const allP = PD(); let high = !!LS.get("woHigh", false);
+  const woPh = items.some((d) => (S.pidx.get(d.id)?.before || 0) > 0); // 사진이 있으면 PDF가 기본
   const defName = S.issuer || (Sync.signedIn?.() ? Sync.actorName() : "");
   let who = { name: LS.get("woName", "") || defName, team: LS.get("woTeam", "") };
   const cond = W.woCondition(items, { filter: filter || {}, vendorName: vName });
@@ -2340,8 +2394,9 @@ async function workOrderSheet({ items, filter = null }) {
         <button type="button" class="rbtn" data-w="print" id="wo-print">🖨<small>인쇄</small></button><button type="button" class="rbtn" data-w="close" id="wo-close">✕<small>닫기</small></button></div>
       <div class="wo-who"><label>출력자 <input class="inp" id="wo-name" value="${esc(who.name)}" placeholder="이름" maxlength="20"></label><label>팀 <input class="inp" id="wo-team" value="${esc(who.team)}" placeholder="(선택)" maxlength="20"></label></div>
       <div class="wo-prev" id="wo-prev"></div>
-      <div class="send-grid wo-share"><button type="button" class="btn btn-kakao btn-lg" data-w="share">카톡으로 공유 <small>이미지</small></button>
-        <button type="button" class="btn btn-lg" data-w="copy">🖼 이미지 복사</button><button type="button" class="btn btn-lg" data-w="save">💾 이미지 저장</button><button type="button" class="btn btn-lg" data-w="pdf">🖨 PDF 저장(인쇄)</button><button type="button" class="btn btn-kakao btn-lg" data-w="pdffile">📄 PDF 파일 <small>사진 포함 · ${isMobileDevice() ? "공유" : "저장"}</small></button></div>
+      <div class="send-grid wo-share main-fmt">${woPh ? `<button type="button" class="btn btn-kakao btn-lg" data-w="pdffile">📄 PDF로 보내기 <small>사진 포함 · ${isMobileDevice() ? "공유" : "저장"}</small></button>` : `<button type="button" class="btn btn-kakao btn-lg" data-w="share">🖼 이미지로 보내기 <small>카톡·공유</small></button>`}</div>
+      <details class="alt-fmt" id="alt-fmt" ${window.__altOpen ? "open" : ""}><summary>다른 형식으로 보내기 <small>이미지 복사·저장 · 인쇄·PDF(인쇄)</small></summary><div class="send-grid wo-share">${woPh ? `<button type="button" class="btn btn-kakao btn-lg" data-w="share">카톡으로 공유 <small>이미지</small></button>` : `<button type="button" class="btn btn-kakao btn-lg" data-w="pdffile">📄 PDF 파일 <small>표만 · ${isMobileDevice() ? "공유" : "저장"}</small></button>`}
+        <button type="button" class="btn btn-lg" data-w="copy">🖼 이미지 복사</button><button type="button" class="btn btn-lg" data-w="save">💾 이미지 저장</button><button type="button" class="btn btn-lg" data-w="pdf">🖨 PDF 저장(인쇄)</button></div></details>
       <p class="help small">인쇄·PDF는 A4 가로, 쪽마다 표 머리글이 반복돼요(PDF는 인쇄 창에서 ‘PDF로 저장’). 이미지는 장당 ${W.IMG_ROWS}건씩 여러 장으로 나눠요.</p>` });
   const el = s.el;
   const draw = () => { const r = rows(); $("#wo-prev", el).innerHTML = W.woHtml({ rows: r, meta: meta() }); fit(); window.__wo = { n: r.length, high, rows: r.map((x) => ({ no: x.no, stage: x.stage, dong: x.dong, ho: x.ho, utype: x.utype, movein: x.movein, room: x.room, trade: x.trade, core: x.core, head: x.head, text: x.text, status: x.status, date: x.date })), meta: meta() }; imgs = null; };
@@ -2444,17 +2499,18 @@ async function requestImageSheet({ vendor, items }) {
   const vps = M.vendorPhones(vendor);
   const hasPh = [...photosAll.values()].some((l) => l.length);
   const btnPdf = hasPh ? `<button type="button" class="btn btn-kakao btn-lg" data-r="pdf">📄 ${mobile ? "PDF로 공유" : "PDF 저장"} <small>사진 크게 포함 · 파일 1개</small></button>` : "";
-  const btnShare = `<button type="button" class="btn btn-kakao btn-lg" data-r="share">카톡으로 공유 <small>이미지 첨부</small></button>`;
+  const btnShare = `<button type="button" class="btn btn-kakao btn-lg" data-r="share">${hasPh ? "카톡으로 공유" : "🖼 이미지로 보내기"} <small>${hasPh ? "이미지 첨부" : "카톡·공유"}</small></button>`;
   const btnCopy = canClip ? `<button type="button" class="btn ${mobile ? "" : "btn-kakao"} btn-lg" data-r="copy" data-i="0">🖼 이미지 복사${mobile ? "" : " <small>카톡 PC에 Ctrl+V</small>"}</button>` : "";
   const s = openSheet({ title: `요청서 이미지 · ${vendor?.name || "업체 미지정"} ${items.length}건`, full: true, cls: "req-sheet",
     html: `<p class="help small">문서번호 <b>${esc(docNo)}</b>${pages.length > 1 ? ` · ${pages.length}장(장당 6건)` : ""}. 내용을 고치려면 하자를 수정한 뒤 다시 만드세요.</p>
       <div class="req-prev" id="req-prev">${urls.map((u, i) => `<figure><img src="${u}" alt="요청서 이미지 ${i + 1}">${pages.length > 1 && canClip ? `<button type="button" class="btn btn-sm" data-r="copy" data-i="${i}">${i + 1}장 복사</button>` : ""}</figure>`).join("")}</div>
       ${hasPh ? `<p class="help small pdf-tip">사진이 있는 요청서는 <b>PDF 한 파일</b>(요청서 → 사진 크게, 한 쪽에 2장)로 보내면 사진이 모두 가요.</p>` : ""}
-      <div class="send-grid">${btnPdf}${mobile ? btnShare + btnCopy : btnCopy + btnShare}
+      <div class="send-grid main-fmt">${hasPh ? btnPdf : (mobile ? btnShare + btnCopy : btnCopy + btnShare)}</div>
+      <details class="alt-fmt" id="alt-fmt" ${window.__altOpen ? "open" : ""}><summary>다른 형식으로 보내기 <small>${hasPh ? "이미지·" : ""}저장·문구·작업지시서·문자</small></summary><div class="send-grid">${hasPh ? (mobile ? btnShare + btnCopy : btnCopy + btnShare) : ""}
         <button type="button" class="btn btn-lg" data-r="save">💾 이미지 저장</button>
         <button type="button" class="btn btn-lg" data-r="text">📋 문구 복사</button>
         <button type="button" class="btn btn-lg" data-r="wo">📋 작업지시서(표) 형식</button>
-        ${vps.map((x) => `<a class="btn btn-lg" data-r="sms" href="${esc(M.smsHref(x.phone, text))}">💬 문자 ${x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a>`).join("")}</div>
+        ${vps.map((x) => `<a class="btn btn-lg" data-r="sms" href="${esc(M.smsHref(x.phone, text))}">💬 문자 ${x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a>`).join("")}</div></details>
       <p class="help small">${mobile ? "‘카톡으로 공유’ → 공유창에서 <b>카카오톡</b> → 업체 대화방을 고르면 이미지가 첨부돼요. 보내기는 카톡에서 직접 눌러요." : "PC: ‘이미지 복사’ 후 카카오톡 PC 업체 대화방에 <b>Ctrl+V</b>. 복사가 안 되면 ‘이미지 저장’ 후 끌어다 놓으세요."}${vps.length ? " 문자는 문구만 채워져요 — 이미지는 저장 후 문자에 직접 첨부하세요." : ""}${canFiles ? "" : " 이 브라우저는 이미지 공유가 안 돼서 ‘카톡으로 공유’를 누르면 저장 + 문구 복사로 대신해요."}</p>
       <label class="check"><input type="checkbox" id="req-mark" checked> 보낸 뒤 ‘접수’ 건을 ‘업체전달’로 바꾸고 요청서 발송 시각 기록</label>` });
   const el = s.el; const cleanup = () => urls.forEach((u) => URL.revokeObjectURL(u));
@@ -3535,6 +3591,6 @@ async function main() {
   initSync();
   setTimeout(() => autoMergeTrades().catch((e) => console.warn(e)), 1500);
   setTimeout(() => autoMergeTypes().catch((e) => console.warn(e)), 2600);
-  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync }; // 테스트·디버그용
+  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync, selMore, listMore: (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); } }; // 테스트·디버그용
 }
 main();
