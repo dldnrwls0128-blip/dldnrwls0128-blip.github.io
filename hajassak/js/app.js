@@ -186,16 +186,60 @@ ROUTES.onboard = async (qq) => {
 };
 
 /* ---------- 카드 ---------- */
-function defectCard(d, { sel = false } = {}) {
+function defectCard(d, { sel = false, photo = false } = {}) {
   const pc = photoCount(d); const od = M.isOverdue(d); const on = sel && S.select.has(d.id);
   return `<article class="dcard ${phState(d)} ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
+    ${photo ? phBlock(d) : ""}
     <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${pill(d.status)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기(복사해서 등록 등)" title="복사해서 등록 · 수정 …">⋯</button></div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
-      ${pc.before + pc.after ? `<span>📷${pc.before}${pc.after ? "/" + pc.after : ""}</span>` : ""}<span>${esc(d.category || "")}</span></div>${camBtn(d) ? `<div class="dc-cam">${camBtn(d)}</div>` : ""}
+      ${pc.before + pc.after ? `<span>📷${pc.before}${pc.after ? "/" + pc.after : ""}</span>` : ""}<span>${esc(d.category || "")}</span></div>${!photo && camBtn(d) ? `<div class="dc-cam">${camBtn(d)}</div>` : ""}
   </article>`;
+}
+/** 1.3.6 세대 사진 보기: 카드 위 큰 썸네일(조치 전·후 나란히). 없으면 회색 칸에 ‘촬영’. 썸네일은 보일 때 불러옴(지연 로딩) */
+function phBlock(d) {
+  const c = photoCount(d); const ck = camKind(d); const slot = (k) => `<button type="button" class="ph-slot" data-view="${d.id}" data-k="${k}" aria-label="${k === "after" ? "조치 후" : "조치 전"} 사진 크게 보기"><img class="ph-lazy" data-d="${d.id}" data-k="${k}" alt="" decoding="async"><span class="ph-k ${k === "after" ? "a" : "b"}">${k === "after" ? "조치 후" : "조치 전"}</span></button>`;
+  const empty = (k) => `<div class="ph-slot ph-empty">${camBtn(d) && ck === k ? camBtn(d) : `<span>${k === "after" ? "조치 후 사진 없음" : "사진 없음"}</span>`}</div>`;
+  const hasB = c.before > 0, hasA = c.after > 0; const wantA = hasA || ck === "after" || (hasB && ["조치완료", "확인완료"].includes(d.status));
+  const slots = [hasB ? slot("before") : empty("before")]; if (wantA) slots.push(hasA ? slot("after") : empty("after"));
+  return `<div class="dc-ph ${slots.length > 1 ? "two" : "one"} ${phState(d)}">${slots.join("")}</div>`;
+}
+const _thUrls = new Map();
+function hydrateThumbs(root = view()) {
+  if (S._thRoute !== location.hash) { for (const u of _thUrls.values()) URL.revokeObjectURL(u); _thUrls.clear(); S._thRoute = location.hash; }
+  S._dp = new Map();
+  const defPhotos = (id) => { if (!S._dp.has(id)) S._dp.set(id, db.byIndex("photos", "by_defect", id).then((ps) => ps.sort((a, b) => (a.at < b.at ? -1 : 1)))); return S._dp.get(id); };
+  const fill = async (img) => { if (img.dataset.done) return; img.dataset.done = "1"; const ps = await defPhotos(img.dataset.d); const k = img.dataset.k;
+    const ph = k === "after" ? [...ps].reverse().find((x) => x.kind === "after") : ps.find((x) => x.kind !== "after"); if (!ph) return;
+    let u = _thUrls.get(ph.id); if (!u) { u = URL.createObjectURL(ph.thumb || ph.blob); _thUrls.set(ph.id, u); } img.src = u; img.classList.add("ok"); };
+  const imgs = $$("img.ph-lazy", root);
+  if (!("IntersectionObserver" in window)) { imgs.forEach(fill); return; }
+  const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { io.unobserve(e.target); fill(e.target); } }, { rootMargin: "300px 0px" });
+  imgs.forEach((i) => io.observe(i));
+}
+/** 세대 사진 크게 보기: 이 세대 하자들의 사진을 좌우로 넘겨 가며(다음 하자로 이어짐) */
+async function galleryViewer(ids, startId, startKind = "before") {
+  const slides = [];
+  for (const id of ids) { const d = S.defects.find((x) => x.id === id); if (!d) continue; const ps = (await db.byIndex("photos", "by_defect", id)).sort((a, b) => (a.at < b.at ? -1 : 1));
+    for (const ph of [...ps.filter((x) => x.kind !== "after"), ...ps.filter((x) => x.kind === "after")]) slides.push({ d, ph }); }
+  if (!slides.length) return toast("볼 사진이 없어요");
+  let i = Math.max(0, slides.findIndex((x) => x.d.id === startId && (x.ph.kind === "after") === (startKind === "after"))); if (i < 0) i = 0; let url = "", tok = 0;
+  const s = openSheet({ title: "세대 사진", full: true, cls: "viewer gal", html: `<div class="pv" id="gv-pv"><img id="pv-img" alt="사진"></div><div class="gv-cap" id="gv-cap"></div><div class="pv-nav"><button type="button" class="btn" data-n="-1">‹ 이전</button><span id="pv-i"></span><button type="button" class="btn" data-n="1">다음 ›</button></div>`,
+    footer: `<button type="button" class="btn" data-a="open">하자 열기</button><button type="button" class="btn" data-a="share">공유</button>` });
+  const show = async () => { const { d, ph } = slides[i]; const my = ++tok; if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(ph.blob); $("#pv-img", s.el).src = url;
+    $("#pv-i", s.el).textContent = `${i + 1} / ${slides.length} · ${ph.kind === "after" ? "조치 후" : "조치 전"}`;
+    $("#gv-cap", s.el).innerHTML = `<b>${esc(M.locText(d) || "위치 미지정")}</b> <span>${esc(M.tradeText(d))}${d.content ? " · " + esc(d.content) : ""}</span> <small>${esc(vName(d) || "업체 미지정")} · ${esc(d.status)}</small>`;
+    if (ph.stamp === "0" && stampOn()) { const bl = await photoOut(ph, d); if (my === tok && bl !== ph.blob) { if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(bl); $("#pv-img", s.el).src = url; } } };
+  const nav = (dn) => { i = (i + dn + slides.length) % slides.length; show(); };
+  $$("[data-n]", s.el).forEach((b) => b.addEventListener("click", () => nav(Number(b.dataset.n))));
+  const pv = $("#gv-pv", s.el); let x0 = null; pv.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+  pv.addEventListener("touchend", (e) => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > 50) nav(dx < 0 ? 1 : -1); });
+  const key = (e) => { if (e.key === "ArrowLeft") nav(-1); else if (e.key === "ArrowRight") nav(1); }; document.addEventListener("keydown", key); const oc = s.onClose; s.onClose = () => { document.removeEventListener("keydown", key); if (url) URL.revokeObjectURL(url); oc?.(); };
+  $("[data-a=open]", s.el).addEventListener("click", async () => { const id = slides[i].d.id; await s.close(); go(`#/item?id=${id}`); });
+  $("[data-a=share]", s.el).addEventListener("click", async () => { const { d, ph } = slides[i]; shareOrDownload(await photoOut(ph, d), `하자사진_${i + 1}.jpg`); });
+  show();
 }
 /** 1.3.5 카드 색 = 사진 상태: 사진 없음(회색) · 조치 전만(주황) · 조치 후 있음(초록) */
 function phState(d) { const c = photoCount(d); return c.after > 0 ? "ph-after" : c.before > 0 ? "ph-before" : "ph-none"; }
@@ -239,6 +283,7 @@ function bindCards(root = view()) {
     $(".dmore", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     $(".dcam", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardShoot(d, e.currentTarget.dataset.cam); });
     $(".dcam", c)?.addEventListener("keydown", (e) => e.stopPropagation());
+    $$(".ph-slot[data-view]", c).forEach((b) => { b.addEventListener("click", (e) => { e.stopPropagation(); galleryViewer($$(".dcard[data-id]", view()).map((x) => x.dataset.id), b.dataset.view, b.dataset.k); }); b.addEventListener("keydown", (e) => e.stopPropagation()); });
     const open = () => go(`#/item?id=${c.dataset.id}`);
     c.addEventListener("click", open);
     c.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === c) open(); });
@@ -406,7 +451,9 @@ ROUTES.home = async () => {
   const doing = list.filter((d) => d.status === "조치중").length; const mine = list.filter(M.isMyTurn).length;
   const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
   const rate = list.length ? Math.round((done / list.length) * 100) : 0;
-  const noPhHome = list.filter((d) => M.photoMissing(d, "none")).length; const noAfHome = list.filter((d) => M.photoMissing(d, "noafter")).length;
+  const hpChips = p.dongs.map((dg) => { const l = list.filter((d) => d.dong === dg.name); return { name: dg.name, o: l.filter(M.isOpen).length, a: l.length }; });
+  { const sl = list.filter((d) => !M.locParts(d).dong); if (sl.length || sitePlaces().length) hpChips.push({ name: "단지 공용", o: sl.filter(M.isOpen).length, a: sl.length, site: true }); }
+  const hpSc = relScale(hpChips.map((c) => c.o)); for (const c of hpChips) c.cls = hpSc.cls(c.o);
   view().innerHTML = `<div class="home2">
     ${homeSyncHtml()}
     <form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>
@@ -422,18 +469,16 @@ ROUTES.home = async () => {
     </section>
     ${presets().length ? presetRowHtml("home") : ""}
     <button type="button" class="btn btn-primary btn-xl" data-go="#/new">＋ 하자 등록</button>
-    ${list.length ? `<section class="card home-photo" id="home-photo">
-      <div class="hp-hd"><b>📷 사진</b><button type="button" class="sec-link" data-go="#/photos">사진 모아보기 ›</button></div>
-      <div class="kpis hp-kpis"><button type="button" class="kpi ${noPhHome ? "warn" : "ok"}" data-f='{"photo":"none"}'><b>${n(noPhHome)}</b><span>사진 없음</span></button><button type="button" class="kpi" data-f='{"photo":"noafter"}'><b>${n(noAfHome)}</b><span>조치 후 없음</span></button></div>
-      ${noPhHome ? `<button type="button" class="btn btn-block btn-primary btn-lg" id="home-shoot">📷 사진 없는 하자 <b>${n(noPhHome)}건</b> · 연속 촬영 ›</button>` : `<p class="help ok-line">✓ 모든 하자에 사진이 있어요</p>`}
-    </section>` : ""}
-    <button type="button" class="btn btn-block home-places" id="home-places" data-go="#/places">🧱 <b>하자위치</b> <small>동 · 지하주차장 · 부대시설 한눈에</small> <span class="chev">›</span></button>
+    <section class="card home-places" id="home-places" aria-label="하자위치">
+      <button type="button" class="hpl-hd" data-go="#/places"><span class="hpl-t">🧱 <b>하자위치</b></span><small>동 · 단지 공용 · 건수가 많을수록 진해요</small><span class="chev">›</span></button>
+      ${hpChips.length ? `<div class="hpl-chips">${hpChips.map((c) => `<button type="button" class="hpl-chip ${c.cls} ${c.o ? "has" : "zero"} ${c.site ? "site" : ""}" ${c.site ? 'data-hs="1"' : `data-hd="${esc(c.name)}"`} aria-label="${esc(c.name)} 미조치 ${c.o}건 전체 ${c.a}건"><span>${esc(c.name)}</span><b>${n(c.o)}</b></button>`).join("")}</div><p class="hpl-key"><span><i class="hv0"></i>0</span>${hpSc.legend.map((x) => `<span><i class="${x.cls}"></i>${x.label}</span>`).join("")}<small>미조치 건수</small></p>` : `<p class="help">동을 추가하면 여기에 동별 건수가 보여요.</p>`}
+    </section>
     <div class="actions3">
       <button type="button" class="act" id="home-find"><span class="act-i">🔎</span><b>건수 찾기</b><small>업체·동·유형별</small></button>
       <button type="button" class="act" id="home-send"><span class="act-i">📲</span><b>요청서 보내기</b><small>${unsent ? `미전달 ${n(unsent)}건 · 업체 고르기` : "업체에 카톡·PDF·문자"}</small></button>
       <button type="button" class="act" id="home-sendph"><span class="act-i">🖼</span><b>사진으로 보내기</b><small>띠 붙여 여러 장</small></button>
     </div>
-    <h3 class="sec">최근 기록 <small>오늘 등록 ${todayN}건 · 전체 ${n(list.length)}건</small>${recent.length ? `<button type="button" class="sec-link" data-go="#/list">전체 목록 ›</button>` : ""}</h3>
+    <h3 class="sec">최근 기록 <small>오늘 등록 ${todayN}건 · 전체 ${n(list.length)}건</small>${recent.length ? `<button type="button" class="sec-link" data-go="#/list">전체 하자 ›</button>` : ""}</h3>
     ${recent.length ? recent.map((d) => defectCard(d)).join("") : `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-sm" data-go="#/help?s=add">등록하는 법 보기</button></div>`}
     ${verFoot()}</div>`;
   bindCards(); bindVerFoot();
@@ -443,7 +488,8 @@ ROUTES.home = async () => {
   bindPresetRow(view());
   $("#home-sendph")?.addEventListener("click", photosByVendor);
   $("#home-find")?.addEventListener("click", () => filterSheet());
-  $("#home-shoot")?.addEventListener("click", () => shootSheet({ items: PD(), kind: "before" }));
+  $$("[data-hd]", view()).forEach((b) => b.addEventListener("click", () => go(`#/grid?dong=${encodeURIComponent(b.dataset.hd)}`)));
+  $("[data-hs]", view())?.addEventListener("click", () => go("#/grid?site=1"));
   $("#home-send")?.addEventListener("click", () => { const un = PD().filter((d) => d.status === "접수" || d.status === "재접수"); if (!un.length) { toast("미전달 건이 없어요 · 업체 화면으로 갈게요", { ms: 3000 }); return go("#/vendors"); } return sendChecked(un); });
   { const qi = $("#qs"); if (qi) { const ex = qi.dataset.phEx, ph = qi.placeholder; qi.addEventListener("focus", () => { qi.placeholder = ex; }); qi.addEventListener("blur", () => { qi.placeholder = ph; }); } }
   $("[data-a=switch]", view())?.addEventListener("click", switchProject);
@@ -590,8 +636,8 @@ function locIndex() {
   return S.locIdx.idx;
 }
 ROUTES.list = async () => {
-  setTab("list");
-  setHeader("하자 목록", { backBtn: navDepth() > 1 });
+  setTab("places");
+  setHeader("하자위치", { backBtn: navDepth() > 1 });
   /* 1.2.8 관리 탭: [전체] [중점관리 n] … — 고른 탭 안에서 필터·정렬·묶음·보내기 그대로 */
   const allP = PD(); const tabs = TABS(); let ltab = LS.get("listTab", ""); if (ltab && !tabs.some((t) => t.id === ltab)) { ltab = ""; LS.set("listTab", ""); }
   const f = S.filter; const all = ltab ? allP.filter((d) => M.inTab(d, ltab)) : allP;
@@ -631,7 +677,7 @@ ROUTES.list = async () => {
     <div class="list-hd"><b class="res-n" id="res-n">${nUi ? "검색 결과 " : vOpen ? "미조치 " : ""}${n(list.length)}건</b>${M.hasEx(f) ? `<span class="ex-gone" id="res-ex">제외 −${n(exGone)}</span>` : ""}<button type="button" class="chip chip-od ${f.overdue ? "on" : ""}" id="btn-od" aria-pressed="${!!f.overdue}" aria-label="기한초과 ${n(odN)}건만 보기" title="기한초과 ${n(odN)}건">⏰ ${n(odN)}</button>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-listmore" aria-expanded="${!!window.__listMenuOpen}" aria-controls="list-menu" aria-label="집계·내보내기">⋯</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">요청서 보내기</button></div>
     ${list.length ? photoLegendHtml(null, { short: true, extra: `<span class="sp"></span><button type="button" class="btn btn-sm" id="btn-sendphotos" title="이 결과의 사진을 띠를 붙여 여러 장 보내기" aria-label="사진으로 보내기">📷 사진으로 보내기</button>` }) : ""}
-    <div class="list-menu" id="list-menu" ${window.__listMenuOpen ? "" : "hidden"}><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기(엑셀·CSV)</button><button type="button" class="btn btn-sm" id="btn-shoot">📷 사진 없는 건 연속 촬영</button></div>
+    <div class="list-menu" id="list-menu" ${window.__listMenuOpen ? "" : "hidden"}><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기(엑셀·CSV)</button><button type="button" class="btn btn-sm" id="btn-shoot">📷 사진 없는 건 연속 촬영</button><button type="button" class="btn btn-sm" id="btn-places">▦ 전체 위치 보기</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
     <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : bare ? `<div class="card empty-card" id="list-empty"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-primary" id="empty-new">＋ 첫 하자 등록</button></div>` : `<div class="card empty-card" id="list-empty"><p>조건에 맞는 하자가 없어요.</p>${nUi || f.hideDone || ltab ? `<button type="button" class="btn" id="empty-clear">조건 모두 지우기</button>` : ""}</div>`}</div>
     ${(grp ? S.lgTrunc : list.length > S.listLimit) ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(grp ? S.lgHid : list.length - S.listLimit)}건 남음)</button>` : ""}
@@ -718,6 +764,7 @@ ROUTES.list = async () => {
   $("#empty-new")?.addEventListener("click", () => go("#/new"));
   $("#empty-clear")?.addEventListener("click", () => { S.filter = {}; LS.set("filter", {}); LS.set("listTab", ""); replace("#/list"); });
   $("#btn-nophoto")?.addEventListener("click", () => { const nf = { ...S.filter }; if (nf.photo) delete nf.photo; else nf.photo = "none"; S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
+  $("#btn-places")?.addEventListener("click", () => { listMore(false); go("#/places"); });
   $("#btn-shoot")?.addEventListener("click", () => { listMore(false); const base = M.applyFilter(all, M.stripEx(f), { vendorName: vName }); shootSheet({ items: base.length ? base : allP, kind: "before" }); });
   $("#btn-hidedone").addEventListener("click", () => { const nf = { ...S.filter }; if (M.viewOpen(nf)) { delete nf.hideDone; if (M.isOpenOnlyStatus(nf)) delete nf.status; } else { nf.hideDone = true; } S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
   $("#btn-agg").addEventListener("click", () => { listMore(false); aggSheet(list); });
@@ -958,11 +1005,11 @@ function aggSheet(list, base = null) {
 
 /* ---------- 세대 보기 ---------- */
 ROUTES.unit = async (qq) => {
-  setTab("list");
+  setTab("places");
   const dong = qq.dong, ho = qq.ho || "";
   setHeader(`${dong} ${ho ? ho + "호" : ""}`);
   const all = PD().filter((d) => d.dong === dong && (ho ? (d.ho === ho || M.normHo(d.ho) === M.normHo(ho)) : !d.ho));
-  const onlyOpen = LS.get("unitOpen", true);
+  const onlyOpen = LS.get("unitOpen", true); const uView = LS.get("unitView", "photo") === "list" ? "list" : "photo";
   const list = onlyOpen ? all.filter(M.isOpen) : all;
   const groups = M.groupByTradeVendor(list, vName);
   // 제자리 다시 그리기·뒤로가기 때는 묶음 순서를 그대로(상태가 바뀌어 미조치 수가 달라져도 묶음이 자리를 바꾸지 않게)
@@ -974,15 +1021,16 @@ ROUTES.unit = async (qq) => {
   const ugOpen = (g) => (S.ugOpen.has(ugK(g)) ? S.ugOpen.get(ugK(g)) : ugDef);
   view().innerHTML = `
     <div class="unit-hd"><div><b>${n(all.filter(M.isOpen).length)}</b> 미조치 / ${n(all.length)}건 · 기한초과 ${all.filter((d) => M.isOverdue(d)).length}</div>
-      <div class="chips"><button type="button" class="chip ${onlyOpen ? "on" : ""}" data-o="1">미조치</button><button type="button" class="chip ${!onlyOpen ? "on" : ""}" data-o="0">전체</button></div></div>
+      <div class="chips"><button type="button" class="chip ${onlyOpen ? "on" : ""}" data-o="1">미조치</button><button type="button" class="chip ${!onlyOpen ? "on" : ""}" data-o="0">전체</button><span class="uv-sep"></span><button type="button" class="chip uv ${uView === "photo" ? "on" : ""}" data-uv="photo" aria-pressed="${uView === "photo"}">📷 사진</button><button type="button" class="chip uv ${uView === "list" ? "on" : ""}" data-uv="list" aria-pressed="${uView === "list"}">☰ 목록</button></div></div>
     <button type="button" class="btn btn-primary btn-block" id="btn-add">＋ 이 세대에 하자 등록</button>
     ${groups.length > 1 ? `<div class="lg-bar" id="ug-bar"><span class="help">업체 묶음 ${groups.length}개</span><span class="sp"></span><button type="button" class="btn btn-sm" id="ug-openall">모두 펼치기</button><button type="button" class="btn btn-sm" id="ug-closeall">모두 접기</button></div>` : ""}
     ${groups.map((g, gi) => { const op = ugOpen(g); const openN = g.items.filter(M.isOpen).length;
       return `<details class="group lgrp vgrp ugrp" data-uk="${esc(gKey(g))}" ${op ? "open" : ""}><summary class="grp-hd"><label class="gchk" title="이 묶음 전체 선택"><input type="checkbox" data-gall="${g.items.map((d) => d.id).join(",")}" data-gi="${gi}" aria-label="${esc(g.trade)} · ${esc(g.vendor)} 전체 선택"><span>전체</span></label><div class="grp-tt"><b>${esc(g.trade)}</b> · ${esc(g.vendor)} <span class="help">${g.items.length}건${openN !== g.items.length ? ` · 미조치 ${openN}` : ""}</span></div>
-      <button type="button" class="btn btn-sm btn-primary" data-g="${gi}">보내기</button></summary>${g.items.map((d) => defectCard(d, { sel: true })).join("")}</details>`; }).join("") ||
+      <button type="button" class="btn btn-sm btn-primary" data-g="${gi}">보내기</button></summary>${g.items.map((d) => defectCard(d, { sel: true, photo: uView === "photo" })).join("")}</details>`; }).join("") ||
       `<div class="card empty-card"><p>${onlyOpen ? "미조치 하자가 없어요 👍" : "등록된 하자가 없어요."}</p></div>`}
     ${selBarHtml()}`;
-  bindCards(); bindSelBar();
+  bindCards(); bindSelBar(); hydrateThumbs();
+  $$("[data-uv]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("unitView", b.dataset.uv); rerender(); }));
   $$("[data-gall]", view()).forEach((g) => g.addEventListener("change", () => { const ids = g.dataset.gall.split(","); const on = g.checked; for (const x of ids) S.select[on ? "add" : "delete"](x); syncChecks(); }));
   syncChecks();
   $("#btn-add").addEventListener("click", () => { startDraft({ dong, ho, floor: M.floorOfHo(ho) }); go("#/new"); });
@@ -1014,69 +1062,107 @@ function commonGroups(list) {
 }
 /* ---------- 1.3.5 하자위치(전체 위치 한눈에): 동 · 단지 공용(지하주차장·부대시설·조경 등) ---------- */
 const phOf = (l) => l.filter((d) => M.photoMissing(d, "none")).length;
+const LOC_KEYS = ["dong", "x_dong", "common", "floor", "x_floor", "core", "x_core", "ho", "room"];
+const stripLoc = (f) => Object.fromEntries(Object.entries(f || {}).filter(([k]) => !LOC_KEYS.includes(k)));
+const HV_PAL = ["", "hv1", "hv2", "hv3", "hv4"];
+/** 1.3.6 상대 히트맵: 같은 화면 칸끼리 비교해 4단계(적으면 단계 수가 줄어듦). 0건은 색 없음 */
+function relScale(vals) {
+  const pos = vals.filter((v) => v > 0).sort((a, b) => a - b); const dist = [...new Set(pos)];
+  if (!dist.length) return { n: 0, cuts: [], lv: () => 0, cls: () => "", legend: [] };
+  let cuts;
+  if (dist.length <= 4) cuts = dist.slice(0, -1);
+  else { const q = (p) => pos[Math.min(pos.length - 1, Math.floor(p * pos.length))]; cuts = [...new Set([q(0.25), q(0.5), q(0.75)])].filter((c) => c < dist[dist.length - 1]); if (cuts.length < 3) cuts = [dist[Math.floor(dist.length * 0.25)], dist[Math.floor(dist.length * 0.5)], dist[Math.floor(dist.length * 0.75)]].filter((c, i, a) => c < dist[dist.length - 1] && a.indexOf(c) === i); }
+  const nL = cuts.length + 1; const lv = (v) => (v <= 0 ? 0 : 1 + cuts.filter((c) => v > c).length);
+  const cls = (v) => { const l = lv(v); if (!l) return ""; const k = nL === 1 ? 3 : Math.round(1 + ((l - 1) * 3) / (nL - 1)); return HV_PAL[k]; };
+  const max = dist[dist.length - 1]; const legend = []; let lo = 1;
+  for (let i = 0; i < nL; i++) { const hi = i < cuts.length ? cuts[i] : max; legend.push({ cls: cls(hi), label: i === nL - 1 && nL > 1 ? `${lo}+` : lo === hi ? `${lo}` : `${lo}~${hi}` }); lo = hi + 1; }
+  return { n: nL, cuts, lv, cls, legend };
+}
+const hvLegendHtml = (sc, basisTxt) => `<div class="hv-legend" id="hv-legend" aria-label="건수 색 안내"><span class="pl-lt">건수</span><span class="hv-k"><i class="hv0"></i>0</span>${sc.legend.map((x) => `<span class="hv-k"><i class="${x.cls}"></i>${x.label}</span>`).join("")}<small>${basisTxt}</small></div>`;
 ROUTES.places = async () => {
-  setTab("more"); setHeader("하자위치", { backBtn: navDepth() > 1 });
-  const p = P(); const all = PD();
+  setTab("places"); setHeader("하자위치", { backBtn: false });
+  const p = P(); const allP = PD();
   if (!p.dongs.length && !sitePlaces().length) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
-  const th = M.heatThresholds(p, all); const openBasis = th.basis === "all" ? {} : { status: "_open" };
-  const dongCards = p.dongs.map((dg) => { const l = all.filter((d) => d.dong === dg.name); const un = l.filter((d) => d.ho), cm = l.filter((d) => !d.ho);
-    return { name: dg.name, uo: un.filter(M.isOpen).length, ua: un.length, co: cm.filter(M.isOpen).length, ca: cm.length, ph: phOf(l), pills: phPills(l), od: l.some((d) => M.isOverdue(d)) }; });
+  const nf = stripLoc(S.filter); const nfN = M.filterCount(nf); const all = nfN ? M.applyFilter(allP, nf, { vendorName: vName }) : allP;
+  const th = M.heatThresholds(p, allP); const allBasis = nf.status && nf.status !== "_open" ? true : th.basis === "all" && !nfN;
+  const cntOf = (o, a) => (allBasis ? a : o);
+  const openBasis = nf.status ? {} : { status: "_open" };
+  const dongCards = p.dongs.map((dg) => { const l = all.filter((d) => d.dong === dg.name), un = l.filter((d) => d.ho), cm = l.filter((d) => !d.ho);
+    return { name: dg.name, uo: un.filter(M.isOpen).length, ua: un.length, co: cm.filter(M.isOpen).length, ca: cm.length, pills: phPills(l), od: l.some((d) => M.isOverdue(d)) }; });
   const siteItems = all.filter((d) => !M.locParts(d).dong); const sg = new Map();
   for (const d of siteItems) { const nm = M.commonOf(d) || "기타(위치 미지정)"; const g = sg.get(nm) || { name: nm, l: [] }; g.l.push(d); sg.set(nm, g); }
   for (const nm of sitePlaces()) if (!sg.has(nm)) sg.set(nm, { name: nm, l: [] });
-  const sites = [...sg.values()].map((g) => ({ name: g.name, o: g.l.filter(M.isOpen).length, a: g.l.length, ph: phOf(g.l), pills: phPills(g.l), od: g.l.some((d) => M.isOverdue(d)) })).filter((g) => g.name !== "기타(위치 미지정)" || g.a).sort((a, b) => (a.name === "기타(위치 미지정)") - (b.name === "기타(위치 미지정)") || b.a - a.a || a.name.localeCompare(b.name, "ko"));
-  
+  const sites = [...sg.values()].map((g) => ({ name: g.name, o: g.l.filter(M.isOpen).length, a: g.l.length, pills: phPills(g.l), od: g.l.some((d) => M.isOverdue(d)) })).filter((g) => g.name !== "기타(위치 미지정)" || g.a).sort((a, b) => (a.name === "기타(위치 미지정)") - (b.name === "기타(위치 미지정)") || b.a - a.a || a.name.localeCompare(b.name, "ko"));
+  const val = { d: (c) => cntOf(c.uo + c.co, c.ua + c.ca), s: (c) => cntOf(c.o, c.a) };
+  const sc = relScale([...dongCards.map(val.d), ...sites.map(val.s)]);
   view().innerHTML = `<div class="places">
+    <form class="search" id="pl-search" role="search"><input class="inp" id="pl-q" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="검색"><button class="btn btn-primary" type="submit">검색</button><button class="btn" type="button" id="pl-filter">필터${nfN ? ` <b>${nfN}</b>` : ""}</button></form>
+    ${presets().length ? presetRowHtml("home") : ""}
+    ${nfN ? `<div class="pl-fon" id="pl-fon"><span>🔎 필터 ${nfN}개 적용 중 — 카드 숫자는 이 조건 기준이에요</span><button type="button" class="btn btn-sm" id="pl-fclr">해제</button></div>` : ""}
+    <button type="button" class="btn btn-block pl-allbtn" id="pl-viewall">📋 전체 보기 <small>${n(all.length)}건 · 미조치 ${n(all.filter(M.isOpen).length)}</small> <span class="chev">›</span></button>
     <p class="help pl-sum">전체 ${n(all.length)}건 · 미조치 ${n(all.filter(M.isOpen).length)} · <span class="pl-ph">📷 사진 없음 ${n(phOf(all))}</span></p>
+    ${hvLegendHtml(sc, allBasis ? "전체 건수 기준" : "미조치 건수 기준")}
     ${photoLegendHtml(phCounts(all))}
     <h3 class="sec">동 <small>세대 미조치/전체 · 공용부</small></h3>
-    <div class="pl-grid" id="pl-dongs">${dongCards.map((c) => `<div class="pl-card ${c.uo ? "has" : c.ua ? "clean" : "zero"} ${c.od ? "od" : ""}" data-pcard="${esc(c.name)}"><button type="button" class="pl-hit" data-pd="${esc(c.name)}" aria-label="${esc(c.name)} 하자 목록 · 세대 미조치 ${c.uo}건 전체 ${c.ua}건 공용부 ${c.ca}건"><span class="pl-n">${esc(c.name)}</span><b>${n(c.uo)}<small> / ${n(c.ua)}</small></b><span class="pl-s">세대 미조치/전체</span><span class="pl-c">공용부 ${n(c.co)}/${n(c.ca)}</span>${c.pills}</button><button type="button" class="pl-sub" data-pg="${esc(c.name)}" aria-label="${esc(c.name)} 층·호 칸 보기">▦ 층·호</button></div>`).join("")}</div>
+    <div class="pl-grid" id="pl-dongs">${dongCards.map((c) => `<div class="pl-card ${sc.cls(val.d(c))} ${c.uo || c.co ? "has" : "zero"} ${c.od ? "od" : ""}" data-pcard="${esc(c.name)}"><button type="button" class="pl-hit" data-pd="${esc(c.name)}" aria-label="${esc(c.name)} 세대별 보기 · 세대 미조치 ${c.uo}건 전체 ${c.ua}건 공용부 ${c.ca}건"><span class="pl-n">${esc(c.name)}</span><b class="${String(n(c.uo)).length + String(n(c.ua)).length > 7 ? "pl-big" : ""}">${n(c.uo)}<small> / ${n(c.ua)}</small></b><span class="pl-s">세대 미조치/전체</span><span class="pl-c">공용부 ${n(c.co)}/${n(c.ca)}</span>${c.pills}</button><button type="button" class="pl-sub" data-pl="${esc(c.name)}" aria-label="${esc(c.name)} 하자 카드 목록">📋 하자 ${n(c.ua + c.ca)}건 목록</button></div>`).join("")}</div>
     <h3 class="sec">단지 공용 <small>지하주차장 · 부대시설 · 조경 · 외부 등</small></h3>
-    <div class="pl-grid" id="pl-sites">${sites.map((c) => `<button type="button" class="pl-card site ${c.o ? "has" : c.a ? "clean" : "zero"} ${c.od ? "od" : ""}" data-ps="${esc(c.name)}" aria-label="${esc(c.name)} 미조치 ${c.o}건 전체 ${c.a}건"><span class="pl-n">${esc(c.name)}</span><b>${n(c.o)}<small> / ${n(c.a)}</small></b><span class="pl-s">미조치/전체</span>${c.pills}</button>`).join("")}</div>
+    <div class="pl-grid" id="pl-sites">${sites.map((c) => `<button type="button" class="pl-card site ${sc.cls(val.s(c))} ${c.o ? "has" : "zero"} ${c.od ? "od" : ""}" data-ps="${esc(c.name)}" aria-label="${esc(c.name)} 미조치 ${c.o}건 전체 ${c.a}건"><span class="pl-n">${esc(c.name)}</span><b>${n(c.o)}<small> / ${n(c.a)}</small></b><span class="pl-s">미조치/전체</span>${c.pills}</button>`).join("")}</div>
     ${verFoot()}</div>`;
-  bindVerFoot();
-  $$("[data-pd]", view()).forEach((b) => b.addEventListener("click", () => { const c = dongCards.find((x) => x.name === b.dataset.pd); S.filter = { dong: b.dataset.pd, ...(c?.uo || c?.co ? openBasis : {}) }; LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
-  $$("[data-pg]", view()).forEach((b) => b.addEventListener("click", () => go(`#/grid?dong=${encodeURIComponent(b.dataset.pg)}`)));
-  $$("[data-ps]", view()).forEach((b) => b.addEventListener("click", () => { const g = sites.find((x) => x.name === b.dataset.ps); S.filter = { dong: ["_none"], common: b.dataset.ps === "기타(위치 미지정)" ? "_any" : b.dataset.ps, ...(g?.o ? openBasis : {}) }; LS.set("filter", S.filter); go("#/list"); }));
+  bindVerFoot(); bindPresetRow(view());
+  const ex = $("#pl-q"); if (ex) { const e0 = ex.dataset.phEx, ph = ex.placeholder; ex.addEventListener("focus", () => { ex.placeholder = e0; }); ex.addEventListener("blur", () => { ex.placeholder = ph; }); }
+  $("#pl-search").addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#pl-q").value); });
+  $("#pl-filter").addEventListener("click", () => filterSheet({ prefill: true }));
+  $("#pl-fclr")?.addEventListener("click", () => { S.filter = {}; LS.set("filter", {}); rerender(); });
+  $("#pl-viewall").addEventListener("click", () => { S.filter = nf; LS.set("filter", nf); S.listMode = "list"; go("#/list"); });
+  const goList = (f) => { S.filter = f; LS.set("filter", f); S.listMode = "list"; go("#/list"); };
+  $$("[data-pd]", view()).forEach((b) => b.addEventListener("click", () => go(`#/grid?dong=${encodeURIComponent(b.dataset.pd)}`)));
+  $$("[data-pl]", view()).forEach((b) => b.addEventListener("click", () => { const c = dongCards.find((x) => x.name === b.dataset.pl); goList({ ...nf, dong: b.dataset.pl, ...(c?.uo || c?.co ? openBasis : {}) }); }));
+  $$("[data-ps]", view()).forEach((b) => b.addEventListener("click", () => { const g = sites.find((x) => x.name === b.dataset.ps); goList({ ...nf, dong: ["_none"], common: b.dataset.ps === "기타(위치 미지정)" ? "_any" : b.dataset.ps, ...(g?.o ? openBasis : {}) }); }));
 };
 ROUTES.grid = async (qq) => {
-  setTab("more");
-  const p = P(); const dong = p.dongs.find((d) => d.name === qq.dong) || p.dongs[0];
+  setTab("places");
+  const p = P(); const dong = p.dongs.find((d) => d.name === qq.dong) || p.dongs[0]; const siteMode = !!qq.site;
   setHeader("하자위치");
-  if (!dong) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
-  const list = PD().filter((d) => d.dong === dong.name);
-  const by = new Map(); for (const d of list) { if (!d.ho) continue; const k = M.normHo(d.ho) || d.ho; const m = by.get(k) || { open: 0, all: 0, od: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d)) m.od++; by.set(k, m); }
-  const th = M.heatThresholds(p, PD()); const cnt = (m) => (th.basis === "all" ? m.all : m.open);
-  const floors = []; for (let f = dong.floors; f >= (dong.unitStart || 1); f--) if (M.unitsOf(dong, String(f)).length) floors.push(f);
-  const lines = M.linesOf(dong);
+  if (!dong && !siteMode) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
+  const nfG = stripLoc(S.filter); const xk = Object.keys(nfG).filter((k) => !["status", "hideDone", "exw"].includes(k) && (Array.isArray(nfG[k]) ? nfG[k].length : nfG[k]));
+  const gAll = xk.length ? M.applyFilter(PD(), (({ status, hideDone, ...r }) => r)(nfG), { vendorName: vName }) : PD();
+  const list = dong ? gAll.filter((d) => d.dong === dong.name) : [];
+  const by = new Map(); if (!siteMode) for (const d of list) { if (!d.ho) continue; const k = M.normHo(d.ho) || d.ho; const m = by.get(k) || { open: 0, all: 0, od: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d)) m.od++; by.set(k, m); }
+  const th = M.heatThresholds(p, gAll); const cnt = (m) => (th.basis === "all" ? m.all : m.open);
+  const floors = []; if (dong && !siteMode) for (let f = dong.floors; f >= (dong.unitStart || 1); f--) if (M.unitsOf(dong, String(f)).length) floors.push(f);
+  const lines = dong ? M.linesOf(dong) : [];
   const common = list.filter((d) => !d.ho);
   /* 1.3.4 공용 하자를 동 현황 위쪽에: 이 동의 공용부(호수 없는 하자) · 단지 공용(동 없는 하자: 지하주차장·부대시설 등) — 미조치/전체, 누르면 해당 목록 */
   const cnum = (g) => (th.basis === "all" ? g.all : g.open);
-  const commonZone = `<details class="cm-zone" id="cm-dong" ${common.length ? "open" : ""}><summary><b>${esc(dong.name)} 공용부</b> <small>계단실·복도·EV홀·필로티·옥상 등 · 미조치 ${common.filter(M.isOpen).length} / 전체 ${common.length}건</small></summary>
+  const commonZone = siteMode || !dong ? "" : `<details class="cm-zone" id="cm-dong" ${common.length ? "open" : ""}><summary><b>${esc(dong.name)} 공용부</b> <small>계단실·복도·EV홀·필로티·옥상 등 · 미조치 ${common.filter(M.isOpen).length} / 전체 ${common.length}건</small></summary>
     ${common.length ? `<div class="cm-all"><button type="button" class="btn btn-sm" id="cm-dong-all">${esc(dong.name)} 공용부 전체 목록 ›</button></div>` : ""}
     <div class="cgrid" id="cgrid">${commonGroups(common).map((g) => { const n = cnum(g); const lv = M.heatLevel(n, th);
       return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""}" data-cm="${esc(g.common)}" data-cf="${esc(g.floor)}" aria-label="${esc(g.label)} ${n}건"><span>${esc(g.label)}</span><b>${n}</b><small>${g.all}건${g.sub ? " · " + esc(g.sub) : ""}</small></button>`; }).join("") || '<p class="help">공용부 하자 없음 — 등록할 때 위치에서 동을 고른 뒤 ‘공용부’를 선택하세요.</p>'}</div></details>`;
-  const siteItems = PD().filter((d) => !M.locParts(d).dong); const sg = new Map();
+  const siteItems = gAll.filter((d) => !M.locParts(d).dong); const sg = new Map();
   for (const d of siteItems) { const nm = M.commonOf(d) || "기타(위치 미지정)"; const g = sg.get(nm) || { name: nm, all: 0, open: 0, od: 0 }; g.all++; if (M.isOpen(d)) g.open++; if (M.isOverdue(d)) g.od++; sg.set(nm, g); }
   for (const nm of sitePlaces()) if (!sg.has(nm)) sg.set(nm, { name: nm, all: 0, open: 0, od: 0 });
   const sgl = [...sg.values()].sort((a, b) => b.all - a.all || a.name.localeCompare(b.name, "ko"));
-  const siteZone = `<details class="cm-zone cm-site" id="cm-site" ${siteItems.length ? "open" : ""}><summary><b>단지 공용</b> <small>지하주차장·부대시설 등 동과 상관없는 곳 · 미조치 ${siteItems.filter(M.isOpen).length} / 전체 ${siteItems.length}건</small></summary>
+  const siteZone = !siteMode ? "" : `<div class="cm-zone cm-site" id="cm-site"><div class="cm-sum"><b>단지 공용</b> <small>지하주차장·부대시설 등 동과 상관없는 곳 · 미조치 ${siteItems.filter(M.isOpen).length} / 전체 ${siteItems.length}건</small></div>
     ${siteItems.length ? `<div class="cm-all"><button type="button" class="btn btn-sm" id="cm-site-all">단지 공용 전체 목록 ›</button></div>` : ""}
     <div class="cgrid" id="sgrid">${sgl.map((g) => { const n = cnum(g); const lv = M.heatLevel(n, th);
-      return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""} ${g.all ? "" : "zero"}" data-site="${esc(g.name)}" aria-label="${esc(g.name)} 미조치 ${g.open}건 전체 ${g.all}건"><span>${esc(g.name)}</span><b>${n}</b><small>미조치 ${g.open} / 전체 ${g.all}</small></button>`; }).join("")}</div></details>`;
+      return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""} ${g.all ? "" : "zero"}" data-site="${esc(g.name)}" aria-label="${esc(g.name)} 미조치 ${g.open}건 전체 ${g.all}건"><span>${esc(g.name)}</span><b>${n}</b><small>미조치 ${g.open} / 전체 ${g.all}</small></button>`; }).join("")}</div></div>`;
   view().innerHTML = `
-    <div class="chips wrap dong-chips">${p.dongs.map((d) => `<button type="button" class="chip ${d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div>
-    <div class="list-hd"><b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="pl-all">▦ 전체 위치</button></div>
+    <div class="chips wrap dong-chips">${p.dongs.map((d) => `<button type="button" class="chip ${!siteMode && d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}<button type="button" class="chip chip-site ${siteMode ? "on" : ""}" id="chip-site" aria-pressed="${siteMode}">단지 공용</button></div>
+    <div class="list-hd">${siteMode ? `<b>단지 공용</b><span class="help">지하주차장·부대시설 등</span>` : `<b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span>`}<span class="sp"></span>${siteMode ? "" : `<button type="button" class="btn btn-sm" id="g-list">📋 이 동 하자 목록</button>`}<button type="button" class="btn btn-sm" id="pl-all">▦ 전체 위치</button></div>
     ${commonZone}${siteZone}
+    ${xk.length ? `<div class="pl-fon"><span>🔎 필터 ${xk.length}개 적용 중 — 칸 색·숫자는 이 조건 기준이에요</span><button type="button" class="btn btn-sm" id="g-fclr">해제</button></div>` : ""}
     ${heatLegendHtml(th)}
-    <div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => { const us = new Set(M.unitsOf(dong, String(f))); return `<div class="hf">${f}F</div>` + lines.map((l) => String(f * 100 + l)).map((ho) => {
+    ${siteMode ? "" : `<div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => { const us = new Set(M.unitsOf(dong, String(f))); return `<div class="hf">${f}F</div>` + lines.map((l) => String(f * 100 + l)).map((ho) => {
       if (!us.has(ho)) return `<span class="hc hx" aria-hidden="true"></span>`;
       const m = by.get(ho) || { open: 0, all: 0, od: 0 }; const n = cnt(m); const lv = M.heatLevel(n, th);
       return `<button type="button" class="hc h${lv} ${m.od ? "od" : ""} ${m.all && !m.open && th.basis !== "all" ? "done" : ""}" data-ho="${ho}" data-n="${n}" data-lv="${lv}" aria-label="${ho}호 ${th.basis === "all" ? "전체" : "미조치"} ${n}건"><span>${ho}</span>${m.all ? `<b>${n}</b>` : ""}</button>`;
-    }).join(""); }).join("")}</div>
-    ${common.slice(0, 30).map((d) => defectCard(d)).join("")}`;
+    }).join(""); }).join("")}</div>`}
+    ${siteMode ? "" : common.slice(0, 30).map((d) => defectCard(d)).join("")}`;
   bindCards();
   $("#pl-all", view()).addEventListener("click", () => go("#/places"));
+  $("#chip-site", view()).addEventListener("click", () => replace("#/grid?site=1"));
+  $("#g-list", view())?.addEventListener("click", () => { S.filter = { ...stripLoc(S.filter), dong: dong.name, ...(th.basis === "all" || nfG.status ? {} : { status: "_open" }) }; LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); });
+  $("#g-fclr", view())?.addEventListener("click", () => { S.filter = {}; LS.set("filter", {}); rerender(); });
   $$("[data-d]", view()).forEach((b) => b.addEventListener("click", () => replace(`#/grid?dong=${encodeURIComponent(b.dataset.d)}`)));
   $$("[data-ho]", view()).forEach((b) => b.addEventListener("click", () => go(`#/unit?dong=${encodeURIComponent(dong.name)}&ho=${b.dataset.ho}`)));
   $$("[data-cm]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = { dong: dong.name, common: b.dataset.cm || "_bare", ...(b.dataset.cm ? {} : { floor: b.dataset.cf || "_none" }), ...(th.basis === "all" ? {} : { status: "_open" }) }; LS.set("filter", S.filter); go("#/list"); }));
