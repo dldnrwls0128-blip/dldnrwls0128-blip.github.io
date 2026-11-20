@@ -201,6 +201,10 @@ export function facetMatch(d, k, v) {
     default: return v === "_none" ? !d[k] : d[k] === v;
   }
 }
+/** 1.3.6 사진 유무 필터용: 앱이 하자별 사진 수({before, after})를 알려 줌 */
+let PHOTO_N = () => ({ before: 1, after: 1 }); export const setPhotoCounter = (fn) => { PHOTO_N = fn || (() => ({ before: 1, after: 1 })); };
+/** 사진 없음: 조치 전 사진이 없음(none) · 조치 후 사진이 없음(noafter: 조치완료·확인완료인데 후 사진 없음) */
+export const photoMissing = (d, kind = "none") => { const c = PHOTO_N(d) || { before: 0, after: 0 }; return kind === "noafter" ? DONE_STATUSES.has(d.status) && !c.after : !c.before; };
 export function applyFilter(list, f = {}, ctx = {}) {
   const today = todayStr();
   const text = (f.text || "").trim().toLowerCase();
@@ -217,6 +221,7 @@ export function applyFilter(list, f = {}, ctx = {}) {
     if (f.chain && !hasSteps(d)) return false;
     if (f.mine && !isMyTurn(d)) return false;
     if (f.overdue && !isOverdue(d, today)) return false;
+    if (f.photo && !photoMissing(d, f.photo)) return false;
     if (f.hideDone && DONE_STATUSES.has(d.status)) return false;
     if (f.from && localDay(d.createdAt) < f.from) return false;
     if (f.to && localDay(d.createdAt) > f.to) return false;
@@ -245,7 +250,7 @@ export const viewOpen = (f = {}) => viewOpenCount(f) > 0;
 export const filterCountUi = (f = {}) => Math.max(0, filterCount(f) - viewOpenCount(f));
 export const hasEx = (f = {}) => exFilterCount(f) > 0 || !!f.hideDone;
 export const exFilterCount = (f) => fArr(f.exw).length + EX_KEYS.reduce((a, k) => a + fArr(f[k]).length, 0);
-export const filterCount = (f) => exFilterCount(f) + [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "hideDone", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
+export const filterCount = (f) => exFilterCount(f) + [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "photo", "hideDone", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
 
 export function countBy(list, key) {
   const m = new Map();
@@ -568,7 +573,7 @@ export function planMatches(plan, dong, floor) {
   });
 }
 
-/* ---------- 동현황 색 기준(현장별 설정: project.heat) ---------- */
+/* ---------- 하자위치 색 기준(현장별 설정: project.heat) ---------- */
 export const HEAT_DEFAULT = { mode: "auto", basis: "open", low: 3, high: 10 };
 export const heatCfg = (p) => ({ ...HEAT_DEFAULT, ...(p?.heat || {}) });
 /** 세대 하자 수(기준: open=미조치만, all=전체) — ho가 있는 건만 */

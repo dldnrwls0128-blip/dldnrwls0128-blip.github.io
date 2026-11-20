@@ -22,17 +22,25 @@ export function drawStamp(ctx, w, h, info) {
   const FONT = '"Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif';
   const fit = (t, max, weight, size) => { ctx.font = `${weight} ${size}px ${FONT}`; if (ctx.measureText(t).width <= max) return t; let a = t; while (a.length > 1 && ctx.measureText(a + "…").width > max) a = a.slice(0, -1); return a + "…"; };
   const inner = w - pad * 2;
+  /** 내용: 최대 2줄로 줄바꿈하고 넘치면 말줄임 */
+  const wrap = (t, max, weight, size, maxLines) => { if (!t) return []; ctx.font = `${weight} ${size}px ${FONT}`; const out = []; let cur = "";
+    for (const ch of t) { if (ctx.measureText(cur + ch).width > max && cur) { out.push(cur); cur = ch.trim() ? ch : ""; if (out.length === maxLines) break; } else cur += ch; }
+    if (out.length < maxLines && cur) out.push(cur);
+    else if (out.length === maxLines && (cur || t.length > out.join("").length)) { let l = out[maxLines - 1]; const rest = t.slice(out.join("").length); if (rest.trim()) { while (l.length > 1 && ctx.measureText(l + "…").width > max) l = l.slice(0, -1); out[maxLines - 1] = l + "…"; } }
+    return out; };
   const tagW = info.tag ? (ctx.font = `800 ${fs}px ${FONT}`, ctx.measureText(info.tag).width + pad * 1.6) : 0;
   const lines = [
     { t: info.loc || "", wgt: 800, size: Math.round(fs * 1.08), max: inner - (tagW ? tagW + pad : 0) },
-    { t: [info.work, info.project].filter(Boolean).join("  ·  "), wgt: 600, size: fs, max: inner },
-    { t: info.at || "", wgt: 500, size: Math.round(fs * 0.92), max: inner },
+    { t: info.work || "", wgt: 600, size: fs, max: inner },
+    ...wrap(info.content || "", inner, 500, Math.round(fs * 0.96), 2).map((t) => ({ t, wgt: 500, size: Math.round(fs * 0.96), max: inner, raw: true })),
+    { t: info.project || "", wgt: 500, size: Math.round(fs * 0.92), max: inner },
+    { t: info.at || "", wgt: 500, size: Math.round(fs * 0.86), max: inner },
   ].filter((l) => l.t);
   const bh = pad * 2 + lines.reduce((a, l) => a + Math.round(l.size * 1.32), 0);
   ctx.save();
   ctx.fillStyle = "rgba(0,0,0,0.62)"; ctx.fillRect(0, h - bh, w, bh);
   ctx.textBaseline = "alphabetic"; let y = h - bh + pad;
-  lines.forEach((l) => { y += Math.round(l.size * 1.1); ctx.fillStyle = "#fff"; ctx.font = `${l.wgt} ${l.size}px ${FONT}`; ctx.fillText(fit(l.t, l.max, l.wgt, l.size), pad, y); y += Math.round(l.size * 0.22); });
+  lines.forEach((l) => { y += Math.round(l.size * 1.1); ctx.fillStyle = "#fff"; ctx.font = `${l.wgt} ${l.size}px ${FONT}`; ctx.fillText(l.raw ? l.t : fit(l.t, l.max, l.wgt, l.size), pad, y); y += Math.round(l.size * 0.22); });
   if (info.tag) { // 오른쪽 위 배지: 조치 전(주황)·조치 후(초록)
     const bx = w - pad - tagW, by = h - bh + pad * 0.7, bhh = Math.round(fs * 1.5);
     ctx.fillStyle = /후/.test(info.tag) ? "#15803d" : "#c2410c";

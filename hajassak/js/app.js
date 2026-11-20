@@ -2,7 +2,7 @@
 import * as db from "./db.js";
 import * as M from "./model.js";
 import { $, $$, esc, n, toast, busy, initNav, go, replace, back, rerender, navDepth, navKind, pushLayer, closeLayer, unwind, openSheet, ask, prompt2, choose, pickFile } from "./ui.js";
-import { compressImage, downloadBlob, shareOrDownload, stampBlob } from "./photo.js";
+import { compressImage, downloadBlob, shareOrDownload, stampBlob, drawStamp } from "./photo.js";
 import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactPickerSupported, contactPickerInfo, pickContacts, canShareFiles } from "./share.js";
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
@@ -26,6 +26,7 @@ const V = (id) => S.vendors.find((v) => v.id === id) || null;
 const vLabel = (id) => { const v = V(id); if (v) return v.name; const d = id && S.defects.find((x) => x.vendorId === id && x.vendorName); return d ? d.vendorName : "업체 정보 받는 중"; };
 const vName = (d) => V(d.vendorId)?.name || d.vendorName || "";
 const photoCount = (d) => S.pidx.get(d.id) || { before: 0, after: 0 };
+M.setPhotoCounter(photoCount); // 1.3.6 ‘사진 없음’ 필터
 const view = () => $("#view");
 const q = () => Object.fromEntries(new URLSearchParams((location.hash.split("?")[1] || "")));
 const pill = (s) => `<span class="pill ${M.STATUS_CLS[s] || ""}">${esc(s)}</span>`;
@@ -34,7 +35,7 @@ const fmtDT = (iso) => { const d = new Date(iso); return `${M.todayStr(d)} ${Str
 const shortDate = (s) => (s ? s.slice(5).replace("-", "/") : "");
 
 /** 화면별 ‘?’ → 사용법의 해당 부분 */
-const HELP_OF = { new: "add", edit: "add", unit: "add", item: "status", list: "grid", grid: "grid", dash: "grid", vendors: "vendors", vendor: "send", "vendor-edit": "vendors", settings: "settings", project: "plans", import: "excel", imported: "excel", restore: "excel", sync: "team", wizard: "start", lists: "plans" };
+const HELP_OF = { places: "grid", new: "add", edit: "add", unit: "add", item: "status", list: "grid", grid: "grid", dash: "grid", vendors: "vendors", vendor: "send", "vendor-edit": "vendors", settings: "settings", photos: "add", more: "settings", project: "plans", import: "excel", imported: "excel", restore: "excel", sync: "team", wizard: "start", lists: "plans" };
 function setHeader(title, { backBtn = navDepth() > 1, action = "", help } = {}) {
   $("#header-title").textContent = title;
   $("#btn-back").hidden = !backBtn;
@@ -82,7 +83,7 @@ async function addPhotos(defectId, files, kind, stampBase, extra = {}) {
   for (const f of files) {
     try {
       const at = new Date().toISOString();
-      const on = stampOn();
+      const on = burnOn();
       const { blob, thumb, w, h } = await compressImage(f, { stamp: on ? stampInfo(stampBase, kind, at) : null });
       await db.put("photos", { id: M.uid("ph"), defectId, kind, blob, thumb, w, h, at, stamp: on ? "1" : "0", ...extra });
       const m = S.pidx.get(defectId) || { before: 0, after: 0 }; m[kind === "after" ? "after" : "before"]++; S.pidx.set(defectId, m); ok++;
@@ -92,11 +93,16 @@ async function addPhotos(defectId, files, kind, stampBase, extra = {}) {
 }
 /** 사진 스탬프: 설정(기본 켬)·내용. stampOf(d)는 하자 기준 정보, stampInfo로 조치 전/후·일시를 붙인다 */
 const stampOn = () => LS.get("stampPhotos", true) !== false;
-const stampOf = (d) => ({ project: P()?.name || "", loc: M.locText(d) || "위치 미지정", work: [M.tradeText(d), d.type].filter(Boolean).join(" · ") });
-const stampInfo = (base, kind, at) => ({ ...base, tag: kind === "after" ? "조치 후" : "조치 전", at: fmtDT(at) });
-/** 보내기·내보내기용 사진: 스탬프 없이 찍은 사진은(설정이 켜져 있으면) 이때 새긴 사본을 쓴다 */
-async function photoOut(ph, d) {
-  if (ph.stamp !== "0" || !stampOn()) return ph.blob;
+/** 1.3.6 띠 방식: "export"(기본) 원본은 그대로 두고 보낼 때만 띠를 합성 · "burn" 찍을 때 사진에 새김. 띠에 넣을 항목은 설정에서 켜고 끔 */
+const stampMode = () => (LS.get("stampMode", "export") === "burn" ? "burn" : "export");
+const burnOn = () => stampOn() && stampMode() === "burn";
+const STAMP_DEF = { loc: true, work: true, content: true, project: true, at: true, tag: true };
+const stampOpts = () => ({ ...STAMP_DEF, ...(LS.get("stampOpts", {}) || {}) });
+const stampOf = (d) => ({ project: P()?.name || "", loc: M.locText(d) || "위치 미지정", work: [M.tradeText(d), d.type].filter(Boolean).join(" · "), content: (() => { const c = (d.content || "").replace(/\s+/g, " ").trim(); return !c || c === (d.type || "").trim() ? "" : c.slice(0, 120); })() });
+const stampInfo = (base, kind, at) => { const o = stampOpts(); return { project: o.project ? base.project : "", loc: o.loc ? base.loc : "", work: o.work ? base.work : "", content: o.content ? base.content || "" : "", tag: o.tag ? (kind === "after" ? "조치 후" : "조치 전") : "", at: o.at ? fmtDT(at) : "" }; };
+/** 보내기·내보내기용 사진: 띠 없이 저장된 사진은(설정이 켜져 있으면, force면 항상) 이때 띠를 합성한 사본을 쓴다. 저장된 원본은 그대로 */
+async function photoOut(ph, d, { force = false } = {}) {
+  if (ph.stamp !== "0" || (!force && !stampOn())) return ph.blob;
   try { return await stampBlob(ph.blob, stampInfo(stampOf(d), ph.kind, ph.at)); } catch { return ph.blob; }
 }
 
@@ -182,14 +188,31 @@ ROUTES.onboard = async (qq) => {
 /* ---------- 카드 ---------- */
 function defectCard(d, { sel = false } = {}) {
   const pc = photoCount(d); const od = M.isOverdue(d); const on = sel && S.select.has(d.id);
-  return `<article class="dcard ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
+  return `<article class="dcard ${phState(d)} ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
     <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${pill(d.status)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기(복사해서 등록 등)" title="복사해서 등록 · 수정 …">⋯</button></div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
-      ${pc.before + pc.after ? `<span>📷${pc.before}${pc.after ? "/" + pc.after : ""}</span>` : ""}<span>${esc(d.category || "")}</span></div>
+      ${pc.before + pc.after ? `<span>📷${pc.before}${pc.after ? "/" + pc.after : ""}</span>` : ""}<span>${esc(d.category || "")}</span></div>${camBtn(d) ? `<div class="dc-cam">${camBtn(d)}</div>` : ""}
   </article>`;
+}
+/** 1.3.5 카드 색 = 사진 상태: 사진 없음(회색) · 조치 전만(주황) · 조치 후 있음(초록) */
+function phState(d) { const c = photoCount(d); return c.after > 0 ? "ph-after" : c.before > 0 ? "ph-before" : "ph-none"; }
+const PH_LABEL = { "ph-none": "사진 없음", "ph-before": "조치 전 사진만", "ph-after": "조치 후 사진 있음" };
+const PH_SHORT = { "ph-none": "없음", "ph-before": "조치 전만", "ph-after": "조치 후 있음" };
+function photoLegendHtml(counts = null, { short = false, extra = "" } = {}) { return `<div class="ph-legend" id="ph-legend" aria-label="카드 색 안내(사진 상태)"><span class="pl-lt">사진</span>${["ph-none", "ph-before", "ph-after"].map((k) => `<span class="pl-key ${k}"><i></i>${(short ? PH_SHORT : PH_LABEL)[k]}${counts ? ` <b>${n(counts[k])}</b>` : ""}</span>`).join("")}${extra}</div>`; }
+const phCounts = (l) => { const c = { "ph-none": 0, "ph-before": 0, "ph-after": 0 }; for (const d of l) c[phState(d)]++; return c; };
+const phPills = (l) => { const c = phCounts(l); return `<span class="pl-pc" title="사진 없음 · 조치 전만 · 조치 후 있음"><i class="pl-ph pc-n">${n(c["ph-none"])}</i><i class="pc-b">${n(c["ph-before"])}</i><i class="pc-a">${n(c["ph-after"])}</i></span>`; };
+/** 1.3.6 사진이 없으면 카드에서 바로 촬영: 조치 전 사진 없음 → 조치 전, 조치완료인데 후 사진 없음 → 조치 후 */
+function camKind(d) { return M.photoMissing(d, "none") ? "before" : M.photoMissing(d, "noafter") ? "after" : ""; }
+function camBtn(d) { const k = camKind(d); if (!k) return ""; return `<button type="button" class="dcam ${k === "before" ? "warn" : ""}" data-cam="${k}" aria-label="${k === "after" ? "조치 후" : "조치 전"} 사진 없음 — 바로 촬영">📷 ${k === "after" ? "조치 후 사진 없음" : "사진 없음"} · 촬영</button>`; }
+/** 카드·상세에서 한 장 찍어 저장 → 다음 사진 없는 건으로 이어 찍기 안내 */
+async function cardShoot(d, kind) {
+  const files = await pickFile("image/*", { capture: true, multiple: false }); if (!files.length) return;
+  busy(true, "사진 저장 중…"); await addPhotos(d.id, files, kind, stampOf(d)); busy(false); rerender();
+  const left = S.defects.filter((x) => x.projectId === d.projectId && x.id !== d.id && M.photoMissing(x, "none")).length;
+  toast(`${kind === "after" ? "조치 후" : "조치 전"} 사진 저장`, left ? { ms: 6000, action: `다음 ${left}건 이어 찍기 ›`, onAction: () => shootSheet({ items: PD(), kind: "before", from: d }) } : { ms: 2500 });
 }
 function bindCards(root = view()) {
   if (!root.__cardLp) { root.__cardLp = true; onLongPress(root, ".dcard", (c) => { const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardMenu(d); }); }
@@ -214,6 +237,8 @@ function bindCards(root = view()) {
     $(".dtag", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     $(".dmore", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardMenu(d); });
     $(".dmore", c)?.addEventListener("keydown", (e) => e.stopPropagation());
+    $(".dcam", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardShoot(d, e.currentTarget.dataset.cam); });
+    $(".dcam", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     const open = () => go(`#/item?id=${c.dataset.id}`);
     c.addEventListener("click", open);
     c.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === c) open(); });
@@ -381,7 +406,9 @@ ROUTES.home = async () => {
   const doing = list.filter((d) => d.status === "조치중").length; const mine = list.filter(M.isMyTurn).length;
   const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
   const rate = list.length ? Math.round((done / list.length) * 100) : 0;
+  const noPhHome = list.filter((d) => M.photoMissing(d, "none")).length; const noAfHome = list.filter((d) => M.photoMissing(d, "noafter")).length;
   view().innerHTML = `<div class="home2">
+    ${homeSyncHtml()}
     <form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>
     <section class="card home-stat">
       <div class="kpis">
@@ -393,29 +420,30 @@ ROUTES.home = async () => {
       <button type="button" class="rate" data-go="#/dash" aria-label="조치율 ${rate}% · 대시보드"><span class="rate-bar"><i style="width:${rate}%"></i></span><span class="rate-t">조치율 <b>${rate}%</b> · 전체 ${n(list.length)}건 · 오늘 ${todayN}건</span></button>
       ${od.length ? `<button type="button" class="od-alert" data-f='{"overdue":true}'>⏰ 기한초과 <b>${n(od.length)}건</b> 보기 ›</button>` : ""}
     </section>
+    ${presets().length ? presetRowHtml("home") : ""}
     <button type="button" class="btn btn-primary btn-xl" data-go="#/new">＋ 하자 등록</button>
-    <div class="actions4">
-      <button type="button" class="act" data-go="#/list"><span class="act-i">📋</span><b>목록</b><small>${n(open.length)}건 미조치</small></button>
-      <button type="button" class="act" data-go="#/grid"><span class="act-i">🏢</span><b>동현황</b><small>세대별 한눈에</small></button>
+    ${list.length ? `<section class="card home-photo" id="home-photo">
+      <div class="hp-hd"><b>📷 사진</b><button type="button" class="sec-link" data-go="#/photos">사진 모아보기 ›</button></div>
+      <div class="kpis hp-kpis"><button type="button" class="kpi ${noPhHome ? "warn" : "ok"}" data-f='{"photo":"none"}'><b>${n(noPhHome)}</b><span>사진 없음</span></button><button type="button" class="kpi" data-f='{"photo":"noafter"}'><b>${n(noAfHome)}</b><span>조치 후 없음</span></button></div>
+      ${noPhHome ? `<button type="button" class="btn btn-block btn-primary btn-lg" id="home-shoot">📷 사진 없는 하자 <b>${n(noPhHome)}건</b> · 연속 촬영 ›</button>` : `<p class="help ok-line">✓ 모든 하자에 사진이 있어요</p>`}
+    </section>` : ""}
+    <button type="button" class="btn btn-block home-places" id="home-places" data-go="#/places">🧱 <b>하자위치</b> <small>동 · 지하주차장 · 부대시설 한눈에</small> <span class="chev">›</span></button>
+    <div class="actions3">
       <button type="button" class="act" id="home-find"><span class="act-i">🔎</span><b>건수 찾기</b><small>업체·동·유형별</small></button>
       <button type="button" class="act" id="home-send"><span class="act-i">📲</span><b>요청서 보내기</b><small>${unsent ? `미전달 ${n(unsent)}건 · 업체 고르기` : "업체에 카톡·PDF·문자"}</small></button>
+      <button type="button" class="act" id="home-sendph"><span class="act-i">🖼</span><b>사진으로 보내기</b><small>띠 붙여 여러 장</small></button>
     </div>
-    <details class="more card" id="home-more"><summary>더보기 <small>대시보드 · 엑셀 · 현장 전환 · 사용법</small></summary>
-      <div class="more-list">
-        <button type="button" class="sitem" data-go="#/dash"><span class="si-ico">📊</span><span><b>대시보드</b><small>상태·업체·경과일 통계</small></span><span class="chev">›</span></button>
-        <button type="button" class="sitem" data-go="#/import"><span class="si-ico">📥</span><span><b>엑셀 가져오기</b><small>다른 시스템·엑셀 목록</small></span><span class="chev">›</span></button>
-        <button type="button" class="sitem" data-a="switch"><span class="si-ico">🔁</span><span><b>현장 전환 / 새 현장</b><small>${S.projects.length}개 현장</small></span><span class="chev">›</span></button>
-        <button type="button" class="sitem" data-go="#/help"><span class="si-ico">📘</span><span><b>사용법 보기</b><small>처음이라면 여기부터</small></span><span class="chev">›</span></button>
-      </div></details>
-    <h3 class="sec">최근 기록 <small>오늘 등록 ${todayN}건 · 전체 ${n(list.length)}건</small></h3>
+    <h3 class="sec">최근 기록 <small>오늘 등록 ${todayN}건 · 전체 ${n(list.length)}건</small>${recent.length ? `<button type="button" class="sec-link" data-go="#/list">전체 목록 ›</button>` : ""}</h3>
     ${recent.length ? recent.map((d) => defectCard(d)).join("") : `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-sm" data-go="#/help?s=add">등록하는 법 보기</button></div>`}
-    ${recent.length ? `<button type="button" class="btn btn-block" data-go="#/list">전체 목록 보기</button>` : ""}
     ${verFoot()}</div>`;
   bindCards(); bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
   $("#btn-proj").addEventListener("click", switchProject);
+  bindPresetRow(view());
+  $("#home-sendph")?.addEventListener("click", photosByVendor);
   $("#home-find")?.addEventListener("click", () => filterSheet());
+  $("#home-shoot")?.addEventListener("click", () => shootSheet({ items: PD(), kind: "before" }));
   $("#home-send")?.addEventListener("click", () => { const un = PD().filter((d) => d.status === "접수" || d.status === "재접수"); if (!un.length) { toast("미전달 건이 없어요 · 업체 화면으로 갈게요", { ms: 3000 }); return go("#/vendors"); } return sendChecked(un); });
   { const qi = $("#qs"); if (qi) { const ex = qi.dataset.phEx, ph = qi.placeholder; qi.addEventListener("focus", () => { qi.placeholder = ex; }); qi.addEventListener("blur", () => { qi.placeholder = ph; }); } }
   $("[data-a=switch]", view())?.addEventListener("click", switchProject);
@@ -443,13 +471,14 @@ async function newProjectGate() {
 }
 
 /* ---------- 목록 ---------- */
-const FILTER_LABEL = { exw: "제외", x_vendorId: "제외 업체", x_dong: "제외 동", x_floor: "제외 층", x_core: "제외 코어", x_trade: "제외 공종", x_type: "제외 유형", x_status: "제외 상태", x_severity: "제외 중요도", x_category: "제외 구분", x_createdBy: "제외 등록자", dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", text: "검색", createdBy: "등록자", from: "기간", to: "기간", core: "코어", room: "실" };
+const FILTER_LABEL = { exw: "제외", x_vendorId: "제외 업체", x_dong: "제외 동", x_floor: "제외 층", x_core: "제외 코어", x_trade: "제외 공종", x_type: "제외 유형", x_status: "제외 상태", x_severity: "제외 중요도", x_category: "제외 구분", x_createdBy: "제외 등록자", dong: "동", ho: "호", common: "공용부", floor: "층", turn: "내 차례 대기", mine: "내 차례", chain: "후속 공정", trade: "공종", vendorId: "업체", type: "유형", category: "구분", severity: "중요도", status: "상태", overdue: "기한초과", photo: "사진", text: "검색", createdBy: "등록자", from: "기간", to: "기간", core: "코어", room: "실" };
 function filterChipText(k, v) {
   if (k.startsWith("x_")) return filterChipText(k.slice(2), v);
   if (k === "exw") return v;
   if (k === "status") return v === "_open" ? "미조치" : v === "_done" ? "완료(조치·확인)" : v;
   if (k === "vendorId") return v === "_none" ? "업체 미지정" : vLabel(v);
   if (k === "overdue") return "기한초과";
+  if (k === "photo") return v === "noafter" ? "조치 후 사진 없음" : "조치 전 사진 없음";
   if (k === "ho") return v + "호";
   if (k === "common") return v === "_any" ? "공용부·세대 외 전체" : v === "_bare" ? "공용부 미지정(동·층만)" : v;
   if (k === "turn") return vLabel(v);
@@ -577,13 +606,15 @@ ROUTES.list = async () => {
   const tOn = (t) => fTypes.some((v) => (t.key ? M.sameType(v, t.name) || v === t.name : v === "_none"));
   const typeLabel = !fTypes.length ? "유형 전체" : fTypes.length > 1 ? `유형 ${fTypes.length}개` : fTypes[0] === "_none" ? "유형 없음" : (tcs.find((t) => t.key && M.sameType(t.name, fTypes[0]))?.name || fTypes[0]);
   const chips = activeChips(f, { skipView: true }); const nUi = M.filterCountUi(f); const vOpen = M.viewOpen(f);
+  const noPhN = M.applyFilter(all, { ...f, photo: "none" }, { vendorName: vName }).length; // 1.3.6 조치 전 사진 없는 건수
   const odN = list.filter((d) => M.isOverdue(d)).length;
   /* 1.2.6 위치 바로 고르기 */
   const fNoLoc = Object.fromEntries(Object.entries(f).filter(([k]) => !M.LOC_KEYS.includes(k)));
   /* 1.2.7 코어별로 볼 때: 코어 안 정한 동 공용부(방풍실·계단실 등) 바로 지정 */
   const coreFix = grp === "core" || srt.mode === "core" ? list.filter((d) => { const lp = M.locParts(d); return lp.dong && lp.line == null && !lp.core; }) : [];
+  const bare = !allP.length && !nUi; // 1.3.5 하자가 하나도 없으면 필터·위치·정렬 줄은 접어 둠(빈 화면에서 헷갈리지 않게)
   const lb = locLabels(f); const locBase = () => M.applyFilter(all, fNoLoc, { vendorName: vName });
-  view().innerHTML = `
+  view().innerHTML = `${bare ? '<i class="bare-mark" hidden></i>' : ""}
     <div class="ltabs" id="ltabs" role="tablist" aria-label="관리 탭"><button type="button" class="ltab ${ltab ? "" : "on"}" role="tab" aria-selected="${!ltab}" data-ltab="">전체 <small>${n(allP.length)}</small></button>${tabs.map((t) => `<button type="button" class="ltab ${ltab === t.id ? "on" : ""}" role="tab" aria-selected="${ltab === t.id}" data-ltab="${esc(t.id)}">★ ${esc(t.name)} <small>${n(tabCount(t.id))}</small></button>`).join("")}<button type="button" class="ltab ltab-cfg" id="ltab-cfg" aria-label="관리 탭 설정" title="탭 만들기·이름·순서">⚙</button></div>
     <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="동·호·내용 검색" data-ph-ex="예: 312-802 · 지하주차장" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
       <button type="button" class="btn" id="btn-filter">필터${nUi ? ` <b class="badge">${nUi}</b>` : ""}</button></form>
@@ -596,12 +627,13 @@ ROUTES.list = async () => {
       ${lb.room3 ? `<button type="button" class="dd-btn ${f.room ? "on" : ""}" id="dd-room" aria-haspopup="listbox"><small>실</small><b>${esc(f.room || "전체")}</b></button>` : ""}
       <button type="button" class="dd-btn ${fTypes.length ? "on" : ""}" id="dd-type" aria-haspopup="listbox"><small>유형</small><b>${esc(typeLabel)}</b></button>
     </div>
-    <div class="list-ctl" id="list-ctl"><button type="button" class="btn btn-sm tg-done ${vOpen ? "on" : ""}" id="btn-hidedone" aria-pressed="${vOpen}" title="조치완료·확인완료 건은 숨기고 미조치만 봐요">${vOpen ? "✓ 미조치만" : "미조치만 보기"}</button><select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
+    <div class="list-ctl" id="list-ctl"><button type="button" class="btn btn-sm tg-done ${vOpen ? "on" : ""}" id="btn-hidedone" aria-pressed="${vOpen}" title="조치완료·확인완료 건은 숨기고 미조치만 봐요">${vOpen ? "✓ 미조치만" : "미조치만 보기"}</button>${noPhN || f.photo ? `<button type="button" class="btn btn-sm tg-done tg-photo ${f.photo ? "on" : ""}" id="btn-nophoto" aria-pressed="${!!f.photo}" title="조치 전 사진이 없는 하자만 봐요">${f.photo ? "✓ 📷 사진 없음" : "📷 사진 없음"} ${n(noPhN)}</button>` : ""}<select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
     <div class="list-hd"><b class="res-n" id="res-n">${nUi ? "검색 결과 " : vOpen ? "미조치 " : ""}${n(list.length)}건</b>${M.hasEx(f) ? `<span class="ex-gone" id="res-ex">제외 −${n(exGone)}</span>` : ""}<button type="button" class="chip chip-od ${f.overdue ? "on" : ""}" id="btn-od" aria-pressed="${!!f.overdue}" aria-label="기한초과 ${n(odN)}건만 보기" title="기한초과 ${n(odN)}건">⏰ ${n(odN)}</button>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-listmore" aria-expanded="${!!window.__listMenuOpen}" aria-controls="list-menu" aria-label="집계·내보내기">⋯</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">요청서 보내기</button></div>
-    <div class="list-menu" id="list-menu" ${window.__listMenuOpen ? "" : "hidden"}><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기(엑셀·CSV)</button></div>
+    ${list.length ? photoLegendHtml(null, { short: true, extra: `<span class="sp"></span><button type="button" class="btn btn-sm" id="btn-sendphotos" title="이 결과의 사진을 띠를 붙여 여러 장 보내기" aria-label="사진으로 보내기">📷 사진으로 보내기</button>` }) : ""}
+    <div class="list-menu" id="list-menu" ${window.__listMenuOpen ? "" : "hidden"}><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기(엑셀·CSV)</button><button type="button" class="btn btn-sm" id="btn-shoot">📷 사진 없는 건 연속 촬영</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
-    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : `<div class="card empty-card"><p>조건에 맞는 하자가 없어요.</p></div>`}</div>
+    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : bare ? `<div class="card empty-card" id="list-empty"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-primary" id="empty-new">＋ 첫 하자 등록</button></div>` : `<div class="card empty-card" id="list-empty"><p>조건에 맞는 하자가 없어요.</p>${nUi || f.hideDone || ltab ? `<button type="button" class="btn" id="empty-clear">조건 모두 지우기</button>` : ""}</div>`}</div>
     ${(grp ? S.lgTrunc : list.length > S.listLimit) ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(grp ? S.lgHid : list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true, core: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
@@ -683,10 +715,15 @@ ROUTES.list = async () => {
   $("#btn-od").addEventListener("click", () => { const nf = { ...S.filter }; if (nf.overdue) delete nf.overdue; else nf.overdue = true; S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
   const listMore = (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); };
   $("#btn-listmore").addEventListener("click", () => listMore());
+  $("#empty-new")?.addEventListener("click", () => go("#/new"));
+  $("#empty-clear")?.addEventListener("click", () => { S.filter = {}; LS.set("filter", {}); LS.set("listTab", ""); replace("#/list"); });
+  $("#btn-nophoto")?.addEventListener("click", () => { const nf = { ...S.filter }; if (nf.photo) delete nf.photo; else nf.photo = "none"; S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
+  $("#btn-shoot")?.addEventListener("click", () => { listMore(false); const base = M.applyFilter(all, M.stripEx(f), { vendorName: vName }); shootSheet({ items: base.length ? base : allP, kind: "before" }); });
   $("#btn-hidedone").addEventListener("click", () => { const nf = { ...S.filter }; if (M.viewOpen(nf)) { delete nf.hideDone; if (M.isOpenOnlyStatus(nf)) delete nf.status; } else { nf.hideDone = true; } S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
   $("#btn-agg").addEventListener("click", () => { listMore(false); aggSheet(list); });
   if (S.openFilter) { S.openFilter = false; setTimeout(() => filterSheet(), 50); }
   $("#btn-sendlist").addEventListener("click", () => sendSheet({ items: list }));
+  $("#btn-sendphotos")?.addEventListener("click", () => { if (!list.length) return toast("보낼 하자가 없어요"); const vs = [...new Set(list.map((d) => d.vendorId || ""))]; photosSendSheet({ items: list, vendor: vs.length === 1 && vs[0] ? V(vs[0]) : null, onSent: (via) => markSent(list, via) }); });
 };
 /** 필터 칩(여러 값이면 값마다 칩) */
 function activeChips(f, { collapse = 3, skipView = false } = {}) {
@@ -803,7 +840,9 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
       <div class="chips scroll" id="fl-active"></div>
       <div class="fl-view" role="group" aria-label="보기"><span class="fl-view-l">보기</span><button type="button" class="vseg ${M.viewOpen(nf) ? "on" : ""}" id="fl-view-open" aria-pressed="${M.viewOpen(nf)}">미조치만 <small>완료 숨김</small></button><button type="button" class="vseg ${M.viewOpen(nf) ? "" : "on"}" id="fl-view-all" aria-pressed="${!M.viewOpen(nf)}">전체</button></div>
       <div class="fl-toggles"><label class="check"><input type="checkbox" id="fl-overdue" ${nf.overdue ? "checked" : ""}> ⏰ 기한초과만 <small class="fn" id="fl-odn"></small></label>
-        <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label></div>
+        <label class="check"><input type="checkbox" id="fl-urgent" ${has("severity", "긴급") ? "checked" : ""}> 🚨 긴급만</label>
+        <label class="check"><input type="checkbox" id="fl-nophoto" ${nf.photo === "none" ? "checked" : ""}> 📷 사진 없는 것만 <small class="fn" id="fl-npn"></small></label>
+        <label class="check"><input type="checkbox" id="fl-noafter" ${nf.photo === "noafter" ? "checked" : ""}> 📷 조치 후 사진 없는 것만 <small class="help">(조치완료·확인완료)</small></label></div>
       <label class="check fl-mode"><input type="checkbox" id="fl-exmode"><span class="fl-mode-t">아래 칩을 <b class="ex-t">제외</b>로 고르기 <small class="help">· 칩을 길게 눌러도 제외(빨간 −칩)</small></span></label>
       <section class="fl-ex" id="fl-ex"><div class="fl-ex-hd"><b>제외할 단어</b> <small class="help">공종·내용·위치·업체·유형에 있으면 빼요</small></div>
         <form class="row" id="fl-exw-f" autocomplete="off"><input class="inp" id="fl-exw" placeholder="예: 코킹, 마이다판 (쉼표·Enter)" aria-label="제외 단어"><button type="submit" class="btn btn-sm">추가</button></form>
@@ -838,13 +877,14 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
       const sel = [...M.fArr(nf[fc.k]).map((v) => filterChipText(fc.k, v)), ...M.fArr(nf["x_" + fc.k]).map((v) => "−" + filterChipText(fc.k, v))]; $(`[data-sel-of="${fc.k}"]`, el).textContent = sel.join(", ");
     }
     $("#fl-odn", el).textContent = n(M.applyFilter(all, { ...f0, overdue: true }, ctx).length);
+    $("#fl-npn", el).textContent = n(M.applyFilter(all, { ...f0, photo: "none" }, ctx).length);
     $("#fl-urgent", el).checked = has("severity", "긴급"); { const vo = M.viewOpen(nf); const a = $("#fl-view-open", el), b = $("#fl-view-all", el); a.classList.toggle("on", vo); b.classList.toggle("on", !vo); a.setAttribute("aria-pressed", String(vo)); b.setAttribute("aria-pressed", String(!vo)); }
     $("#fl-active", el).innerHTML = activeChips(f0) || '<span class="help">조건 없음 · 전체</span>';
     $("#fl-exw-chips", el).innerHTML = M.fArr(nf.exw).map((w) => `<button type="button" class="chip on ex" data-exw="${esc(w)}" aria-label="제외 ${esc(w)} 지우기">−${esc(w)} ✕</button>`).join("");
     $$("[data-fopen]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => goFacet(b.dataset.fopen)));
     $$("[data-rm]", $("#fl-active", el)).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (b.dataset.rv != null && Array.isArray(nf[k])) nf[k] = nf[k].filter((x) => x !== b.dataset.rv); else delete nf[k]; syncInputs(); refresh(); }));
   };
-  const syncInputs = () => { $("#fl-overdue", el).checked = !!nf.overdue; $("#fl-ho", el).value = nf.ho || ""; $("#fl-from", el).value = nf.from || ""; $("#fl-to", el).value = nf.to || "";
+  const syncInputs = () => { $("#fl-nophoto", el).checked = nf.photo === "none"; $("#fl-noafter", el).checked = nf.photo === "noafter"; $("#fl-overdue", el).checked = !!nf.overdue; $("#fl-ho", el).value = nf.ho || ""; $("#fl-from", el).value = nf.from || ""; $("#fl-to", el).value = nf.to || "";
     for (const i of $$("[data-k]", el)) { if (i.type === "checkbox") i.checked = !!nf[i.dataset.k]; else i.value = nf[i.dataset.k] || ""; } };
   const toggle = (k, v) => { const cur = M.fArr(nf[k]); nf[k] = cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]; };
   /* 1.2.8 칩: 보통은 ‘포함’, 제외 모드(또는 길게 누르기)면 ‘제외’(빨간 −칩). 한 값은 둘 중 하나만 */
@@ -860,6 +900,8 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
     const per = e.target.closest("[data-per]"); if (per) { if (per.dataset.per === "") { delete nf.from; delete nf.to; } else { nf.from = day(+per.dataset.per); nf.to = day(0); } syncInputs(); refresh(); }
   });
   $("#fl-overdue", el).addEventListener("change", (e) => { nf.overdue = e.target.checked || undefined; refresh(); });
+  $("#fl-nophoto", el).addEventListener("change", (e) => { if (e.target.checked) nf.photo = "none"; else if (nf.photo === "none") delete nf.photo; refresh(); });
+  $("#fl-noafter", el).addEventListener("change", (e) => { if (e.target.checked) nf.photo = "noafter"; else if (nf.photo === "noafter") delete nf.photo; refresh(); });
   /* 1.3.4 보기: 미조치만(완료 숨김) / 전체 — 완료 건 숨기기·미조치만·상태 ‘미조치 전체’를 한 곳에서 */
   $("#fl-view-open", el).addEventListener("click", () => { nf.hideDone = true; if (M.isOpenOnlyStatus(nf)) delete nf.status; refresh(); });
   $("#fl-view-all", el).addEventListener("click", () => { delete nf.hideDone; if (M.isOpenOnlyStatus(nf)) delete nf.status; refresh(); });
@@ -955,7 +997,7 @@ ROUTES.unit = async (qq) => {
     sendSheet({ items: g.items, vendor: V(g.vendorId), preselect: picked.length ? picked : null }); }));
 };
 
-/* ---------- 동 현황(히트맵) ---------- */
+/* ---------- 하자위치(동 상세 히트맵) ---------- */
 /** 동 공용부를 세부위치별로 묶기(층은 무시하고 세부위치 기준, 세부위치 없는 건 ‘층·기타’) */
 function commonGroups(list) {
   const m = new Map(); const fl = (d) => d.floor || "";
@@ -970,10 +1012,37 @@ function commonGroups(list) {
   return [...m.values()].map((g) => ({ open: 0, od: 0, ...g, sub: g.floors && [...g.floors.keys()].some(Boolean) ? [...g.floors.entries()].sort((a, b) => fsort(a[0], b[0])).slice(0, 4).map(([f, n]) => `${f ? M.floorLabel(f) : "층 없음"} ${n}`).join(" · ") : "" }))
     .sort((a, b) => (a.common ? 0 : 1) - (b.common ? 0 : 1) || b.all - a.all || fsort(a.floor, b.floor));
 }
+/* ---------- 1.3.5 하자위치(전체 위치 한눈에): 동 · 단지 공용(지하주차장·부대시설·조경 등) ---------- */
+const phOf = (l) => l.filter((d) => M.photoMissing(d, "none")).length;
+ROUTES.places = async () => {
+  setTab("more"); setHeader("하자위치", { backBtn: navDepth() > 1 });
+  const p = P(); const all = PD();
+  if (!p.dongs.length && !sitePlaces().length) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
+  const th = M.heatThresholds(p, all); const openBasis = th.basis === "all" ? {} : { status: "_open" };
+  const dongCards = p.dongs.map((dg) => { const l = all.filter((d) => d.dong === dg.name); const un = l.filter((d) => d.ho), cm = l.filter((d) => !d.ho);
+    return { name: dg.name, uo: un.filter(M.isOpen).length, ua: un.length, co: cm.filter(M.isOpen).length, ca: cm.length, ph: phOf(l), pills: phPills(l), od: l.some((d) => M.isOverdue(d)) }; });
+  const siteItems = all.filter((d) => !M.locParts(d).dong); const sg = new Map();
+  for (const d of siteItems) { const nm = M.commonOf(d) || "기타(위치 미지정)"; const g = sg.get(nm) || { name: nm, l: [] }; g.l.push(d); sg.set(nm, g); }
+  for (const nm of sitePlaces()) if (!sg.has(nm)) sg.set(nm, { name: nm, l: [] });
+  const sites = [...sg.values()].map((g) => ({ name: g.name, o: g.l.filter(M.isOpen).length, a: g.l.length, ph: phOf(g.l), pills: phPills(g.l), od: g.l.some((d) => M.isOverdue(d)) })).filter((g) => g.name !== "기타(위치 미지정)" || g.a).sort((a, b) => (a.name === "기타(위치 미지정)") - (b.name === "기타(위치 미지정)") || b.a - a.a || a.name.localeCompare(b.name, "ko"));
+  
+  view().innerHTML = `<div class="places">
+    <p class="help pl-sum">전체 ${n(all.length)}건 · 미조치 ${n(all.filter(M.isOpen).length)} · <span class="pl-ph">📷 사진 없음 ${n(phOf(all))}</span></p>
+    ${photoLegendHtml(phCounts(all))}
+    <h3 class="sec">동 <small>세대 미조치/전체 · 공용부</small></h3>
+    <div class="pl-grid" id="pl-dongs">${dongCards.map((c) => `<div class="pl-card ${c.uo ? "has" : c.ua ? "clean" : "zero"} ${c.od ? "od" : ""}" data-pcard="${esc(c.name)}"><button type="button" class="pl-hit" data-pd="${esc(c.name)}" aria-label="${esc(c.name)} 하자 목록 · 세대 미조치 ${c.uo}건 전체 ${c.ua}건 공용부 ${c.ca}건"><span class="pl-n">${esc(c.name)}</span><b>${n(c.uo)}<small> / ${n(c.ua)}</small></b><span class="pl-s">세대 미조치/전체</span><span class="pl-c">공용부 ${n(c.co)}/${n(c.ca)}</span>${c.pills}</button><button type="button" class="pl-sub" data-pg="${esc(c.name)}" aria-label="${esc(c.name)} 층·호 칸 보기">▦ 층·호</button></div>`).join("")}</div>
+    <h3 class="sec">단지 공용 <small>지하주차장 · 부대시설 · 조경 · 외부 등</small></h3>
+    <div class="pl-grid" id="pl-sites">${sites.map((c) => `<button type="button" class="pl-card site ${c.o ? "has" : c.a ? "clean" : "zero"} ${c.od ? "od" : ""}" data-ps="${esc(c.name)}" aria-label="${esc(c.name)} 미조치 ${c.o}건 전체 ${c.a}건"><span class="pl-n">${esc(c.name)}</span><b>${n(c.o)}<small> / ${n(c.a)}</small></b><span class="pl-s">미조치/전체</span>${c.pills}</button>`).join("")}</div>
+    ${verFoot()}</div>`;
+  bindVerFoot();
+  $$("[data-pd]", view()).forEach((b) => b.addEventListener("click", () => { const c = dongCards.find((x) => x.name === b.dataset.pd); S.filter = { dong: b.dataset.pd, ...(c?.uo || c?.co ? openBasis : {}) }; LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
+  $$("[data-pg]", view()).forEach((b) => b.addEventListener("click", () => go(`#/grid?dong=${encodeURIComponent(b.dataset.pg)}`)));
+  $$("[data-ps]", view()).forEach((b) => b.addEventListener("click", () => { const g = sites.find((x) => x.name === b.dataset.ps); S.filter = { dong: ["_none"], common: b.dataset.ps === "기타(위치 미지정)" ? "_any" : b.dataset.ps, ...(g?.o ? openBasis : {}) }; LS.set("filter", S.filter); go("#/list"); }));
+};
 ROUTES.grid = async (qq) => {
-  setTab("list");
+  setTab("more");
   const p = P(); const dong = p.dongs.find((d) => d.name === qq.dong) || p.dongs[0];
-  setHeader("동 현황");
+  setHeader("하자위치");
   if (!dong) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
   const list = PD().filter((d) => d.dong === dong.name);
   const by = new Map(); for (const d of list) { if (!d.ho) continue; const k = M.normHo(d.ho) || d.ho; const m = by.get(k) || { open: 0, all: 0, od: 0 }; m.all++; if (M.isOpen(d)) m.open++; if (M.isOverdue(d)) m.od++; by.set(k, m); }
@@ -997,7 +1066,7 @@ ROUTES.grid = async (qq) => {
       return `<button type="button" class="cc h${lv} ${g.od ? "od" : ""} ${g.all ? "" : "zero"}" data-site="${esc(g.name)}" aria-label="${esc(g.name)} 미조치 ${g.open}건 전체 ${g.all}건"><span>${esc(g.name)}</span><b>${n}</b><small>미조치 ${g.open} / 전체 ${g.all}</small></button>`; }).join("")}</div></details>`;
   view().innerHTML = `
     <div class="chips wrap dong-chips">${p.dongs.map((d) => `<button type="button" class="chip ${d.id === dong.id ? "on" : ""}" data-d="${esc(d.name)}">${esc(d.name)}</button>`).join("")}</div>
-    <div class="list-hd"><b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span></div>
+    <div class="list-hd"><b>${esc(dong.name)}</b><span class="help">미조치 ${list.filter(M.isOpen).length} / ${list.length}건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="pl-all">▦ 전체 위치</button></div>
     ${commonZone}${siteZone}
     ${heatLegendHtml(th)}
     <div class="hgrid" style="--cols:${lines.length}">${floors.map((f) => { const us = new Set(M.unitsOf(dong, String(f))); return `<div class="hf">${f}F</div>` + lines.map((l) => String(f * 100 + l)).map((ho) => {
@@ -1007,6 +1076,7 @@ ROUTES.grid = async (qq) => {
     }).join(""); }).join("")}</div>
     ${common.slice(0, 30).map((d) => defectCard(d)).join("")}`;
   bindCards();
+  $("#pl-all", view()).addEventListener("click", () => go("#/places"));
   $$("[data-d]", view()).forEach((b) => b.addEventListener("click", () => replace(`#/grid?dong=${encodeURIComponent(b.dataset.d)}`)));
   $$("[data-ho]", view()).forEach((b) => b.addEventListener("click", () => go(`#/unit?dong=${encodeURIComponent(dong.name)}&ho=${b.dataset.ho}`)));
   $$("[data-cm]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = { dong: dong.name, common: b.dataset.cm || "_bare", ...(b.dataset.cm ? {} : { floor: b.dataset.cf || "_none" }), ...(th.basis === "all" ? {} : { status: "_open" }) }; LS.set("filter", S.filter); go("#/list"); }));
@@ -1021,14 +1091,14 @@ function heatLegendHtml(th, { gear = true } = {}) {
   return `<div class="legend" id="heat-legend">${M.heatLegend(th).map((x) => `<span class="lg"><span class="hm h${x.lv}"></span>${esc(x.label)}</span>`).join("")}<span class="lg"><span class="hm odl"></span>기한초과</span>
     <span class="lg-basis">${th.basis === "all" ? "전체" : "미조치"} 기준${th.mode === "auto" ? " · 자동" : ""}</span>${gear ? '<button type="button" class="lg-gear" id="heat-cfg" aria-label="색 기준 설정" title="색 기준 설정">⚙</button>' : ""}</div>`;
 }
-/** 동현황 색 기준 설정(현장별 저장 → 동기화) */
+/** 하자위치 색 기준 설정(현장별 저장 → 동기화) */
 async function heatSheet() {
   const p = P(); if (!p) return;
   const c = M.heatCfg(p); const st = { ...c };
   const auto0 = M.autoThresholds(M.unitCounts(PD(), st.basis));
   if (st.mode === "auto") { st.low = auto0.low; st.high = auto0.high; }
-  const s = openSheet({ title: "동현황 색 기준", cls: "heat-sheet",
-    html: `<p class="help">세대별 하자 수에 따라 동현황 칸 색을 정해요. 0건은 ‘없음’이에요. 현장마다 따로 저장돼요.</p>
+  const s = openSheet({ title: "하자위치 색 기준", cls: "heat-sheet",
+    html: `<p class="help">세대별 하자 수에 따라 하자위치 칸 색을 정해요. 0건은 ‘없음’이에요. 현장마다 따로 저장돼요.</p>
       <div class="fld"><span>세는 기준</span><div class="seg" id="hs-basis"><button type="button" data-v="open">미조치만</button><button type="button" data-v="all">전체(완료 포함)</button></div></div>
       <div class="fld"><span>기준 정하기</span><div class="seg" id="hs-mode"><button type="button" data-v="auto">자동(데이터 분포 기준)</button><button type="button" data-v="manual">직접 입력</button></div></div>
       <div class="hs-nums"><label class="fld"><span>적음: 1건 ~</span><input class="inp" id="hs-low" type="number" inputmode="numeric" min="1" step="1"></label>
@@ -1401,7 +1471,7 @@ function renderForm() {
     sync(); const files = await pickFile("image/*", { capture, multiple: !capture }); if (!files.length) return;
     busy(true, "사진 압축 중…");
     for (const f of files) {
-      try { const at = new Date().toISOString(); const on = stampOn(); const c = await compressImage(f, { stamp: on ? stampInfo(stampOf(dr), "before", at) : null }); dr.photos.push({ ...c, at, stamp: on ? "1" : "0", url: URL.createObjectURL(c.thumb) }); }
+      try { const at = new Date().toISOString(); const on = burnOn(); const c = await compressImage(f, { stamp: on ? stampInfo(stampOf(dr), "before", at) : null }); dr.photos.push({ ...c, at, stamp: on ? "1" : "0", url: URL.createObjectURL(c.thumb) }); }
       catch (e) { toast(e.message); }
     }
     busy(false); renderForm();
@@ -1470,6 +1540,8 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
   const tile = (v, label, on, cls = "", ua = false) => `<button type="button" class="tile ${on ? "on" : ""} ${cls} ${ua ? "ua" : ""}" data-v="${esc(v)}"${ua ? ' data-ua="1"' : ""}>${esc(label)}${ua ? '<span class="ua-ed" data-ed="1" title="이름 변경·삭제">✎</span>' : ""}</button>`;
   const addTile = (what, key = "_add") => tile(key, "＋ 추가", false, "add").replace("<button ", `<button aria-label="${esc(what)} 직접 추가" `);
   const isNumFloor = (f) => /^\d+$/.test(String(f || ""));
+  /** 1.3.5 공용(단지 공용·동 공용부)을 골랐으면 ‘세대 실’ 단계는 건너뛰고 부위로 — 도면 세부 위치가 있는 장소만 실(세부 위치) 단계 */
+  const afterCommon = () => (sel.common && !sel.ho && !(place() && M.placeSpots(p, S.plans, sel.common, sel.floor).length) ? 4 : 3);
   const nextAfterFloor = (d, f) => (d && (M.unitsOf(d, f).length || isNumFloor(f)) ? 2 : 3);
   const used = (pred) => PD().filter(pred).length;
   const sortDongs = () => p.dongs.sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true }));
@@ -1484,6 +1556,19 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
     if (!sel.dong || sel.ho) return "";
     const cs = M.coresOf(p, sel.dong, PD());
     return `<h4>${esc(sel.dong)} 코어 <small class="help">공용부가 어느 코어인지 — 모르면 미지정</small></h4><div class="tiles small co-tiles" id="lp-core">${tile("core:", "코어 미지정", !sel.core, "core")}${cs.map((c) => tile("core:" + c, `${c}코어`, Number(sel.core) === c, "core")).join("")}</div>`;
+  }
+  const quickEx = () => { const d0 = p.dongs[0]; if (!d0) return "101 1203"; const f = Math.min(12, d0.floors || 1); return `${d0.alias || String(d0.name).replace(/동$/, "")} ${f * 100 + 3}`; };
+  /** 1.3.5 ‘101 1203’ 한 칸 입력 → 동·층·호를 한 번에 고르고 바로 부위/실 단계로 */
+  function quickGo(txt, say) {
+    const toks = String(txt || "").replace(/[동호층]/g, " ").split(/[\s,\-/·]+/).filter(Boolean);
+    if (!toks.length) return say("동 번호와 호수를 써 주세요 (예: 101 1203)");
+    const dn = toks[0]; const d = p.dongs.find((x) => x.name === dn || x.name === dn + "동" || (x.alias && String(x.alias) === dn) || String(x.name).replace(/동$/, "") === dn);
+    if (!d) return say(`‘${dn}’ 동을 못 찾았어요`);
+    if (toks.length === 1) { if (sel.dong !== d.name) sel.core = ""; sel.dong = d.name; sel.common = ""; sel.floor = ""; sel.ho = ""; return setStep(1); }
+    const ho = toks[1]; if (!/^\d{3,4}$/.test(ho)) return say("호수는 숫자 3~4자리로 써 주세요 (예: 1203)");
+    const f = String(M.floorOfHo(ho) ?? "");
+    if (!f || !M.unitsOf(d, f).includes(ho)) return say(`${d.name}에 ${ho}호가 없어요 — 층·호는 아래에서 직접 고를 수 있어요`);
+    sel.dong = d.name; sel.core = ""; sel.common = ""; sel.floor = f; sel.ho = ho; dropSpotPin(); return setStep(3);
   }
   const CLR_ORDER = ["dong", "core", "floor", "ho", "common", "room", "part"];
   const CLR_STEP = { dong: 0, core: 1, floor: 1, ho: 2, common: 1, room: 3, part: 4 };
@@ -1506,7 +1591,8 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
     let h = `<div class="lp-top"><ol class="steps">${["동", "층", "호", "실", "부위"].map((t, i) => `<li class="${i === step ? "on" : i < step ? "done" : ""}" data-go="${i}">${t}</li>`).join("")}</ol><button type="button" class="btn btn-sm lp-skip" data-skip="1">${skipLabel}</button></div>`;
     if (STEPS[step] === "dong") {
       /* 1.3.0 단지 공용(지하주차장·부대시설 등)을 동 위에 — 동이 많아도 바로 보이게 */
-      h += `<h4>단지 공용 <small class="help">지하주차장·부대시설 등 동과 상관없는 곳</small></h4><div class="tiles cm" id="lp-site">${[...new Set([...(p.commons.length ? p.commons : M.DEFAULT_COMMONS), ...M.placesWithPlans(p, S.plans), ...dataSites()])].map((c) => tile("c:" + c, c + (M.placeSpots(p, S.plans, c).length ? " ›" : ""), !sel.dong && c === sel.common, "common", isUserItem("commons", c) && p.commons.includes(c))).join("")}${addTile("단지 공용", "_addc")}</div>
+      h += `<form class="lp-quick" id="lp-quick" autocomplete="off"><label class="fld"><span>동·호 바로 입력 <small class="help">한 칸에 — 예: 101 1203 (동 번호 + 호수)</small></span></label><div class="row"><input class="inp" id="lp-q" inputmode="numeric" placeholder="예: ${esc(quickEx())}" aria-label="동과 호 바로 입력"><button type="submit" class="btn btn-primary btn-sm">이동</button></div><p class="help lp-q-msg" id="lp-q-msg" role="status"></p></form>
+        <h4>단지 공용 <small class="help">지하주차장·부대시설 등 동과 상관없는 곳</small></h4><div class="tiles cm" id="lp-site">${[...new Set([...(p.commons.length ? p.commons : M.DEFAULT_COMMONS), ...M.placesWithPlans(p, S.plans), ...dataSites()])].map((c) => tile("c:" + c, c + (M.placeSpots(p, S.plans, c).length ? " ›" : ""), !sel.dong && c === sel.common, "common", isUserItem("commons", c) && p.commons.includes(c))).join("")}${addTile("단지 공용", "_addc")}</div>
         <h4>동</h4><div class="tiles">${p.dongs.map((x) => tile(x.name, x.name, x.name === sel.dong, "", !!x.userAdded)).join("")}${addTile("동", "_add")}</div>
         <p class="help">동 안의 공용부(계단실·EV홀·피트실·옥상 등)는 동을 고르면 나와요.</p>`;
     } else if (STEPS[step] === "floor") {
@@ -1532,6 +1618,7 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
       h += `<h4>실${rf.type ? ` <small class="help">${esc(rf.type)} 평형</small>` : ""}</h4><div class="tiles">${rf.rooms.map((r) => tile(r, r, r === sel.room, "", isUserItem("rooms", r) && !(p.roomsByType?.[rf.type] || []).includes(r))).join("")}${addTile("실")}</div>`;
       }
     } else {
+      if (sel.common && !sel.ho) h += `<button type="button" class="btn btn-sm lp-room-link" id="lp-room-link">${sel.room ? `실: ${esc(sel.room)} (바꾸기)` : "＋ 세부 실 지정 (선택)"}</button>`;
       h += `<h4>부위</h4><div class="tiles">${p.parts.map((r) => tile(r, r, r === sel.part, "", isUserItem("parts", r))).join("")}${addTile("부위")}</div>`;
     }
     h += `<button type="button" class="btn btn-block btn-etc" id="lp-etc">✎ ${sel.locEtc ? `기타 위치: ${esc(sel.locEtc)} (수정)` : "기타 위치 직접 입력 (저장 안 함)"}</button>`;
@@ -1548,14 +1635,14 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
       if (v.startsWith("dc:")) {
         const c = v.slice(3); sel.ho = "";
         if (k === "floor" && !sel.floor) { sel.common = sel.common === c ? "" : c; return draw(); } // 층을 안 골랐으면 같은 화면에서 층을 더 고를 수 있게(선택)
-        sel.common = c; return setStep(3);
+        sel.common = c; return setStep(afterCommon());
       }
       if (k === "dong") {
         dropSpotPin();
-        if (v.startsWith("c:")) { const c = v.slice(2); if (sel.common !== c || M.placeSpots(p, S.plans, c).length) sel.room = ""; sel.common = c; sel.dong = ""; sel.core = ""; sel.floor = ""; sel.ho = ""; return setStep(place() && M.placeFloors(p, S.plans, c).length ? 1 : 3); }
+        if (v.startsWith("c:")) { const c = v.slice(2); if (sel.common !== c || M.placeSpots(p, S.plans, c).length) sel.room = ""; sel.common = c; sel.dong = ""; sel.core = ""; sel.floor = ""; sel.ho = ""; return setStep(place() && M.placeFloors(p, S.plans, c).length ? 1 : afterCommon()); }
         if (sel.dong !== v) sel.core = ""; sel.floor = ""; sel.ho = ""; sel.dong = v; sel.common = ""; return setStep(1); // 동을 (다시) 누르면 층·호·공용부를 새로 고름
       }
-      if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(sel.common ? 3 : nextAfterFloor(dongObj(), v)); }
+      if (k === "floor") { if (sel.floor !== v) sel.ho = ""; sel.floor = v; return setStep(sel.common ? afterCommon() : nextAfterFloor(dongObj(), v)); }
       if (k === "ho") { sel.ho = v; sel.common = ""; return setStep(3); }
       if (k === "room") {
         if (sel.room === v) { sel.room = ""; sel.part = ""; dropSpotPin(); return draw(); } // 1.3.4 다시 누르면 선택 풀림(아래 부위도 같이)
@@ -1569,13 +1656,15 @@ function locationPicker(dr, onDone, { quick = false } = {}) {
     }));
     $("[data-skip]", box)?.addEventListener("click", () => {
       const k = STEPS[step];
-      if (k === "dong") { if (sel.dong) return setStep(1); sel.floor = ""; sel.ho = ""; return setStep(3); }
-      if (k === "floor") { if (sel.floor && !sel.common) return setStep(nextAfterFloor(dongObj(), sel.floor)); sel.ho = ""; return setStep(3); }
+      if (k === "dong") { if (sel.dong) return setStep(1); sel.floor = ""; sel.ho = ""; return setStep(afterCommon()); }
+      if (k === "floor") { if (sel.floor && !sel.common) return setStep(nextAfterFloor(dongObj(), sel.floor)); sel.ho = ""; return setStep(afterCommon()); }
       if (k === "ho") return setStep(3);
       if (k === "room") return setStep(4);
       if (!canSave()) return toast("동·공용부·실·부위 중 하나는 고르거나 기타 위치를 입력하세요");
       $("#lp-ok", s.el).click();
     });
+    $("#lp-room-link", box)?.addEventListener("click", () => setStep(3, false));
+    $("#lp-quick", box)?.addEventListener("submit", (e) => { e.preventDefault(); quickGo($("#lp-q", box).value, (m) => { $("#lp-q-msg", box).textContent = m; }); });
     $$("[data-go]", box).forEach((li) => li.addEventListener("click", () => { if (Number(li.dataset.go) < step) history.back(); }));
     $("#lp-etc", box).addEventListener("click", async () => {
       const r = await formSheet({ title: "기타 위치 직접 입력", ok: "적용", hint: "이번 하자에만 쓰이고 목록에는 저장되지 않아요. 비우면 지워져요.",
@@ -1758,10 +1847,10 @@ ROUTES.item = async (qq) => {
     <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button><button type="button" class="btn btn-req" id="btn-copy">📋 복사해서 등록</button></div>
     <button type="button" class="btn btn-block btn-tags ${d.tabs?.length ? "on" : ""}" id="btn-tags">${d.tabs?.length ? "★" : "☆"} 관리 탭${(() => { const nm = TABS().filter((t) => M.inTab(d, t.id)).map((t) => t.name); return nm.length ? ` · ${esc(nm.join(", "))}` : " 넣기"; })()}</button>
     ${stepsHtml(d, photos)}
-    <section class="card"><h3>조치 전 사진 <small>${before.length}</small></h3><div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
+    <section class="card ${before.length ? "" : "nophoto-card"}"><h3>조치 전 사진 <small>${before.length}</small>${before.length ? "" : ' <span class="nophoto-b">사진 없음</span>'}</h3>${before.length ? "" : '<p class="help nophoto-help">📷 조치 전 사진이 없어요. 찍어 두면 요청서·‘사진으로 보내기’에 위치·공종·시각 띠가 붙어서 나가요.</p>'}<div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
       <button type="button" class="ph-add cam" data-add="before" aria-label="조치 전 사진 바로 촬영">📷<span>${before.length ? "한 장 더" : "촬영"}</span></button></div>
       <div class="ph-more"><button type="button" class="btn btn-sm" data-alb="before">🖼 앨범</button></div></section>
-    <section class="card"><h3>조치 후 사진 <small>${after.length}</small></h3><div class="photos">${after.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 후"></button>`).join("")}
+    <section class="card ${!after.length && M.DONE_STATUSES.has(d.status) ? "nophoto-card" : ""}"><h3>조치 후 사진 <small>${after.length}</small>${!after.length && M.DONE_STATUSES.has(d.status) ? ' <span class="nophoto-b">사진 없음</span>' : ""}</h3><div class="photos">${after.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 후"></button>`).join("")}
       <button type="button" class="ph-add cam" data-add="after" aria-label="조치 후 사진 바로 촬영">📷<span>${after.length ? "한 장 더" : "촬영"}</span></button></div>
       <div class="ph-more"><button type="button" class="btn btn-sm" data-alb="after">🖼 앨범</button></div></section>
     ${plan ? `<section class="card"><h3>도면 위치 <small>${esc(plan.name)}</small></h3><div class="plan mini"><img src="${(() => { const u = URL.createObjectURL(plan.blob); urls.push(u); return u; })()}" alt="도면"><i class="pin" style="left:${d.pin.x * 100}%;top:${d.pin.y * 100}%"></i></div></section>` : ""}
@@ -1958,7 +2047,9 @@ function photoViewer(photos, id, onChange, d = null) {
   let i = Math.max(0, photos.findIndex((p) => p.id === id)); let url = "";
   const s = openSheet({ title: "사진", full: true, cls: "viewer", html: `<div class="pv"><img id="pv-img" alt="사진"></div><div class="pv-nav"><button type="button" class="btn" data-n="-1">‹ 이전</button><span id="pv-i"></span><button type="button" class="btn" data-n="1">다음 ›</button></div>`,
     footer: `<button type="button" class="btn" data-a="share">공유</button><button type="button" class="btn btn-danger" data-a="del">삭제</button>` });
-  const show = () => { if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(photos[i].blob); $("#pv-img", s.el).src = url; $("#pv-i", s.el).textContent = `${i + 1} / ${photos.length} · ${photos[i].kind === "after" ? "조치 후" : "조치 전"}`; };
+  let tok = 0;
+  const show = () => { if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(photos[i].blob); $("#pv-img", s.el).src = url;
+    if (d && photos[i].stamp === "0" && stampOn()) { const my = ++tok, ph = photos[i]; photoOut(ph, d).then((bl) => { if (my !== tok || bl === ph.blob) return; if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(bl); $("#pv-img", s.el).src = url; }); } else tok++; $("#pv-i", s.el).textContent = `${i + 1} / ${photos.length} · ${photos[i].kind === "after" ? "조치 후" : "조치 전"}`; };
   show();
   $$("[data-n]", s.el).forEach((b) => b.addEventListener("click", () => { i = (i + Number(b.dataset.n) + photos.length) % photos.length; show(); }));
   $("[data-a=share]", s.el).addEventListener("click", () => (async () => shareOrDownload(d ? await photoOut(photos[i], d) : photos[i].blob, `하자사진_${i + 1}.jpg`))());
@@ -1980,6 +2071,118 @@ async function markSent(items, via, note = "") {
 }
 /** 업체에 보내기: 건마다 체크해서 고른 건만 카톡·문자·복사·PDF로 보내고, 고른 건만 ‘업체전달’ 표시(되돌리기 가능).
  *  preselect: 처음 체크할 id 목록(없으면 미전달 → 없으면 미조치 → 전체) */
+/** 1.3.6 사진 연속 촬영: 사진 없는 하자를 위치순으로 하나씩 보여 주고, 찍으면 바로 다음 건으로(조치 전 / 조치 후) */
+async function shootSheet({ items, kind = "before" }) {
+  let mode = kind; const skipped = new Set(); let done = 0;
+  const live = () => items.map((d) => S.defects.find((x) => x.id === d.id) || d);
+  const need = (d, m = mode) => M.photoMissing(d, m === "after" ? "noafter" : "none");
+  const queue = () => M.sortList(live().filter((d) => need(d)), "loc", "asc");
+  if (!queue().length) { if (mode === "before" && live().some((d) => need(d, "after"))) mode = "after"; else return toast("사진 없는 하자가 없어요 👍"); }
+  const s = openSheet({ title: "사진 연속 촬영", full: true, cls: "shoot-sheet", html: `<div id="sh"></div>` });
+  s.onClose = () => rerender();
+  const draw = () => {
+    const box = $("#sh", s.el); const q = queue(); const cur = q.find((d) => !skipped.has(d.id)); const nb = live().filter((d) => need(d, "before")).length, na = live().filter((d) => need(d, "after")).length;
+    const left = q.filter((d) => !skipped.has(d.id)).length;
+    box.innerHTML = `<div class="vseg-row" role="group" aria-label="촬영 종류"><button type="button" class="vseg ${mode === "before" ? "on" : ""}" data-m="before">조치 전 <small>${n(nb)}건</small></button><button type="button" class="vseg ${mode === "after" ? "on" : ""}" data-m="after">조치 후 <small>${n(na)}건</small></button></div>
+      <p class="help sh-prog" id="sh-prog">이번에 ${n(done)}장 찍음 · 남은 ${n(left)}건${skipped.size ? ` · 건너뜀 ${n(skipped.size)}건` : ""}</p>
+      ${cur ? `<section class="card sh-card" data-id="${cur.id}"><div class="sh-loc">${esc(M.locText(cur) || "위치 미지정")}</div>
+        <div class="sh-w">${esc([M.tradeText(cur), cur.type].filter(Boolean).join(" · "))}</div><div class="sh-c">${esc((cur.content || "").slice(0, 80))}</div>
+        <div class="sh-m">${pill(cur.status)} <span>${esc(vName(cur) || "업체 미지정")}</span> <span class="tag-${mode}">${mode === "after" ? "조치 후" : "조치 전"}</span></div></section>
+        <button type="button" class="btn btn-primary btn-xl" id="sh-cam">📷 ${mode === "after" ? "조치 후" : "조치 전"} 사진 찍기</button>
+        <div class="row sh-sub"><button type="button" class="btn" id="sh-alb">🖼 앨범에서</button><button type="button" class="btn" id="sh-skip">건너뛰기 ›</button></div>`
+      : `<section class="card empty-card"><p>${left ? "" : "✅ 다 찍었어요"}${skipped.size ? `<br>건너뛴 ${n(skipped.size)}건이 남아 있어요.` : ""}</p>${skipped.size ? '<button type="button" class="btn" id="sh-again">건너뛴 건 다시 보기</button>' : ""}<button type="button" class="btn btn-primary" id="sh-end">닫기</button></section>`}
+      ${cur ? '<button type="button" class="btn btn-block" id="sh-end">그만 찍기</button>' : ""}`;
+    $$("[data-m]", box).forEach((b) => b.addEventListener("click", () => { mode = b.dataset.m; skipped.clear(); draw(); }));
+    const shoot = async (cap) => { const files = await pickFile("image/*", { capture: cap, multiple: !cap }); if (!files.length) return; busy(true, "사진 저장 중…"); const c = await addPhotos(cur.id, files, mode, stampOf(cur)); busy(false); done += c; draw(); };
+    $("#sh-cam", box)?.addEventListener("click", () => shoot(true)); $("#sh-alb", box)?.addEventListener("click", () => shoot(false));
+    $("#sh-skip", box)?.addEventListener("click", () => { skipped.add(cur.id); draw(); });
+    $("#sh-again", box)?.addEventListener("click", () => { skipped.clear(); draw(); });
+    $("#sh-end", box)?.addEventListener("click", () => s.close());
+  };
+  draw();
+}
+/** 1.3.6 사진으로 보내기: 고른 하자들의 사진에 위치·공종·현장명·시각 띠를 합성해(원본은 그대로) 여러 장을 한 번에 공유(폰) 또는 ZIP·여러 파일 저장(PC). 한 번에 보내는 장수는 나눠서 */
+async function photosSendSheet({ items, vendor = null, onSent = null }) {
+  const vname = vendor?.name || "업체"; const list = items.slice().sort(M.sortDefects);
+  busy(true, "사진 확인 중…");
+  const rec = []; for (const d of list) { const ps = (await db.byIndex("photos", "by_defect", d.id)).sort((a, b) => (a.at < b.at ? -1 : 1)); rec.push({ d, b: ps.filter((x) => x.kind !== "after"), a: ps.filter((x) => x.kind === "after") }); }
+  busy(false);
+  const nB = rec.reduce((a, x) => a + Math.min(x.b.length, 4), 0), nA = rec.reduce((a, x) => a + Math.min(x.a.length, 4), 0); const noPh = rec.filter((x) => !x.b.length && !x.a.length);
+  if (!nB && !nA) return toast("선택한 하자에 사진이 없어요 — 먼저 사진을 찍어 주세요");
+  const safe = (t) => String(t || "").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 24);
+  let files = []; const sent = new Set(); const mobile = isMobileDevice();
+  const s = openSheet({ title: `${vname} · 사진으로 보내기`, full: true, cls: "photos-sheet",
+    html: `<p class="ps-sum" id="ps-sum"><b>${n(list.length)}건</b> · 조치 전 ${n(nB)}장 · 조치 후 ${n(nA)}장 <small class="help">(건마다 종류별 최대 4장)</small></p>
+      ${noPh.length ? `<p class="help ps-no" id="ps-no">📷 사진 없는 ${n(noPh.length)}건은 빠져요: ${esc(noPh.slice(0, 4).map((x) => M.locText(x.d) || "위치 미지정").join(", "))}${noPh.length > 4 ? " 외" : ""} <button type="button" class="btn btn-sm" id="ps-shoot">지금 촬영</button></p>` : ""}
+      <label class="check"><input type="checkbox" id="ps-b" ${nB ? "checked" : "disabled"}> 조치 전 사진 <small>${n(nB)}장</small></label>
+      <label class="check"><input type="checkbox" id="ps-a" ${nA ? "checked" : "disabled"}> 조치 후 사진 <small>${n(nA)}장</small></label>
+      <label class="check"><input type="checkbox" id="ps-band" checked> 사진 아래에 위치·공종·현장명·시각 띠 넣기 <small class="help">(원본은 그대로, 보내는 사본에만)</small></label>
+      <button type="button" class="btn btn-sm" id="ps-bandset">🖼 띠에 넣을 항목 설정</button>
+      <label class="fld"><span>한 번에 보내는 장수 <small class="help">카카오톡은 한 번에 여러 장 가능 — 많으면 나눠서 보내요</small></span><select class="inp" id="ps-n"><option value="5">5장씩</option><option value="10" selected>10장씩</option><option value="20">20장씩</option><option value="30">30장씩</option></select></label>
+      <button type="button" class="btn btn-primary btn-lg" id="ps-make">사진 준비하기</button>
+      <div id="ps-out"></div>
+      <label class="check"><input type="checkbox" id="ps-mark" checked> 다 보낸 뒤 ‘접수’ 건을 ‘업체전달’로 표시</label>` });
+  const el = s.el;
+  $("#ps-shoot", el)?.addEventListener("click", async () => { await s.close(); shootSheet({ items: noPh.map((x) => x.d), kind: "before" }); });
+  $("#ps-bandset", el).addEventListener("click", () => bandSheet());
+  const chunksOf = () => { const k = Number($("#ps-n", el).value) || 10; const out = []; for (let i = 0; i < files.length; i += k) out.push(files.slice(i, i + k)); return out; };
+  const caption = (i, tot) => `[${P().name}] ${vname} 하자 사진${tot > 1 ? ` ${i + 1}/${tot}` : ""}`;
+  const renderOut = () => {
+    const ch = chunksOf(); const box = $("#ps-out", el);
+    box.innerHTML = `<p class="help" id="ps-ready">사진 ${n(files.length)}장 준비됨${ch.length > 1 ? ` · ${n(ch.length)}번에 나눠서 보내요` : ""}</p>
+      ${ch.map((c, i) => `<button type="button" class="btn btn-kakao btn-lg ps-ch ${sent.has(i) ? "done" : ""}" data-ch="${i}">${sent.has(i) ? "✓ " : ""}${ch.length > 1 ? `${i + 1}/${ch.length} · ` : ""}카톡·공유로 보내기 <small>${n(c.length)}장</small></button>`).join("")}
+      <div class="row"><button type="button" class="btn btn-lg" id="ps-zip">🗜 ZIP 한 파일로 저장</button><button type="button" class="btn btn-lg" id="ps-each">사진 따로 저장</button></div>
+      ${mobile ? '<p class="help small">폰: 공유창에서 <b>카카오톡</b> → 업체 대화방을 고르세요. 여러 번이면 위에서부터 차례로 눌러요.</p>' : '<p class="help small">PC: ZIP 또는 여러 파일로 저장한 뒤 카카오톡 PC 대화방에 끌어다 놓으세요.</p>'}`;
+    $$("[data-ch]", box).forEach((b) => b.addEventListener("click", async () => {
+      const i = Number(b.dataset.ch); const c = ch[i];
+      let r = "";
+      try { if (navigator.canShare?.({ files: c })) { await navigator.share({ files: c, text: caption(i, ch.length) }); r = "shared"; } } catch (e) { if (e?.name === "AbortError") return; }
+      if (r !== "shared") { await saveZip(c); toast("이 기기는 사진 공유창을 못 써서 ZIP으로 저장했어요"); r = "zip"; }
+      sent.add(i); renderOut();
+      if (sent.size === ch.length) { toast(`사진 ${n(files.length)}장을 보냈어요`); if ($("#ps-mark", el).checked && onSent) { await onSent("사진"); } }
+    }));
+    $("#ps-zip", box).addEventListener("click", async () => { await saveZip(files); toast("ZIP으로 저장했어요"); if ($("#ps-mark", el).checked && onSent) await onSent("사진(ZIP)"); });
+    $("#ps-each", box).addEventListener("click", async () => { for (const f of files) { downloadBlob(f, f.name); await new Promise((r2) => setTimeout(r2, 350)); } toast(`${n(files.length)}장을 저장했어요`); });
+  };
+  const saveZip = async (fl) => { if (!globalThis.JSZip) throw new Error("ZIP 도구를 불러오지 못했어요"); const z = new globalThis.JSZip(); for (const f of fl) z.file(f.name, f); const bl = await z.generateAsync({ type: "blob", compression: "STORE" }); window.__lastZip = bl; downloadBlob(bl, `하자사진_${safe(vname)}_${ymdCompact()}.zip`); };
+  $("#ps-n", el).addEventListener("change", () => { if (files.length) { sent.clear(); renderOut(); } });
+  $("#ps-make", el).addEventListener("click", async () => {
+    const useB = $("#ps-b", el).checked, useA = $("#ps-a", el).checked, band = $("#ps-band", el).checked;
+    const total = rec.reduce((a, x) => a + (useB ? Math.min(x.b.length, 4) : 0) + (useA ? Math.min(x.a.length, 4) : 0), 0); if (!total) return toast("보낼 사진 종류를 하나 이상 켜 주세요");
+    const out = []; busy(true, `사진 준비 중 0/${total}`);
+    try {
+      for (const x of rec) {
+        const pick = [...(useB ? x.b.slice(0, 4).map((ph) => [ph, "조치전"]) : []), ...(useA ? x.a.slice(0, 4).map((ph) => [ph, "조치후"]) : [])];
+        for (const [ph, lab] of pick) { const bl = band ? await photoOut(ph, x.d, { force: true }) : ph.blob; out.push(new File([bl], `${String(out.length + 1).padStart(2, "0")}_${safe(M.locText(x.d) || "위치미지정")}_${safe(M.tradeText(x.d))}_${lab}.jpg`, { type: "image/jpeg" })); busy(true, `사진 준비 중 ${out.length}/${total}`); }
+      }
+    } finally { busy(false); }
+    files = out; sent.clear(); window.__psFiles = out; renderOut();
+  });
+}
+/** 1.3.6 사진 띠 설정: 방식(원본 유지·보낼 때만 합성 / 찍을 때 새김) + 띠에 넣을 항목, 미리보기 */
+function bandSheet() {
+  const FIELDS = [["loc", "위치 (예: 312동 2401호 현관 벽)"], ["work", "공종/세부공종 · 유형"], ["content", "하자 내용 (최대 2줄)"], ["project", "현장명 (현장 설정의 이름)"], ["at", "촬영 시각"], ["tag", "조치 전/후 배지 (사진 종류에 따라)"]];
+  const s = openSheet({ title: "사진 띠 설정", cls: "band-sheet", html: `<p class="help">사진 아래 반투명 검은 띠에 아래 항목을 넣어요. 바꾸면 이후 보내는 사진부터 바로 적용돼요.</p>
+    <canvas id="bd-prev" class="bd-prev" width="640" height="420" aria-label="띠 미리보기"></canvas>
+    <fieldset class="bd-set"><legend>넣는 방식</legend>
+      <label class="check"><input type="radio" name="bd-mode" value="export"> 원본은 그대로 두고, 보낼 때만 띠 합성 <small class="help">(권장)</small></label>
+      <label class="check"><input type="radio" name="bd-mode" value="burn"> 찍을 때 사진에 새김 <small class="help">(원본 사진에 띠가 남아요)</small></label></fieldset>
+    <fieldset class="bd-set"><legend>띠에 넣을 항목</legend>${FIELDS.map(([k, t]) => `<label class="check"><input type="checkbox" data-bf="${k}"> ${esc(t)}</label>`).join("")}</fieldset>
+    <p class="help small">‘사진에 위치·일시 새기기’를 설정에서 끄면 요청서·공유 사진에 띠를 넣지 않아요(사진으로 보내기에서는 따로 켤 수 있어요).</p>` });
+  const el = s.el; const o = stampOpts();
+  $$("[data-bf]", el).forEach((i) => { i.checked = !!o[i.dataset.bf]; });
+  $$('input[name="bd-mode"]', el).forEach((i) => { i.checked = i.value === stampMode(); });
+  const prev = () => {
+    const c = $("#bd-prev", el); const x = c.getContext("2d"); const w = c.width, h = c.height;
+    const g = x.createLinearGradient(0, 0, w, h); g.addColorStop(0, "#9aa7a2"); g.addColorStop(1, "#5d6b66"); x.fillStyle = g; x.fillRect(0, 0, w, h);
+    x.fillStyle = "#ffffff55"; x.fillRect(w * 0.12, h * 0.14, w * 0.5, h * 0.5); x.fillStyle = "#00000022"; x.fillRect(w * 0.55, h * 0.3, w * 0.3, h * 0.45);
+    const d0 = PD()[0]; const base0 = d0 ? stampOf(d0) : { project: P()?.name || "현장명", loc: "312동 2401호 현관 벽", work: "코킹공사/코킹 · 틈새", content: "벽 틈새 코킹 누락" }; const base = { ...base0, content: base0.content || "벽 틈새 코킹 누락(예시)" };
+    drawStamp(x, w, h, stampInfo(base, "before", new Date().toISOString()));
+  };
+  $$("[data-bf]", el).forEach((i) => i.addEventListener("change", () => { LS.set("stampOpts", { ...stampOpts(), [i.dataset.bf]: i.checked }); prev(); }));
+  $$('input[name="bd-mode"]', el).forEach((i) => i.addEventListener("change", () => { if (i.checked) { LS.set("stampMode", i.value); toast(i.value === "burn" ? "앞으로 찍는 사진에 띠를 새겨요" : "원본은 그대로 두고 보낼 때만 띠를 합성해요"); } }));
+  prev(); s.onClose = () => { if (location.hash.startsWith("#/settings")) rerender(); };
+}
 async function sendSheet({ items, vendor = null, preselect = null }) {
   if (!items.length) return toast("보낼 하자가 없어요");
   const byV = new Map(); for (const d of items) byV.set(d.vendorId || "", (byV.get(d.vendorId || "") || 0) + 1);
@@ -2017,6 +2220,7 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
       <label class="check"><input type="checkbox" id="withph" ${phOn.size ? "checked" : ""}> 조치 전 사진 첨부 (카톡 공유 시, 최대 10장 · 건마다 📷로 켜고 끄기)</label>
       <div class="send-grid">
         <button type="button" class="btn btn-kakao btn-lg" data-s="kakao">카카오톡으로 보내기</button>
+        <button type="button" class="btn btn-lg btn-photos" data-s="photos">📷 사진으로 보내기 <small>위치·공종·시각 띠를 붙인 사진 여러 장</small></button>
         <p class="help small kakao-hint" id="kakao-hint">${isMobileDevice() ? (isAndroid() ? "카카오톡이 바로 열려요(내용은 복사도 돼요). 사진을 붙이면 공유창에서 <b>카카오톡</b>을 골라 주세요." : "공유창에서 <b>카카오톡</b>을 골라 주세요. 내용은 미리 복사돼요.") : "PC: 내용이 복사되고 카카오톡 PC가 열려요. 업체 채팅방에 <b>Ctrl+V</b>로 붙여넣으세요. 사진은 PC에서 자동으로 붙지 않아요(요청서 PDF를 쓰세요)."}</p>
         ${vps.map((x) => `<a class="btn btn-lg" data-s="sms" href="#" data-ph="${esc(x.phone)}">💬 문자 ${vps.length > 1 || x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a><a class="btn btn-lg" href="${M.telHref(x.phone)}" data-s="tel">📞 전화 ${vps.length > 1 || x.name ? `<small>${esc(M.contactLabel(x))}</small> ` : ""}${esc(x.phone)}</a>`).join("")}
         <button type="button" class="btn btn-lg" data-s="copy">📋 내용 복사</button>
@@ -2054,11 +2258,13 @@ async function sendSheet({ items, vendor = null, preselect = null }) {
     if (dg) selectOnly((d) => (d.dong || d.common) === dg, dg);
   });
   sh?.addEventListener("change", () => { const dg = sd.value; selectOnly((d) => (d.dong || d.common) === dg && (!sh.value || d.ho === sh.value), `${dg}${sh.value ? " " + sh.value + "호" : ""}`); });
+  const markSentFromSheet = async (via) => { const mark = $("#mark", el)?.checked; const items2 = sel(); await s.close(); if (mark) await markSent(items2, via); };
   const after = async (via) => { const mark = $("#mark", el).checked; const items2 = sel(); await s.close(); if (mark) await markSent(items2, via); };
   $$("[data-s]", el).forEach((b) => b.addEventListener("click", async (e) => {
     const k = b.dataset.s;
     if (k === "tel") return; // 기본 동작(tel:)
     if (!chosen.size) { e.preventDefault(); return toast("보낼 하자를 하나 이상 선택하세요"); }
+    if (k === "photos") return photosSendSheet({ items: sel(), vendor, onSent: (via) => markSentFromSheet(via) });
     if (k === "kakao" || k === "share") {
       let files = [];
       if ($("#withph", el).checked) {
@@ -2551,7 +2757,7 @@ async function requestImageSheet({ vendor, items }) {
 
 /* ---------- 업체 ---------- */
 ROUTES.vendors = async () => {
-  setTab("vendors"); setHeader("업체", { backBtn: navDepth() > 1, action: `<button type="button" class="hdr-btn" id="btn-vadd">＋ 등록</button>` });
+  setTab("more"); setHeader("업체", { backBtn: navDepth() > 1, action: `<button type="button" class="hdr-btn" id="btn-vadd">＋ 등록</button>` });
   const list = PD(); const today = M.todayStr();
   const stat = (vid) => { const a = list.filter((d) => d.vendorId === vid); return { open: a.filter(M.isOpen).length, od: a.filter((d) => M.isOverdue(d, today)).length, unsent: a.filter((d) => d.status === "접수" || d.status === "재접수").length, all: a.length }; };
   const vs = S.vendors.map((v) => ({ v, s: stat(v.id) })).sort((a, b) => b.s.unsent - a.s.unsent || b.s.open - a.s.open || a.v.name.localeCompare(b.v.name, "ko"));
@@ -2626,7 +2832,7 @@ function contactImportSheet({ title = "연락처에서 가져오기", forVendors
 }
 ROUTES.vendor = async (qq) => {
   const v = V(qq.id); if (!v) return replace("#/vendors");
-  setTab("vendors"); setHeader(v.name, { backBtn: true, action: `<button type="button" class="hdr-btn" id="btn-vedit">수정</button>` });
+  setTab("more"); setHeader(v.name, { backBtn: true, action: `<button type="button" class="hdr-btn" id="btn-vedit">수정</button>` });
   const mode = LS.get("vmode", "unsent");
   const all = PD().filter((d) => d.vendorId === v.id || (M.hasSteps(d) && d.steps.some((x) => x.vendorId === v.id)));
   const sets = { turn: all.filter((d) => M.isTurnOf(d, v.id)), later: all.filter((d) => M.isLaterOf(d, v.id)), unsent: all.filter((d) => d.status === "접수" || d.status === "재접수"), open: all.filter(M.isOpen), od: all.filter((d) => M.isOverdue(d)), done: all.filter((d) => d.status === "조치완료"), all };
@@ -2759,8 +2965,87 @@ ROUTES.help = async (qq) => {
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   if (qq.s) return "keep-scroll";
 };
+/* ---------- 1.3.5 사진 탭 · 더보기 탭 ---------- */
+async function photosByVendor() {
+  const list = PD().filter((d) => d.status !== "확인완료"); if (!list.length) return toast("보낼 하자가 없어요");
+  const byV = new Map(); for (const d of list) { const k = d.vendorId || ""; if (!byV.has(k)) byV.set(k, []); byV.get(k).push(d); }
+  const opts = [...byV.entries()].sort((a, b) => b[1].length - a[1].length).map(([id, l]) => ({ icon: "🏢", label: id ? vLabel(id) : "업체 미지정", sub: `${l.length}건`, value: id || "_none" }));
+  opts.push({ icon: "☑️", label: "목록에서 직접 골라 보내기", sub: "필터로 좁힌 뒤 ‘📷 사진으로 보내기’", value: "_list" });
+  const v = await choose("어느 업체의 사진을 보낼까요?", opts); if (!v) return;
+  if (v === "_list") return go("#/list");
+  const items = byV.get(v === "_none" ? "" : v) || [];
+  return photosSendSheet({ items, vendor: v === "_none" ? null : V(v), onSent: (via) => markSent(items, via) });
+}
+ROUTES.photos = async () => {
+  setTab("photos"); setHeader("사진", { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
+  const list = PD(); const today = M.todayStr(); const ids = new Set(list.map((d) => d.id));
+  const noB = list.filter((d) => M.photoMissing(d, "none")); const noA = list.filter((d) => M.photoMissing(d, "noafter"));
+  const mine = (await db.getAll("photos")).filter((x) => ids.has(x.defectId)).sort((a, b) => (a.at < b.at ? 1 : -1));
+  const nBef = mine.filter((x) => x.kind !== "after").length, nAft = mine.length - nBef; const nToday = mine.filter((x) => (x.at || "").slice(0, 10) === today).length;
+  if (S._phUrls) { S._phUrls.forEach((u) => URL.revokeObjectURL(u)); } S._phUrls = [];
+  const rec = mine.slice(0, 12).map((x) => { const u = URL.createObjectURL(x.thumb || x.blob); S._phUrls.push(u); return { x, u }; });
+  view().innerHTML = `<div class="photos-home">
+    <section class="card ph-stat">
+      <div class="kpis hp-kpis ph3">
+        <button type="button" class="kpi ${noB.length ? "warn" : "ok"}" data-f='{"photo":"none"}'><b>${n(noB.length)}</b><span>사진 없음</span></button>
+        <button type="button" class="kpi" data-f='{"photo":"noafter"}'><b>${n(noA.length)}</b><span>조치 후 없음</span></button>
+        <div class="kpi static"><b>${n(nToday)}</b><span>오늘 찍음</span></div>
+      </div>
+      <p class="help small">조치 전 ${n(nBef)}장 · 조치 후 ${n(nAft)}장 · 하자 ${n(list.length)}건</p>
+      ${photoLegendHtml(phCounts(list))}
+      ${noB.length ? `<button type="button" class="btn btn-primary btn-xl" id="ph-shoot">📷 사진 없는 ${n(noB.length)}건 연속 촬영</button>` : `<p class="help ok-line">✓ 모든 하자에 조치 전 사진이 있어요</p>`}
+      ${noA.length ? `<button type="button" class="btn btn-lg btn-block" id="ph-shoot-after">✅ 조치 후 사진 ${n(noA.length)}건 연속 촬영</button>` : ""}
+    </section>
+    <div class="actions3 ph-acts">
+      <button type="button" class="act" id="ph-send"><span class="act-i">🖼</span><b>사진으로 보내기</b><small>업체 고르기 · 띠 합성</small></button>
+      <button type="button" class="act" id="ph-req"><span class="act-i">📲</span><b>요청서 보내기</b><small>카톡·PDF·문자</small></button>
+      <button type="button" class="act" id="ph-band"><span class="act-i">🎞</span><b>사진 띠 설정</b><small>넣을 항목·방식</small></button>
+    </div>
+    <h3 class="sec">최근 찍은 사진 <small>${n(mine.length)}장 중 ${rec.length}장</small></h3>
+    ${rec.length ? `<div class="ph-grid">${rec.map(({ x, u }) => `<button type="button" class="ph-th" data-id="${esc(x.defectId)}" aria-label="${x.kind === "after" ? "조치 후" : "조치 전"} 사진 · 하자 열기"><img src="${u}" alt="" loading="lazy"><span class="ph-k ${x.kind === "after" ? "a" : "b"}">${x.kind === "after" ? "조치 후" : "조치 전"}</span></button>`).join("")}</div>` : `<div class="card empty-card"><p>아직 찍은 사진이 없어요.<br>하자 카드의 ‘📷 사진 없음’ 버튼이나 연속 촬영으로 시작하세요.</p></div>`}
+    ${verFoot()}</div>`;
+  bindVerFoot();
+  $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
+  $$(".ph-th", view()).forEach((b) => b.addEventListener("click", () => go(`#/item?id=${b.dataset.id}`)));
+  $("#ph-shoot")?.addEventListener("click", () => shootSheet({ items: PD(), kind: "before" }));
+  $("#ph-shoot-after")?.addEventListener("click", () => shootSheet({ items: PD(), kind: "after" }));
+  $("#ph-send").addEventListener("click", photosByVendor);
+  $("#ph-req").addEventListener("click", () => { const un = PD().filter((d) => d.status === "접수" || d.status === "재접수"); if (!un.length) { toast("미전달 건이 없어요 · 업체 화면으로 갈게요", { ms: 3000 }); return go("#/vendors"); } return sendChecked(un); });
+  $("#ph-band").addEventListener("click", () => bandSheet());
+};
+ROUTES.more = async () => {
+  setTab("more"); setHeader("더보기", { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
+  const p = P(); const list = PD(); const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
+  const item = (go2, ico, t, sub = "", attr = "") => `<button type="button" class="sitem" ${go2 ? `data-go="${go2}"` : ""} ${attr}><span class="si-ico">${ico}</span><span><b>${t}</b>${sub ? `<small>${sub}</small>` : ""}</span><span class="chev">›</span></button>`;
+  view().innerHTML = `<div class="more-hub">
+    <h3 class="sec">현장 보기</h3><div class="slist">
+      ${item("#/vendors", "🏢", "업체", `${S.vendors.length}곳 · 업체별 하자·보내기`, 'id="mo-vendors"')}
+      ${item("#/places", "🧱", "하자위치", "동·지하주차장·부대시설 등 전체 위치 한눈에", 'id="mo-grid"')}
+      ${item("#/dash", "📊", "대시보드", "상태·업체·경과일 통계")}
+      ${item("", "🏷", "관리 탭", "중점관리 등 내가 묶은 하자 탭 만들기·고치기", 'data-a="tabs" id="mo-tabs"')}</div>
+    <h3 class="sec">보내기·문서</h3><div class="slist">
+      ${item("", "📲", "요청서 보내기", unsent ? `미전달 ${n(unsent)}건 · 업체 고르기` : "업체에 카톡·PDF·문자", 'data-a="send"')}
+      ${item("", "📋", "작업지시 및 완료확인서", "표 형식 · 인쇄/PDF/이미지", 'data-a="wo"')}
+      ${item("", "📤", "전체 내보내기", "엑셀·CSV·요청서", 'data-a="export"')}</div>
+    <h3 class="sec">설정·도움</h3><div class="slist">
+      ${item("#/settings", "⚙️", "설정", "현장·사진 띠·동기화·백업·요청자 이름", 'id="mo-settings"')}
+      ${item("#/import", "📥", "엑셀 가져오기", "다른 시스템·엑셀 목록")}
+      ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장`, 'data-a="switch"')}
+      ${item("#/help", "📘", "사용법 보기", "처음이라면 여기부터")}</div>
+    ${verFoot()}</div>`;
+  bindVerFoot();
+  $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
+  $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
+    const a = b.dataset.a;
+    if (a === "switch") return switchProject();
+    if (a === "export") return exportSheet(PD(), "전체");
+    if (a === "tabs") return tabManager(() => {});
+    if (a === "wo") return workOrderSheet({ items: PD() });
+    if (a === "send") { const un = PD().filter((d) => d.status === "접수" || d.status === "재접수"); if (!un.length) { toast("미전달 건이 없어요 · 업체 화면으로 갈게요", { ms: 3000 }); return go("#/vendors"); } return sendChecked(un); }
+  }));
+};
 ROUTES.settings = async () => {
-  setTab("settings"); setHeader("설정", { backBtn: navDepth() > 1, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
+  setTab("more"); setHeader("설정", { backBtn: navDepth() > 1, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
   const p = P(); let est = "";
   try { const e = await navigator.storage?.estimate?.(); if (e) est = `${(e.usage / 1048576).toFixed(1)}MB 사용`; } catch {}
   let persisted = false; try { persisted = await navigator.storage?.persisted?.(); } catch {}
@@ -2771,8 +3056,9 @@ ROUTES.settings = async () => {
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장${Pro.isPro() ? "" : " · 무료판 1개"}`, 'data-a="switch"')}
       ${item("", "🧪", "샘플 현장 불러오기", "기능을 둘러볼 수 있는 가상 데이터", 'data-a="sample"')}</div>
     <h3 class="sec">사진·표시</h3><div class="slist">
-      ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
-      ${p ? item("", "🎨", "동현황 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
+      ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? (stampMode() === "burn" ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "켬 · 원본은 그대로, 보낼 때만 띠(위치·공종·현장명·시각) 합성") : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
+      ${item("", "🖼", "사진 띠 설정", "방식(원본 유지·보낼 때만 / 찍을 때 새김) · 띠에 넣을 항목 켜고 끄기", 'data-a="band" id="si-band"')}
+      ${p ? item("", "🎨", "하자위치 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}
       ${p ? item("", "🏷", "공종 → 업체 자동 지정", `표 ${(p.vendorMap || []).length}줄 · 없으면 기록에서 가장 많이 맡은 업체`, 'data-a="vendor-map" id="si-vmap"') : ""}
       ${item("", "🧹", "공종 이름 정리/합치기", (() => { const n1 = P() ? tradeDupesNow().length : 0; return n1 ? `비슷한 이름 ${n1}묶음 — 합치기` : "도장 · 도장공사 같은 이름을 하나로"; })(), 'data-a="trade-merge" id="si-trademerge"')}
@@ -2799,6 +3085,7 @@ ROUTES.settings = async () => {
     if (a === "switch") return switchProject();
     if (a === "sample") return loadSample();
     if (a === "heat") return heatSheet();
+    if (a === "band") return bandSheet();
     if (a === "stamp") { LS.set("stampPhotos", !stampOn()); toast(stampOn() ? "사진에 위치·일시를 새겨요" : "사진을 원본 그대로 저장해요"); return rerender(); }
     if (a === "export") return exportSheet(PD(), "전체");
     if (a === "backup") return doBackup();
@@ -3428,7 +3715,17 @@ function onRemoteChange() {
     rerender();
   }, 250);
 }
+/** 1.3.5 홈 맨 위 로그인·동기화 카드: 로그인 안 됨/이 기기만/오류는 눈에 띄게, 정상은 한 줄 */
+function homeSyncHtml(stt = Sync.status()) {
+  const ago = (t) => { if (!t) return ""; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "방금" : m < 60 ? `${m}분 전` : m < 1440 ? `${Math.round(m / 60)}시간 전` : `${Math.round(m / 1440)}일 전`; };
+  const k = stt.key; const last = Sync.state.lastSync;
+  if (k === "login") return `<section class="card sync-card warn" id="home-sync" data-k="login"><span class="sy-ico" aria-hidden="true">☁</span><div class="sy-t"><b>로그인하면 팀·다른 기기와 공유돼요</b><small>지금은 이 기기에만 저장 · 로그인은 선택</small></div><button type="button" class="btn btn-sm btn-primary" data-go="#/sync">로그인</button></section>`;
+  if (k === "local") return `<section class="card sync-card warn" id="home-sync" data-k="local"><span class="sy-ico" aria-hidden="true">☁</span><div class="sy-t"><b>이 현장은 이 기기에만 있어요</b><small>${esc(stt.detail || "")} 계정으로 로그인됨 · 팀 공유를 켜면 같이 써요</small></div><button type="button" class="btn btn-sm btn-primary" data-go="#/sync">공유 설정</button></section>`;
+  if (k === "error" || k === "offline") return `<section class="card sync-card bad" id="home-sync" data-k="${k}"><span class="sy-ico" aria-hidden="true">⚠</span><div class="sy-t"><b>${esc(stt.label)}</b><small>${esc(stt.detail || "누르면 자세한 상태를 봐요")}</small></div><button type="button" class="btn btn-sm" data-go="#/sync">상태 보기</button></section>`;
+  return `<button type="button" class="sync-line" id="home-sync" data-k="${k}" data-go="#/sync" aria-label="동기화 상태: ${esc(stt.label)}"><span class="sl-dot" aria-hidden="true"></span><span>☁ ${esc(stt.label)}${k === "ok" && last ? ` · 마지막 ${ago(last)}` : ""}</span><span class="chev">›</span></button>`;
+}
 function paintSyncChip(stt = Sync.status()) {
+  const hs = $("#home-sync"); if (hs) { const t = document.createElement("template"); t.innerHTML = homeSyncHtml(stt).trim(); const nw = t.content.firstElementChild; hs.replaceWith(nw); nw.addEventListener("click", (e) => { const g = e.target.closest("[data-go]"); if (g) go(g.dataset.go); }); }
   const c = $("#sync-chip"); if (!c) return;
   c.hidden = false; c.dataset.k = stt.key; c.innerHTML = `<span class="sc-in">${esc(stt.label)}</span>`; c.title = stt.detail || stt.label;
   c.setAttribute("aria-label", "동기화 상태: " + stt.label);
@@ -3478,7 +3775,7 @@ function memberRow(m) {
       <button type="button" class="btn btn-sm btn-ghost" data-kick="${esc(m.uid)}" aria-label="${esc(m.name || "")} 내보내기">내보내기</button>` : `<span class="mrole r-${m.role}">${ROLE_KO[m.role] || m.role}</span>`}</div>`;
 }
 ROUTES.sync = async () => {
-  setTab("settings"); setHeader("동기화·팀 현장", { backBtn: true });
+  setTab("more"); setHeader("동기화·팀 현장", { backBtn: true });
   const on = Sync.attached(), user = Sync.signedIn(), ws = Sync.state.ws, wd = Sync.state.wsDoc;
   const pending = LS.get("pendingJoin", "");
   let list = [];
