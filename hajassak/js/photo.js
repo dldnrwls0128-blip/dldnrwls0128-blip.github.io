@@ -1,4 +1,4 @@
-/** 사진 압축(긴 변 1600px, JPEG 0.72) + 위치·시간 스탬프 + 썸네일 */
+/** 사진 압축(긴 변 2048px, JPEG 0.85) + 위치·시간 스탬프 + 미리보기 썸네일(약 960px, JPEG 0.8) */
 function loadImage(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob); const img = new Image();
@@ -49,7 +49,24 @@ export function drawStamp(ctx, w, h, info) {
   }
   ctx.restore();
 }
-export async function compressImage(file, { max = 1600, quality = 0.72, stamp = null } = {}) {
+export const PHOTO_MAX = 2048;
+export const PHOTO_QUALITY = 0.85;
+export const THUMB_MAX = 960;
+export const THUMB_QUALITY = 0.8;
+function thumbCanvas(src, sw, sh, thumbMax = THUMB_MAX) {
+  const ts = Math.min(1, thumbMax / Math.max(sw, sh));
+  const t = document.createElement("canvas"); t.width = Math.max(1, Math.round(sw * ts)); t.height = Math.max(1, Math.round(sh * ts));
+  t.getContext("2d").drawImage(src, 0, 0, t.width, t.height);
+  return t;
+}
+/** 이미 저장된 원본에서 미리보기용 썸네일을 다시 만든다(옛 240px 캐시 교체). 동기화 문서는 건드리지 않고 호출 쪽에서 로컬만 씀 */
+export async function makeThumb(blob, thumbMax = THUMB_MAX, quality = THUMB_QUALITY) {
+  const im = await decode(blob);
+  const t = thumbCanvas(im.src, im.w, im.h, thumbMax); im.close();
+  const b = await toBlob(t, quality);
+  return { blob: b, w: t.width, h: t.height };
+}
+export async function compressImage(file, { max = PHOTO_MAX, quality = PHOTO_QUALITY, stamp = null, thumbMax = THUMB_MAX, thumbQuality = THUMB_QUALITY } = {}) {
   const im = await decode(file);
   const s = Math.min(1, max / Math.max(im.w, im.h));
   const w = Math.round(im.w * s), h = Math.round(im.h * s);
@@ -57,10 +74,8 @@ export async function compressImage(file, { max = 1600, quality = 0.72, stamp = 
   const ctx = c.getContext("2d"); ctx.drawImage(im.src, 0, 0, w, h); im.close();
   if (stamp) drawStamp(ctx, w, h, stamp);
   const blob = await toBlob(c, quality);
-  const ts = Math.min(1, 240 / Math.max(w, h));
-  const t = document.createElement("canvas"); t.width = Math.round(w * ts); t.height = Math.round(h * ts);
-  t.getContext("2d").drawImage(c, 0, 0, t.width, t.height);
-  return { blob, thumb: await toBlob(t, 0.7), w, h };
+  const t = thumbCanvas(c, w, h, thumbMax);
+  return { blob, thumb: await toBlob(t, thumbQuality), w, h, tw: t.width, th: t.height };
 }
 /** 이미 저장된(스탬프 없는) 사진에 보낼 때·내보낼 때만 스탬프를 새겨 새 Blob으로(원본은 그대로) */
 export async function stampBlob(blob, info, quality = 0.8) {

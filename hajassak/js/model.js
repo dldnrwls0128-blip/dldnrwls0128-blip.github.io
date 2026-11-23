@@ -338,6 +338,47 @@ export function autoVendorFor({ trade = "", subTrade = "" } = {}, { table = [], 
 export function suggestVendor(vendors, trade, projectId, defects = []) {
   return vendorsForTrade(vendors, trade, projectId, defects)[0] || null;
 }
+/** 1.3.10 업체로 공종 추천: 설정 표 → 업체 담당 공종(하나면 그것, 여러 개면 기록 빈도·최근) → 하자 기록 빈도 */
+export function tradesForVendor(vendorId, { vendors = [], defects = [], table = [], projectTrades = [] } = {}) {
+  if (!vendorId) return [];
+  const canon = (name) => projectTrades.find((t) => sameTrade(t.name, name))?.name || name;
+  const m = new Map();
+  const add = (name, n, last, src, w = 1) => {
+    if (!name) return; const k = tradeKey(name); if (!k) return;
+    const x = m.get(k) || { name: canon(name), n: 0, last: "", src, w: 0 };
+    x.n += n; x.w = Math.max(x.w, w); if (last && last > x.last) x.last = last; m.set(k, x);
+  };
+  for (const r of table) if (r.vendorId === vendorId && r.trade) add(r.trade, 1, "", "table", 3);
+  const v = vendors.find((x) => x.id === vendorId);
+  for (const t of (v?.trades || [])) add(t, 1, "", "trades", 2);
+  for (const d of defects) if (d.vendorId === vendorId && d.trade) add(d.trade, 1, d.updatedAt || d.createdAt || "", "learned", 1);
+  return [...m.values()].sort((a, b) => b.w - a.w || b.n - a.n || String(b.last).localeCompare(String(a.last)) || a.name.localeCompare(b.name, "ko"));
+}
+export function autoTradeFor(vendorId, opts = {}) {
+  const list = tradesForVendor(vendorId, opts); if (!list.length) return null;
+  const top = list[0];
+  const why = top.src === "table" ? `설정 · ${top.name}` : top.src === "trades" ? "담당 공종" : `기록 · ${top.name}`;
+  return { trade: top.name, why, src: top.src, alts: list.slice(1).map((x) => x.name) };
+}
+/** 공종·업체가 정해졌을 때 세부공종·유형이 하나로 모이면 추천 */
+export function autoPartsFor({ trade = "", vendorId = "" } = {}, { defects = [], projectTrade = null, types = [] } = {}) {
+  const out = {};
+  const same = (d) => (!trade || sameTrade(d.trade, trade)) && (!vendorId || d.vendorId === vendorId);
+  const uniq = (field, names) => {
+    if (names?.length === 1) return { v: names[0], why: "유일한 항목", src: "list", alts: [] };
+    if (names?.length > 1) return null;
+    const cnt = new Map();
+    for (const d of defects) { if (!same(d) || !d[field]) continue; const k = sameKey(d[field]); const x = cnt.get(k) || { name: d[field], n: 0 }; x.n++; cnt.set(k, x); }
+    const list = [...cnt.values()].sort((a, b) => b.n - a.n);
+    if (list.length === 1) return { v: list[0].name, why: "기록", src: "learned", alts: [] };
+    return null;
+  };
+  const sub = uniq("subTrade", projectTrade?.subs);
+  if (sub) out.subTrade = sub;
+  const typ = uniq("type", types);
+  if (typ) out.type = typ;
+  return out;
+}
 /** 대표 이름 고르기: 이미 쓰는 ‘○○공사’ 꼴 중 가장 많이 쓴 것, 없으면 가장 많이 쓴 것 */
 export function canonicalTrade(variants, count = () => 0) {
   const by = (a, b) => count(b) - count(a) || a.length - b.length || a.localeCompare(b, "ko");

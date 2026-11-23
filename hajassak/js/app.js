@@ -2,7 +2,7 @@
 import * as db from "./db.js";
 import * as M from "./model.js";
 import { $, $$, esc, n, toast, busy, initNav, go, replace, back, rerender, navDepth, navKind, pushLayer, closeLayer, unwind, openSheet, ask, prompt2, choose, pickFile } from "./ui.js";
-import { compressImage, downloadBlob, shareOrDownload, stampBlob, drawStamp } from "./photo.js";
+import { compressImage, downloadBlob, shareOrDownload, stampBlob, drawStamp, makeThumb, PHOTO_MAX, THUMB_MAX } from "./photo.js";
 import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactPickerSupported, contactPickerInfo, pickContacts, canShareFiles } from "./share.js";
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
@@ -270,14 +270,56 @@ function phBlock(d) {
   const slots = [hasB ? slot("before") : empty("before")]; if (wantA) slots.push(hasA ? slot("after") : empty("after"));
   return `<div class="dc-ph ${slots.length > 1 ? "two" : "one"} ${phState(d)}">${slots.join("")}</div>`;
 }
-const _thUrls = new Map();
+const _thUrls = new Map(); const _thHi = new Map();
+function forgetThumbs() {
+  for (const u of _thUrls.values()) URL.revokeObjectURL(u); _thUrls.clear();
+  for (const u of _thHi.values()) URL.revokeObjectURL(u); _thHi.clear();
+}
+function evictThumbs(max = 80) {
+  while (_thHi.size > max) { const k = _thHi.keys().next().value; URL.revokeObjectURL(_thHi.get(k)); _thHi.delete(k); }
+  while (_thUrls.size > max) { const k = _thUrls.keys().next().value; URL.revokeObjectURL(_thUrls.get(k)); _thUrls.delete(k); }
+}
+/** 미리보기 URL: 작은(옛 240px) 썸네일은 원본에서 약 960px로 다시 만들어 로컬에만 둠. 목록은 지연 로딩 유지 */
+async function thumbUrl(ph) {
+  if (_thHi.has(ph.id)) return _thHi.get(ph.id);
+  const low = ph.thumb || ph.blob; if (!low) return "";
+  let edge = Number(ph.tw) || 0;
+  if (!edge && ph.thumb) { try { const bm = await createImageBitmap(ph.thumb); edge = Math.max(bm.width, bm.height); bm.close?.(); } catch {} }
+  if (edge >= 800 || !ph.blob || (ph.thumb && ph.thumb === ph.blob)) {
+    let u = _thUrls.get(ph.id); if (!u) { u = URL.createObjectURL(low); _thUrls.set(ph.id, u); evictThumbs(); } return u;
+  }
+  try {
+    const hi = await makeThumb(ph.blob); const u = URL.createObjectURL(hi.blob); _thHi.set(ph.id, u); evictThumbs(); return u;
+  } catch {
+    let u = _thUrls.get(ph.id); if (!u) { u = URL.createObjectURL(low); _thUrls.set(ph.id, u); } return u;
+  }
+}
+function lowThumbUrl(ph) {
+  const b = ph.thumb || ph.blob; if (!b) return "";
+  let u = _thUrls.get(ph.id); if (!u) { u = URL.createObjectURL(b); _thUrls.set(ph.id, u); evictThumbs(); } return u;
+}
+async function paintThumb(img, ph) {
+  if (!img || !ph) return;
+  const low = lowThumbUrl(ph); if (low) { img.src = low; img.classList.add("ok"); }
+  const hi = await thumbUrl(ph); if (img.isConnected && hi && img.src !== hi) img.src = hi;
+}
+/** 크게 보기: 썸네일을 먼저 보여 주고 원본으로 교체 */
+async function showFullPhoto(img, ph, d = null) {
+  if (!img || !ph) return "";
+  if (ph.thumb) img.src = lowThumbUrl(ph);
+  let url = URL.createObjectURL(ph.blob); img.src = url;
+  if (d && ph.stamp === "0" && stampOn()) {
+    try { const bl = await photoOut(ph, d); if (bl && bl !== ph.blob) { URL.revokeObjectURL(url); url = URL.createObjectURL(bl); img.src = url; } } catch {}
+  }
+  return url;
+}
 function hydrateThumbs(root = view()) {
-  if (S._thRoute !== location.hash) { for (const u of _thUrls.values()) URL.revokeObjectURL(u); _thUrls.clear(); S._thRoute = location.hash; }
+  if (S._thRoute !== location.hash) { forgetThumbs(); S._thRoute = location.hash; }
   S._dp = new Map();
   const defPhotos = (id) => { if (!S._dp.has(id)) S._dp.set(id, db.byIndex("photos", "by_defect", id).then((ps) => ps.sort((a, b) => (a.at < b.at ? -1 : 1)))); return S._dp.get(id); };
   const fill = async (img) => { if (img.dataset.done) return; img.dataset.done = "1"; const ps = await defPhotos(img.dataset.d); const k = img.dataset.k;
     const ph = k === "after" ? [...ps].reverse().find((x) => x.kind === "after") : ps.find((x) => x.kind !== "after"); if (!ph) return;
-    let u = _thUrls.get(ph.id); if (!u) { u = URL.createObjectURL(ph.thumb || ph.blob); _thUrls.set(ph.id, u); } img.src = u; img.classList.add("ok"); };
+    await paintThumb(img, ph); };
   const imgs = $$("img.ph-lazy", root);
   if (!("IntersectionObserver" in window)) { imgs.forEach(fill); return; }
   const io = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { io.unobserve(e.target); fill(e.target); } }, { rootMargin: "300px 0px" });
@@ -290,12 +332,13 @@ async function galleryViewer(ids, startId, startKind = "before") {
     for (const ph of [...ps.filter((x) => x.kind !== "after"), ...ps.filter((x) => x.kind === "after")]) slides.push({ d, ph }); }
   if (!slides.length) return toast("볼 사진이 없어요");
   let i = Math.max(0, slides.findIndex((x) => x.d.id === startId && (x.ph.kind === "after") === (startKind === "after"))); if (i < 0) i = 0; let url = "", tok = 0;
+  const canDel = !isViewerNow();
   const s = openSheet({ title: "세대 사진", full: true, cls: "viewer gal", html: `<div class="pv" id="gv-pv"><img id="pv-img" alt="사진"></div><div class="gv-cap" id="gv-cap"></div><div class="pv-nav"><button type="button" class="btn" data-n="-1">‹ 이전</button><span id="pv-i"></span><button type="button" class="btn" data-n="1">다음 ›</button></div>`,
-    footer: `<button type="button" class="btn" data-a="open">하자 열기</button><button type="button" class="btn" data-a="share">공유</button>` });
-  const show = async () => { const { d, ph } = slides[i]; const my = ++tok; if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(ph.blob); $("#pv-img", s.el).src = url;
+    footer: `<button type="button" class="btn" data-a="open">하자 열기</button><button type="button" class="btn" data-a="share">공유</button>${canDel ? `<button type="button" class="btn btn-danger pv-del" data-a="del">🗑 삭제</button>` : ""}` });
+  const show = async () => { const { d, ph } = slides[i]; const my = ++tok; if (url) URL.revokeObjectURL(url);
+    url = await showFullPhoto($("#pv-img", s.el), ph, d); if (my !== tok) return;
     $("#pv-i", s.el).textContent = `${i + 1} / ${slides.length} · ${ph.kind === "after" ? "조치 후" : "조치 전"}`;
-    $("#gv-cap", s.el).innerHTML = `<b>${esc(M.locText(d) || "위치 미지정")}</b> <span>${esc(M.tradeText(d))}${d.content ? " · " + esc(d.content) : ""}</span> <small>${esc(vName(d) || "업체 미지정")} · ${esc(d.status)}</small>`;
-    if (ph.stamp === "0" && stampOn()) { const bl = await photoOut(ph, d); if (my === tok && bl !== ph.blob) { if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(bl); $("#pv-img", s.el).src = url; } } };
+    $("#gv-cap", s.el).innerHTML = `<b>${esc(M.locText(d) || "위치 미지정")}</b> <span>${esc(M.tradeText(d))}${d.content ? " · " + esc(d.content) : ""}</span> <small>${esc(vName(d) || "업체 미지정")} · ${esc(d.status)}</small>`; };
   const nav = (dn) => { i = (i + dn + slides.length) % slides.length; show(); };
   $$("[data-n]", s.el).forEach((b) => b.addEventListener("click", () => nav(Number(b.dataset.n))));
   const pv = $("#gv-pv", s.el); let x0 = null; pv.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; }, { passive: true });
@@ -303,6 +346,11 @@ async function galleryViewer(ids, startId, startKind = "before") {
   const key = (e) => { if (e.key === "ArrowLeft") nav(-1); else if (e.key === "ArrowRight") nav(1); }; document.addEventListener("keydown", key); const oc = s.onClose; s.onClose = () => { document.removeEventListener("keydown", key); if (url) URL.revokeObjectURL(url); oc?.(); };
   $("[data-a=open]", s.el).addEventListener("click", async () => { const id = slides[i].d.id; await s.close(); go(`#/item?id=${id}`); });
   $("[data-a=share]", s.el).addEventListener("click", async () => { const { d, ph } = slides[i]; shareOrDownload(await photoOut(ph, d), `하자사진_${i + 1}.jpg`); });
+  $("[data-a=del]", s.el)?.addEventListener("click", async () => {
+    const { d, ph } = slides[i]; if (!(await removePhoto(ph, d))) return;
+    slides.splice(i, 1); if (!slides.length) { await s.close(); rerender(); return; }
+    i = Math.min(i, slides.length - 1); show(); rerender();
+  });
   show();
 }
 /** 1.3.5 카드 색 = 사진 상태: 사진 없음(회색) · 조치 전만(주황) · 조치 후 있음(초록) */
@@ -1177,7 +1225,7 @@ function unitPlanHtml(dong, ho, all, list) {
   const pins = unitPins(list, plan, st.z);
   const rc = roomCounts(list, plan); const unpinned = rc.unplaced; const sc = relScale(rc.rooms.map((r) => r.items.length));
   const no = new Map(list.map((d, i) => [d.id, i + 1])); const mode = st.mode === "pin" ? "pin" : "count";
-  return `<section class="card up-wrap" id="up-wrap">
+  return `<section class="card up-wrap ${st.z >= 1.5 ? "up-named" : ""}" id="up-wrap" style="--up-z:${st.z};--ub:20px">
       ${plans.length > 1 ? `<div class="chips scroll" id="up-plans">${plans.map((x) => `<button type="button" class="chip ${x.id === plan.id ? "on" : ""}" data-upl="${x.id}">${esc(x.name)}</button>`).join("")}</div>` : ""}
       <div class="up-tools"><div class="up-mode" role="group" aria-label="도면 표시"><button type="button" class="${mode === "count" ? "on" : ""}" data-upm="count" aria-pressed="${mode === "count"}">🔢 방별 건수</button><button type="button" class="${mode === "pin" ? "on" : ""}" data-upm="pin" aria-pressed="${mode === "pin"}">📍 핀</button></div><span class="sp"></span><button type="button" class="btn btn-sm" id="up-zo" aria-label="축소">－</button><button type="button" class="btn btn-sm" id="up-zi" aria-label="확대">＋</button></div>
       <div class="up-scroll" id="up-scroll"><div class="plan up-plan" id="up-plan" style="width:${st.z * 100}%"><img id="up-img" alt="${esc(plan.name)} 평면도">
@@ -1201,8 +1249,43 @@ function bindUnitPlan(dong, ho, all, list) {
   }));
   if (!st || !$("#up-plan")) return;
   const plan = S.plans.find((x) => x.id === st.plan); const img = $("#up-img"); const u = URL.createObjectURL(plan.blob); img.src = u;
-  const zoom = (z) => { st.z = Math.min(4, Math.max(1, z)); $("#up-plan").style.width = st.z * 100 + "%"; };
+  const layoutMarks = () => {
+    const wrap = $("#up-wrap"), plan = $("#up-plan"), img = $("#up-img"); if (!wrap || !plan) return;
+    const w = img?.getBoundingClientRect().width || plan.clientWidth, h = img?.getBoundingClientRect().height || plan.clientHeight;
+    const vis = Math.round(Math.min(22, Math.max(18, (w / Math.max(st.z, 1)) * 0.05)));
+    wrap.style.setProperty("--ub", vis + "px"); wrap.classList.toggle("up-named", st.z >= 1.5);
+    const badges = [...$$(".ubadge", plan)]; if (badges.length < 2 || !w || !h) return;
+    const minPx = vis + 4;
+    const pts = badges.map((b) => { const x = parseFloat(b.style.left) / 100, y = parseFloat(b.style.top) / 100; return { b, x, y, ox: x, oy: y }; });
+    for (let iter = 0; iter < 24; iter++) {
+      let moved = false;
+      for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+        const dx = (pts[j].x - pts[i].x) * w, dy = (pts[j].y - pts[i].y) * h, d = Math.hypot(dx, dy) || 0.01;
+        if (d < minPx) { const p = (minPx - d) / 2 / d; pts[i].x -= (dx * p) / w; pts[i].y -= (dy * p) / h; pts[j].x += (dx * p) / w; pts[j].y += (dy * p) / h; moved = true; }
+      }
+      if (!moved) break;
+    }
+    for (const p of pts) {
+      const cap = 0.08; p.x = Math.min(p.ox + cap, Math.max(p.ox - cap, Math.min(0.96, Math.max(0.04, p.x))));
+      p.y = Math.min(p.oy + cap, Math.max(p.oy - cap, Math.min(0.96, Math.max(0.04, p.y))));
+      p.b.style.left = (p.x * 100).toFixed(2) + "%"; p.b.style.top = (p.y * 100).toFixed(2) + "%";
+    }
+  };
+  const zoom = (z, from) => {
+    const sc = $("#up-scroll"), prev = sc ? { l: sc.scrollLeft, t: sc.scrollTop, w: sc.clientWidth, h: sc.clientHeight, sw: $("#up-plan")?.clientWidth || 1 } : null;
+    st.z = Math.min(4, Math.max(1, Math.round(z * 20) / 20)); $("#up-plan").style.width = st.z * 100 + "%";
+    if (sc && prev) { const r = (st.z * 100) / prev.sw; sc.scrollLeft = (prev.l + (from ? from.x : prev.w / 2)) * r - (from ? from.x : prev.w / 2); sc.scrollTop = (prev.t + (from ? from.y : prev.h / 2)) * r - (from ? from.y : prev.h / 2); }
+    layoutMarks();
+  };
+  img.addEventListener("load", layoutMarks); if (img.complete && img.naturalWidth) layoutMarks();
   $("#up-zi").addEventListener("click", () => zoom(st.z + 0.5)); $("#up-zo").addEventListener("click", () => zoom(st.z - 0.5));
+  const sc = $("#up-scroll");
+  if (sc) {
+    let pinch = null;
+    sc.addEventListener("touchstart", (e) => { if (e.touches.length === 2) { const a = e.touches[0], b = e.touches[1]; pinch = { z: st.z, d: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY), x: (a.clientX + b.clientX) / 2 - sc.getBoundingClientRect().left, y: (a.clientY + b.clientY) / 2 - sc.getBoundingClientRect().top }; } }, { passive: true });
+    sc.addEventListener("touchmove", (e) => { if (!pinch || e.touches.length !== 2) return; const a = e.touches[0], b = e.touches[1]; const d = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY); if (pinch.d) zoom(pinch.z * d / pinch.d, { x: pinch.x, y: pinch.y }); }, { passive: true });
+    sc.addEventListener("touchend", () => { pinch = null; }, { passive: true });
+  }
   $$("[data-upl]").forEach((b) => b.addEventListener("click", () => { st.plan = b.dataset.upl; st.sel = ""; rerender(); }));
   const showCard = (id) => {
     st.sel = id; $$(".upin").forEach((x) => x.classList.toggle("on", x.dataset.pin === id));
@@ -1661,14 +1744,25 @@ function autoVendorOf(dr, cands = null) {
 function renderForm() {
   const p = P(); const dr = S.draft; const editing = !!dr._editId;
   setTab(editing ? null : "new"); setHeader(editing ? "하자 수정" : "하자 등록", { backBtn: navDepth() > 1 || editing });
-  const trade = p.trades.find((t) => t.name === dr.trade);
-  const cands = M.vendorsForTrade(S.vendors, dr.trade, p.id, PD());
+  let trade = p.trades.find((t) => t.name === dr.trade);
+  let cands = M.vendorsForTrade(S.vendors, dr.trade, p.id, PD());
   /* 1.3.0 자동 지정: 설정 표 → 기록(세부공종·공종에 가장 많이 맡은 업체) → 업체 담당 공종. 미지정일 때만 채우고, 이미 있으면 ‘→ 업체로 변경’ 한 번 누르기 */
   if (dr.vendorAuto === undefined) dr.vendorAuto = !editing;
+  if (dr.tradeAuto === undefined) dr.tradeAuto = !dr.trade;
+  if (dr.subTradeAuto === undefined) dr.subTradeAuto = !dr.subTrade;
+  if (dr.typeAuto === undefined) dr.typeAuto = !dr.type;
+  const tAuto = (dr.vendorId && (dr.tradeAuto || !dr.trade)) ? M.autoTradeFor(dr.vendorId, { vendors: S.vendors, defects: PD(), table: p.vendorMap || [], projectTrades: p.trades || [] }) : null;
+  if (tAuto && (dr.tradeAuto || !dr.trade)) { dr.trade = tAuto.trade; dr.tradeAuto = true; }
+  const tradeAlts = tAuto?.alts || (dr.vendorId && dr.trade ? (M.tradesForVendor(dr.vendorId, { vendors: S.vendors, defects: PD(), table: p.vendorMap || [], projectTrades: p.trades || [] }).map((x) => x.name).filter((n) => !M.sameTrade(n, dr.trade))) : []);
   const auto = autoVendorOf(dr, cands);
   if (dr.vendorAuto) dr.vendorId = auto?.id || (dr.trade ? "" : dr.vendorId);
   const sug = auto && dr.vendorId === auto.id ? auto : null;
   const hint = auto && auto.id !== dr.vendorId && !dr.vendorAuto ? auto : null;
+  const parts = M.autoPartsFor({ trade: dr.trade, vendorId: dr.vendorId }, { defects: PD(), projectTrade: (p.trades.find((t) => t.name === dr.trade) || p.trades.find((t) => M.sameTrade(t.name, dr.trade))), types: p.types || [] });
+  if (parts.subTrade && (dr.subTradeAuto || !dr.subTrade)) { dr.subTrade = parts.subTrade.v; dr.subTradeAuto = true; }
+  if (parts.type && (dr.typeAuto || !dr.type)) { dr.type = parts.type.v; dr.typeAuto = true; }
+  trade = p.trades.find((t) => t.name === dr.trade) || p.trades.find((t) => M.sameTrade(t.name, dr.trade));
+  cands = M.vendorsForTrade(S.vendors, dr.trade, p.id, PD());
   const loc = M.locText(dr);
   const plans = matchPlans(dr);
   const prevPhotos = editing ? photoCount({ id: dr._editId }) : { before: 0, after: 0 };
@@ -1686,9 +1780,10 @@ function renderForm() {
     <section class="fsec" id="fs-what"><h3 class="fsec-h"><span class="n">3</span>공종·내용</h3>
     ${!editing ? (() => { const rc = recentCombos(8); return rc.length ? `<div class="fld recent-c"><span>최근 내용 불러오기 <small class="help">누르면 공종·세부공종·유형·내용 채움</small></span><div class="chips scroll" id="recent-c">${rc.map((x) => `<button type="button" class="chip rcombo" data-rc="${x.id}" title="${esc(x.content || "")}"><b>${esc(M.tradeText(x))}</b>${x.type ? ` · ${esc(x.type)}` : ""} <small>${esc((x.content || "").slice(0, 18))}</small></button>`).join("")}</div></div>` : ""; })() : ""}
     <div class="fld"><span>구분</span>${chipRow("category", M.catsOf(p), dr.category, { allowAdd: true, ua: (o) => isUserItem("categories", o) })}</div>
-    <div class="fld"><span>공종 <em>*</em></span>${chipRow("trade", p.trades.map((t) => t.name), dr.trade, { allowAdd: true, ua: (o) => isUserItem("trades", o) })}</div>
-    ${trade?.subs?.length ? `<div class="fld"><span>세부공종</span>${chipRow("subTrade", trade.subs, dr.subTrade, { allowAdd: true })}</div>` : ""}
-    <div class="fld"><span>유형</span>${chipRow("type", p.types, dr.type, { allowAdd: true, ua: (o) => isUserItem("types", o) })}</div>
+    <div class="fld"><span>공종 <em>*</em>${dr.trade && dr.tradeAuto ? `<small class="sugg auto">자동${tAuto?.why ? " · " + esc(tAuto.why) : ""}</small>` : ""}</span>${chipRow("trade", p.trades.map((t) => t.name), dr.trade, { allowAdd: true, ua: (o) => isUserItem("trades", o) })}</div>
+    ${tradeAlts.length ? `<div class="chips tsw" id="t-switch"><small class="help">${esc(V(dr.vendorId)?.name || "이 업체")} 다른 공종:</small>${tradeAlts.map((t) => `<button type="button" class="chip" data-tsw="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
+    ${trade?.subs?.length ? `<div class="fld"><span>세부공종${dr.subTrade && dr.subTradeAuto ? `<small class="sugg auto">자동</small>` : ""}</span>${chipRow("subTrade", trade.subs, dr.subTrade, { allowAdd: true })}</div>` : ""}
+    <div class="fld"><span>유형${dr.type && dr.typeAuto ? `<small class="sugg auto">자동</small>` : ""}</span>${chipRow("type", p.types, dr.type, { allowAdd: true, ua: (o) => isUserItem("types", o) })}</div>
     <div class="fld"><span>중요도</span>${chipRow("severity", M.SEVERITIES, dr.severity)}</div>
     <label class="fld"><span>내용 <em>*</em></span><div class="ta-wrap"><textarea class="inp" id="f-content" rows="3" placeholder="예: 거실 창호 하부 실리콘 미시공">${esc(dr.content)}</textarea>
       ${speechSupported() ? `<button type="button" class="mic" id="btn-mic" aria-label="음성으로 입력">🎤</button>` : ""}</div></label></section>
@@ -1725,8 +1820,11 @@ function renderForm() {
       } else return;
       if (dr[k] === v) dr[k] = ""; // 아래 토글에서 다시 선택되도록
     }
-    if (k === "trade" && dr.trade !== v) dr.subTrade = "";
-    if ((k === "trade" || k === "subTrade") && !dr.vendorId) dr.vendorAuto = true; // 미지정이면 공종·세부공종 고를 때 자동 지정(새 등록·수정 모두)
+    if (k === "trade" && dr.trade !== v) { dr.subTrade = ""; dr.subTradeAuto = true; }
+    if (k === "trade") dr.tradeAuto = false;
+    if (k === "subTrade") dr.subTradeAuto = false;
+    if (k === "type") dr.typeAuto = false;
+    if ((k === "trade" || k === "subTrade") && (!dr.vendorId || dr.vendorAuto)) dr.vendorAuto = true;
     dr[k] = dr[k] === v && k !== "category" && k !== "severity" ? "" : v;
     if (k === "category") LS.set("lastCat", v);
     renderForm();
@@ -1756,7 +1854,8 @@ function renderForm() {
   $$("[data-rmph]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.photos.splice(+b.dataset.rmph, 1); renderForm(); }));
   vendorCombo($("#f-vq"), { current: () => dr.vendorId, first: () => [auto?.id, ...cands.map((v) => v.id)], onPick: (id) => { sync(); dr.vendorId = id; dr.vendorAuto = false; window.__vcPicked = id; renderForm(); } });
   $("#v-auto-hint")?.addEventListener("click", (e) => { sync(); dr.vendorId = e.currentTarget.dataset.vid; dr.vendorAuto = true; renderForm(); });
-  $$("[data-vsw]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.vendorId = b.dataset.vsw; dr.vendorAuto = false; renderForm(); }));
+  $$("[data-vsw]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.vendorId = b.dataset.vsw; dr.vendorAuto = false; if (!dr.trade || dr.tradeAuto) dr.tradeAuto = true; renderForm(); }));
+  $$("[data-tsw]", view()).forEach((b) => b.addEventListener("click", () => { sync(); dr.trade = b.dataset.tsw; dr.tradeAuto = false; dr.subTrade = ""; dr.subTradeAuto = true; if (!dr.vendorId || dr.vendorAuto) dr.vendorAuto = true; renderForm(); }));
   $("#f-vendor").addEventListener("change", async (e) => {
     sync();
     if (e.target.value === "_new") { const v = await quickVendor(dr.trade); if (v) { dr.vendorId = v.id; dr.vendorAuto = false; } renderForm(); return; }
@@ -2122,10 +2221,10 @@ ROUTES.item = async (qq) => {
     <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button><button type="button" class="btn btn-req" id="btn-copy">📋 복사해서 등록</button></div>
     <button type="button" class="btn btn-block btn-tags ${d.tabs?.length ? "on" : ""}" id="btn-tags">${d.tabs?.length ? "★" : "☆"} 관리 탭${(() => { const nm = TABS().filter((t) => M.inTab(d, t.id)).map((t) => t.name); return nm.length ? ` · ${esc(nm.join(", "))}` : " 넣기"; })()}</button>
     ${stepsHtml(d, photos)}
-    <section class="card ${before.length ? "" : "nophoto-card"}"><h3>조치 전 사진 <small>${before.length}</small>${before.length ? "" : ' <span class="nophoto-b">사진 없음</span>'}</h3>${before.length ? "" : '<p class="help nophoto-help">📷 조치 전 사진이 없어요. 찍어 두면 요청서·‘사진으로 보내기’에 위치·공종·시각 띠가 붙어서 나가요.</p>'}<div class="photos">${before.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 전"></button>`).join("")}
+    <section class="card ${before.length ? "" : "nophoto-card"}"><h3>조치 전 사진 <small>${before.length}</small>${before.length ? "" : ' <span class="nophoto-b">사진 없음</span>'}</h3>${before.length ? "" : '<p class="help nophoto-help">📷 조치 전 사진이 없어요. 찍어 두면 요청서·‘사진으로 보내기’에 위치·공종·시각 띠가 붙어서 나가요.</p>'}<div class="photos">${before.map((ph) => `<div class="ph" data-ph="${ph.id}"><button type="button" class="ph-open" data-ph="${ph.id}" aria-label="조치 전 사진 크게 보기"><img src="${purl(ph)}" alt="조치 전"></button>${isViewerNow() ? "" : `<button type="button" class="ph-x" data-rmph="${ph.id}" aria-label="사진 삭제">🗑</button>`}</div>`).join("")}
       <button type="button" class="ph-add cam" data-add="before" aria-label="조치 전 사진 바로 촬영">📷<span>${before.length ? "한 장 더" : "촬영"}</span></button></div>
       <div class="ph-more"><button type="button" class="btn btn-sm" data-alb="before">🖼 앨범</button></div></section>
-    <section class="card ${!after.length && M.DONE_STATUSES.has(d.status) ? "nophoto-card" : ""}"><h3>조치 후 사진 <small>${after.length}</small>${!after.length && M.DONE_STATUSES.has(d.status) ? ' <span class="nophoto-b">사진 없음</span>' : ""}</h3><div class="photos">${after.map((ph) => `<button type="button" class="ph" data-ph="${ph.id}"><img src="${purl(ph)}" alt="조치 후"></button>`).join("")}
+    <section class="card ${!after.length && M.DONE_STATUSES.has(d.status) ? "nophoto-card" : ""}"><h3>조치 후 사진 <small>${after.length}</small>${!after.length && M.DONE_STATUSES.has(d.status) ? ' <span class="nophoto-b">사진 없음</span>' : ""}</h3><div class="photos">${after.map((ph) => `<div class="ph" data-ph="${ph.id}"><button type="button" class="ph-open" data-ph="${ph.id}" aria-label="조치 후 사진 크게 보기"><img src="${purl(ph)}" alt="조치 후"></button>${isViewerNow() ? "" : `<button type="button" class="ph-x" data-rmph="${ph.id}" aria-label="사진 삭제">🗑</button>`}</div>`).join("")}
       <button type="button" class="ph-add cam" data-add="after" aria-label="조치 후 사진 바로 촬영">📷<span>${after.length ? "한 장 더" : "촬영"}</span></button></div>
       <div class="ph-more"><button type="button" class="btn btn-sm" data-alb="after">🖼 앨범</button></div></section>
     ${plan ? `<section class="card" id="it-plan"><h3>도면 위치 <small>${esc(plan.name)}</small><button type="button" class="btn btn-sm it-pinbtn" id="btn-pinmove">📍 핀 옮기기</button></h3><div class="plan mini"><img src="${(() => { const u = URL.createObjectURL(plan.blob); urls.push(u); return u; })()}" alt="도면"><i class="pin" style="left:${d.pin.x * 100}%;top:${d.pin.y * 100}%"></i></div></section>` : itPlans.length ? `<section class="card" id="it-plan"><h3>도면 위치 <small>아직 핀이 없어요</small></h3><button type="button" class="btn btn-block" id="btn-pinmove">📍 도면에 핀 찍기</button></section>` : ""}
@@ -2155,7 +2254,10 @@ ROUTES.item = async (qq) => {
   };
   $$("[data-add]", view()).forEach((b) => b.addEventListener("click", () => addDPh(b.dataset.add, true)));
   $$("[data-alb]", view()).forEach((b) => b.addEventListener("click", () => addDPh(b.dataset.alb, false)));
-  $$("[data-ph]", view()).forEach((b) => b.addEventListener("click", () => photoViewer(photos, b.dataset.ph, () => rerender(), d)));
+  $$("[data-ph]", view()).forEach((img) => { const ph = photos.find((x) => x.id === img.dataset.ph || img.closest("[data-ph]")?.dataset.ph); if (ph) paintThumb(img.tagName === "IMG" ? img : img.querySelector("img"), ph); });
+  $$(".ph-open[data-ph], button.ph[data-ph]", view()).forEach((b) => b.addEventListener("click", () => photoViewer(photos, b.dataset.ph, () => rerender(), d)));
+  $$("[data-rmph]", view()).forEach((b) => b.addEventListener("click", async (e) => { e.preventDefault(); e.stopPropagation(); const ph = photos.find((x) => x.id === b.dataset.rmph); if (ph && (await removePhoto(ph, d))) rerender(); }));
+  if (!isViewerNow()) onLongPress(view(), ".ph[data-ph], .ph-open[data-ph]", async (el) => { const id = el.dataset.ph || el.closest("[data-ph]")?.dataset.ph; const ph = photos.find((x) => x.id === id); if (ph && (await removePhoto(ph, d))) rerender(); });
   $("#memo").addEventListener("change", async (e) => { d.memo = e.target.value; await saveDefect(d); toast("메모 저장"); });
   bindSteps(d);
   $("#btn-del").addEventListener("click", async () => {
@@ -2374,19 +2476,37 @@ async function stepsGuard(d, st) {
 }
 function photoViewer(photos, id, onChange, d = null) {
   let i = Math.max(0, photos.findIndex((p) => p.id === id)); let url = "";
+  const canDel = !isViewerNow();
   const s = openSheet({ title: "사진", full: true, cls: "viewer", html: `<div class="pv"><img id="pv-img" alt="사진"></div><div class="pv-nav"><button type="button" class="btn" data-n="-1">‹ 이전</button><span id="pv-i"></span><button type="button" class="btn" data-n="1">다음 ›</button></div>`,
-    footer: `<button type="button" class="btn" data-a="share">공유</button><button type="button" class="btn btn-danger" data-a="del">삭제</button>` });
+    footer: `<button type="button" class="btn" data-a="share">공유</button>${canDel ? `<button type="button" class="btn btn-danger pv-del" data-a="del">🗑 삭제</button>` : ""}` });
   let tok = 0;
-  const show = () => { if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(photos[i].blob); $("#pv-img", s.el).src = url;
-    if (d && photos[i].stamp === "0" && stampOn()) { const my = ++tok, ph = photos[i]; photoOut(ph, d).then((bl) => { if (my !== tok || bl === ph.blob) return; if (url) URL.revokeObjectURL(url); url = URL.createObjectURL(bl); $("#pv-img", s.el).src = url; }); } else tok++; $("#pv-i", s.el).textContent = `${i + 1} / ${photos.length} · ${photos[i].kind === "after" ? "조치 후" : "조치 전"}`; };
+  const show = async () => { const my = ++tok; if (url) URL.revokeObjectURL(url);
+    url = await showFullPhoto($("#pv-img", s.el), photos[i], d); if (my !== tok) return;
+    $("#pv-i", s.el).textContent = `${i + 1} / ${photos.length} · ${photos[i].kind === "after" ? "조치 후" : "조치 전"}`; };
   show();
   $$("[data-n]", s.el).forEach((b) => b.addEventListener("click", () => { i = (i + Number(b.dataset.n) + photos.length) % photos.length; show(); }));
   $("[data-a=share]", s.el).addEventListener("click", () => (async () => shareOrDownload(d ? await photoOut(photos[i], d) : photos[i].blob, `하자사진_${i + 1}.jpg`))());
-  $("[data-a=del]", s.el).addEventListener("click", async () => {
-    if (!(await ask("이 사진을 삭제할까요?", { ok: "삭제", danger: true }))) return;
-    const ph = photos[i]; await db.del("photos", ph.id); const m = S.pidx.get(ph.defectId); if (m) m[ph.kind === "after" ? "after" : "before"]--;
-    await s.close(); onChange();
+  $("[data-a=del]", s.el)?.addEventListener("click", async () => {
+    const ph = photos[i]; if (!(await removePhoto(ph, d))) return;
+    photos.splice(i, 1); if (!photos.length) { await s.close(); onChange?.(); return; }
+    i = Math.min(i, photos.length - 1); show(); onChange?.();
   });
+}
+/** 사진 삭제: IndexedDB + 동기화 대기열(묘비) + Firestore Bytes/chunks 정리. 보기 전용은 불가. 하자 이력에 한 줄 */
+async function removePhoto(ph, d = null, { confirm = true } = {}) {
+  if (isViewerNow()) { toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요"); return false; }
+  if (!ph) return false;
+  const kind = ph.kind === "after" ? "조치 후" : "조치 전";
+  if (confirm && !(await ask(`${kind} 사진을 삭제할까요? 되돌릴 수 없어요.`, { ok: "🗑 삭제", danger: true }))) return false;
+  await db.del("photos", ph.id);
+  const m = S.pidx.get(ph.defectId || d?.id); if (m) m[ph.kind === "after" ? "after" : "before"] = Math.max(0, (m[ph.kind === "after" ? "after" : "before"] || 1) - 1);
+  if (d) {
+    const now = new Date().toISOString();
+    d.history = [...(d.history || []), { at: now, status: d.status, note: `${kind} 사진 삭제`, kind: "photo", ...(Sync.attached() && Sync.signedIn() ? { by: Sync.actorName() } : {}) }];
+    await saveDefect(d);
+  }
+  toast("사진을 삭제했어요");
+  return true;
 }
 
 /* ---------- 보내기(카톡·문자·전화·복사) ---------- */
@@ -3378,7 +3498,8 @@ ROUTES.photos = async () => {
     ${verFoot()}</div>`;
   bindVerFoot();
   $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
-  $$(".ph-th", view()).forEach((b) => b.addEventListener("click", () => go(`#/item?id=${b.dataset.id}`)));
+  $$(".ph-th", view()).forEach((b) => { b.addEventListener("click", () => go(`#/item?id=${b.dataset.id}`)); const ph = rec.find((r) => r.x.defectId === b.dataset.id || r.x.id === b.dataset.pid)?.x || rec.find((r) => String(r.x.defectId) === b.dataset.id)?.x; const img = b.querySelector("img"); if (img) paintThumb(img, rec.find((r) => r.u === img.getAttribute("src"))?.x || rec[0]?.x); });
+  rec.forEach(({ x }) => { const img = document.querySelector(`.ph-th[data-id="${x.defectId}"] img`); if (img) paintThumb(img, x); });
   $("#ph-shoot")?.addEventListener("click", () => shootSheet({ items: PD(), kind: "before" }));
   $("#ph-shoot-after")?.addEventListener("click", () => shootSheet({ items: PD(), kind: "after" }));
   $("#ph-send").addEventListener("click", photosByVendor);
@@ -4385,6 +4506,6 @@ async function main() {
   initSync();
   setTimeout(() => autoMergeTrades().catch((e) => console.warn(e)), 1500);
   setTimeout(() => autoMergeTypes().catch((e) => console.warn(e)), 2600);
-  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync, selMore, listMore: (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); } }; // 테스트·디버그용
+  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync, removePhoto, thumbUrl, makeThumb, compressImage, PHOTO_MAX, THUMB_MAX, selMore, listMore: (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); } }; // 테스트·디버그용
 }
 main();
