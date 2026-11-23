@@ -7,6 +7,7 @@ import { shareKakao, shareGeneric, isMobileDevice, isAndroid, copyText, contactP
 import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
 import * as Sync from "./sync.js";
+import * as RL from "./roles.js";
 
 export const APP_VERSION = self.HAJASSAK_VERSION || "0.0.0"; // 유일 출처: /version.js (sw.js 캐시 이름도 같은 값)
 export const APP_NAME = "하자싹";
@@ -43,7 +44,17 @@ function setHeader(title, { backBtn = navDepth() > 1, action = "", help } = {}) 
   $("#hdr-action").innerHTML = action + (hs ? `<button type="button" class="hdr-help" data-help="${hs}" aria-label="이 화면 사용법" title="사용법">?</button>` : "");
 }
 document.addEventListener("click", (e) => { const b = e.target.closest?.("[data-help]"); if (b) { e.preventDefault(); go(`#/help?s=${b.dataset.help}`); } });
-function setTab(tab) { $$(".tab-item").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab)); $(".tab-bar").hidden = !tab; }
+/** 1.4.0 역할: 이 기기 안에서 화면만 바꾼다(저장 안 된 기존 사용자 = 시공관리자 = 예전과 같은 화면) */
+const roleId = () => { const r = LS.get("role", "manager"); return RL.ROLES[r] ? r : "manager"; };
+function applyRoleTabs() {
+  const rl = RL.roleOf(roleId()); document.body.dataset.myrole = rl.id;
+  $$(".tab-item").forEach((a) => {
+    const t = a.dataset.tab; a.style.display = rl.tabs.includes(t) ? "" : "none";
+    const tn = a.lastChild; if (tn && tn.nodeType === 3) { if (a.dataset.lab0 === undefined) a.dataset.lab0 = tn.textContent; tn.textContent = rl.tabLabel[t] || a.dataset.lab0; }
+    if (a.dataset.href0 === undefined) a.dataset.href0 = a.getAttribute("href"); a.setAttribute("href", rl.tabHref[t] || a.dataset.href0);
+  });
+}
+function setTab(tab) { applyRoleTabs(); $$(".tab-item").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab)); $(".tab-bar").hidden = !tab; }
 
 /* ---------- 데이터 ---------- */
 async function loadAll() {
@@ -195,8 +206,8 @@ async function route() {
   curHash = hash;
   document.body.classList.remove("printing");
   view().oninput = null;
-  if (!LS.get("onboarded", false) && !["onboard", "privacy", "help"].includes(path)) return replace("#/onboard");
-  if (!P() && !["onboard", "wizard", "settings", "privacy", "about", "restore", "pro", "sync", "help"].includes(path)) {
+  if (!LS.get("onboarded", false) && !["onboard", "role", "privacy", "help"].includes(path)) return replace("#/onboard");
+  if (!P() && !["onboard", "role", "wizard", "settings", "privacy", "about", "restore", "pro", "sync", "help"].includes(path)) {
     setTab("home"); setHeader(APP_NAME, { backBtn: false });
     view().innerHTML = noProject(); bindNoProject(); return;
   }
@@ -210,6 +221,17 @@ async function route() {
   if (mem && !["new", "edit"].includes(path)) restoreView(mem); else window.scrollTo(0, 0);
 }
 function noProject() {
+  const rid = roleId();
+  if (rid === "resident") return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>내 세대 점검을 시작해요</h2>
+    <p class="help">점검할 세대(동·호)를 한 번만 적어 두면, 사진·위치·내용만 바로 등록할 수 있어요.</p>
+    <button type="button" class="btn btn-primary btn-lg" data-a="myunit">🏠 내 세대 입력하고 시작</button>
+    <button type="button" class="btn btn-ghost" data-a="restore">백업 파일에서 복원</button></div>`;
+  if (rid === "vendor" || rid === "auditor") return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>현장에 참여해 주세요</h2>
+    <p class="help">${rid === "vendor" ? "시공사에서 받은 초대코드로 참여하면 내 하자와 조치 후 사진을 볼 수 있어요." : "시공사에서 받은 초대코드로 참여하면 현황을 확인할 수 있어요."}</p>
+    <button type="button" class="btn btn-primary btn-lg" data-a="team">👥 팀 현장 참여·열기 (초대코드)</button>
+    <button type="button" class="btn btn-lg" data-a="sample">샘플 현장 불러오기</button>
+    <button type="button" class="btn btn-ghost" data-a="restore">백업 파일에서 복원</button>
+    ${Sync.attached() ? `<p class="help">‘${esc(Sync.state.ws.name)}’ 팀 데이터를 받는 중이에요… (${esc(Sync.status().label)})</p>` : ""}</div>`;
   return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>첫 현장을 만들어 주세요</h2>
     <p class="help">동·층·호수를 한 번 만들어 두면 위치를 몇 번의 탭으로 고를 수 있어요.</p>
     <button type="button" class="btn btn-primary btn-lg" data-a="wizard">+ 새 현장 만들기</button>
@@ -221,7 +243,7 @@ function noProject() {
 function bindNoProject() {
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
     const a = b.dataset.a;
-    if (a === "wizard") go("#/wizard"); else if (a === "sample") loadSample(); else if (a === "team") go("#/sync"); else go("#/restore");
+    if (a === "myunit") residentSetup().then((ok) => ok && rerender()); else if (a === "wizard") go("#/wizard"); else if (a === "sample") loadSample(); else if (a === "team") go("#/sync"); else go("#/restore");
   }));
 }
 
@@ -233,7 +255,7 @@ const ONBOARD = [
 ];
 ROUTES.onboard = async (qq) => {
   const i = Math.min(Number(qq.i || 0), ONBOARD.length - 1);
-  if (LS.get("onboarded", false) && !qq.again) return replace(P() ? "#/home" : "#/home");
+  if (LS.get("onboarded", false) && !qq.again) { const toRole = S.toRole; S.toRole = false; return replace(toRole ? "#/role?first=1" : "#/home"); }
   setTab(null); setHeader(APP_NAME, { backBtn: i > 0 });
   const s = ONBOARD[i];
   view().innerHTML = `<div class="onboard"><div class="ob-ico" aria-hidden="true">${s.ico}</div><h2>${esc(s.t)}</h2><p>${esc(s.d)}</p>
@@ -243,7 +265,57 @@ ROUTES.onboard = async (qq) => {
     <p class="help small">시작하면 <a href="#/privacy">개인정보처리방침</a>에 동의한 것으로 봅니다. 동기화를 켜기 전에는 기기 밖으로 아무것도 보내지 않아요.</p></div>`;
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
     if (b.dataset.a === "next") go(`#/onboard?i=${i + 1}`);
-    else { const again = !!qq.again; LS.set("onboarded", true); if (again) history.go(-(i + 1)); else if (i > 0) history.go(-i); else replace("#/home"); }
+    else { const again = !!qq.again; LS.set("onboarded", true); if (again) history.go(-(i + 1)); else if (i > 0) { S.toRole = true; history.go(-i); } else replace("#/role?first=1"); }
+  }));
+};
+
+/* ---------- 1.4.0 역할 고르기 (이 기기 화면만 바꿈 · 권한·규칙 무관) ---------- */
+function roleBanner(rid) {
+  const r = RL.roleOf(rid); let extra = "";
+  if (rid === "vendor") { const v = V(LS.get("roleVendor", "")); extra = ` · ${v ? esc(v.name) : "업체를 골라 주세요"}`; }
+  if (rid === "resident") { const u = LS.get("roleUnit", null); const t = u ? [u.dong, u.ho && u.ho + "호"].filter(Boolean).join(" ") : ""; extra = t ? ` · ${esc(t)}` : ""; }
+  return `<div class="role-bn" id="role-bn"><span class="rb-t">${r.ico} <b>${r.name}</b>${extra}</span>${rid === "vendor" ? `<button type="button" class="btn btn-sm" id="role-vsel">내 업체</button>` : ""}<button type="button" class="btn btn-sm" data-go="#/role" id="role-chg">역할 바꾸기</button></div>`;
+}
+function bindRoleBanner() { $("#role-vsel")?.addEventListener("click", async () => { await pickRoleVendor(); rerender(); }); }
+async function pickRoleVendor() {
+  if (!S.vendors.length) { toast("등록된 업체가 아직 없어요 · 팀 현장에 참여하면 업체 목록이 보여요", { ms: 3500 }); return; }
+  const v = await choose("내 업체 고르기", [...S.vendors.map((x) => ({ label: x.name, sub: (x.trades || []).slice(0, 3).join(" · "), value: x.id, icon: "🏢" })), { label: "전체 보기 (아직 안 고름)", value: "_all", icon: "👁" }]);
+  if (!v) return;
+  LS.set("roleVendor", v === "_all" ? "" : v);
+  S.filter = { status: "_open", ...(v !== "_all" ? { vendorId: [v] } : {}) }; LS.set("filter", S.filter);
+}
+const residentLoc = () => { if (roleId() !== "resident") return {}; const u = LS.get("roleUnit", null) || {}; return { dong: u.dong || "", ho: u.ho || "", floor: u.ho ? M.floorOfHo(u.ho) : "", category: "입주자하자" }; };
+async function residentSetup() {
+  const u0 = LS.get("roleUnit", null) || {};
+  const r = await formSheet({ title: "내 세대", ok: "저장", hint: "점검할 세대 한 곳만 등록해요. 동이 따로 없으면 비워 두세요.",
+    fields: [{ k: "dong", label: "동", value: u0.dong || "", placeholder: "예: 101동 (선택)" }, { k: "ho", label: "호", value: u0.ho || "", placeholder: "예: 1203" }],
+    validate: ({ ho }) => (ho && !M.normHo(ho) ? "호수는 3~4자리 숫자로 적어 주세요 (예: 1203)" : "") });
+  if (!r) return false;
+  const ho = M.normHo(r.ho); const dn = (r.dong || "").trim(); const dongName = dn ? (/^\d+$/.test(dn) ? dn + "동" : dn) : "우리집";
+  LS.set("roleUnit", { dong: dongName, ho });
+  if (!P()) {
+    const p = M.newProject("우리집 점검"); const dg = ho ? M.deriveDong([ho]) : null;
+    p.dongs = [{ id: M.uid("d"), name: dongName, alias: "", floors: dg?.floors || 1, lines: dg?.lines || 1, basement: 0, unitStart: dg?.unitStart || 1, roof: false, skipLines: dg?.skipLines || "", ...(dg ? { units: dg.units } : {}) }];
+    await saveProject(p); S.pid = p.id; LS.set("pid", p.id);
+  }
+  return true;
+}
+ROUTES.role = async (qq) => {
+  const first = !!qq.first; const cur = roleId();
+  setTab(first ? null : "more"); setHeader(first ? "역할 고르기" : "내 역할", { backBtn: !first });
+  view().innerHTML = `<div class="role-pick" id="role-pick"><h2>${first ? "어떤 일로 쓰세요?" : "내 역할"}</h2>
+    <p class="help">고른 역할에 맞게 <b>화면만</b> 간단해져요. 내 데이터와 권한은 그대로이고, 더보기 › 내 역할에서 언제든 바꿀 수 있어요.</p>
+    <div class="role-list">${RL.ROLE_IDS.map((id) => { const r = RL.ROLES[id]; const on = !first && id === cur; return `<button type="button" class="role-card ${on ? "on" : ""}" data-role="${id}" aria-pressed="${on}"><span class="rc-i" aria-hidden="true">${r.ico}</span><span class="rc-t"><b>${r.name}</b><small>${r.sub}</small></span>${on ? '<span class="rc-ck">✓</span>' : ""}</button>`; }).join("")}</div>
+    ${first ? `<p class="help small">잘 모르겠으면 ‘시공관리자’를 고르세요. 모든 기능이 보여요.</p>` : ""}</div>`;
+  $$("[data-role]", view()).forEach((b) => b.addEventListener("click", async () => {
+    const id = b.dataset.role; const prev = roleId();
+    if (id === "resident" && !(await residentSetup())) return;
+    LS.set("role", id); LS.set("onboarded", true);
+    if (id !== prev || first) { S.filter = { status: "_open" }; LS.set("filter", S.filter); S.listMode = "list"; S.draft = null; }
+    if (id === "vendor") await pickRoleVendor();
+    if (id === "resident") { const u = LS.get("roleUnit", null); if (u?.ho) { S.filter = { status: "_open", ho: u.ho, ...(u.dong ? { dong: [u.dong] } : {}) }; LS.set("filter", S.filter); } }
+    toast(`${RL.roleOf(id).name} 화면으로 바꿨어요`, { ms: 2200 });
+    replace("#/home");
   }));
 };
 
@@ -559,11 +631,13 @@ async function sendChecked(sel) {
 /* ---------- 홈 ---------- */
 ROUTES.home = async () => {
   setTab("home");
-  const p = P(); const list = PD(); const today = M.todayStr();
+  const rid = roleId(); const hp = (k) => RL.homeShows(rid, k); const vScope = rid === "vendor" ? LS.get("roleVendor", "") : "";
+  const uScope = rid === "resident" ? LS.get("roleUnit", null) : null; const uHo = uScope?.ho || "";
+  const p = P(); const list = vScope ? PD().filter((d) => d.vendorId === vScope) : uHo ? PD().filter((d) => d.ho === uHo && (!uScope.dong || d.dong === uScope.dong)) : PD(); const today = M.todayStr();
   const open = list.filter(M.isOpen), od = list.filter((d) => M.isOverdue(d, today));
   const done = list.filter((d) => d.status === "조치완료" || d.status === "확인완료").length;
   const todayN = list.filter((d) => (d.createdAt || "").slice(0, 10) === today).length;
-  setHeader(p.name, { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span><button type="button" class="hdr-btn" id="btn-proj" aria-label="현장 전환">현장 ▾</button>` });
+  setHeader(p.name, { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>${rid === "manager" || rid === "auditor" ? `<button type="button" class="hdr-btn" id="btn-proj" aria-label="현장 전환">현장 ▾</button>` : ""}` });
   const recent = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 3);
   const doing = list.filter((d) => d.status === "조치중").length; const mine = list.filter(M.isMyTurn).length;
   const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
@@ -571,37 +645,43 @@ ROUTES.home = async () => {
   const hpChips = p.dongs.map((dg) => { const l = list.filter((d) => d.dong === dg.name); return { name: dg.name, o: l.filter(M.isOpen).length, a: l.length }; });
   { const sl = list.filter((d) => !M.locParts(d).dong); if (sl.length || sitePlaces().length) hpChips.push({ name: "단지 공용", o: sl.filter(M.isOpen).length, a: sl.length, site: true }); }
   const hpSc = relScale(hpChips.map((c) => c.o)); for (const c of hpChips) c.cls = hpSc.cls(c.o);
-  view().innerHTML = `<div class="home2">
+  view().innerHTML = `<div class="home2${rid !== "manager" ? " role-" + rid : ""}">
     ${homeSyncHtml()}
-    <form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>
-    <section class="card home-stat">
+    ${rid !== "manager" ? roleBanner(rid) : ""}
+    ${hp("search") ? `<form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>` : ""}
+    ${hp("stat") ? `<section class="card home-stat">
       <div class="kpis">
         <button type="button" class="kpi" data-f='{"status":"_open"}'><b>${n(open.length)}</b><span>미조치</span></button>
         <button type="button" class="kpi doing" data-f='{"status":"조치중"}'><b>${n(doing)}</b><span>조치중</span></button>
         <button type="button" class="kpi ok" data-f='{"status":"_done"}'><b>${n(done)}</b><span>완료</span></button>
-        <button type="button" class="kpi mine" data-f='{"mine":"1"}'><b>${n(mine)}</b><span>내 차례 대기</span></button>
+        ${hp("kpimine") ? `<button type="button" class="kpi mine" data-f='{"mine":"1"}'><b>${n(mine)}</b><span>내 차례 대기</span></button>` : ""}
       </div>
       <button type="button" class="rate" data-go="#/dash" aria-label="조치율 ${rate}% · 대시보드"><span class="rate-bar"><i style="width:${rate}%"></i></span><span class="rate-t">조치율 <b>${rate}%</b> · 전체 ${n(list.length)}건 · 오늘 ${n(todayN)}건</span></button>
       ${od.length ? `<button type="button" class="od-alert" data-f='{"overdue":true}'>⏰ 기한초과 <b>${n(od.length)}건</b> 보기 ›</button>` : ""}
-    </section>
-    ${presets().length ? presetRowHtml("home") : ""}
-    <button type="button" class="btn btn-primary btn-xl" data-go="#/new">＋ 하자 등록</button>
-    <section class="card home-places" id="home-places" aria-label="하자위치">
+    </section>` : ""}
+    ${hp("presets") && presets().length ? presetRowHtml("home") : ""}
+    ${hp("new") ? `<button type="button" class="btn btn-primary btn-xl" data-go="#/new">＋ 하자 등록</button>` : ""}
+    ${hp("afterphoto") ? `<button type="button" class="btn btn-primary btn-xl" id="home-afterph">📷 조치 후 사진 올리기 <small>${n(list.filter((d) => M.photoMissing(d, "noafter") && M.isOpen(d)).length)}건 대기</small></button>` : ""}
+    ${hp("exportbtn") ? `<button type="button" class="btn btn-xl" id="home-export">📤 내 목록 내보내기 <small>엑셀·CSV·요청서</small></button>` : ""}
+    ${hp("places") ? `<section class="card home-places" id="home-places" aria-label="하자위치">
       <button type="button" class="hpl-hd" data-go="#/places"><span class="hpl-t">🧱 <b>하자위치</b></span><small>동 · 단지 공용 · 건수가 많을수록 진해요</small><span class="chev">›</span></button>
       ${hpChips.length ? `<div class="hpl-chips">${hpChips.map((c) => `<button type="button" class="hpl-chip ${c.cls} ${c.o ? "has" : "zero"} ${c.site ? "site" : ""}" ${c.site ? 'data-hs="1"' : `data-hd="${esc(c.name)}"`} aria-label="${esc(c.name)} 미조치 ${c.o}건 전체 ${c.a}건"><span>${esc(c.name)}</span><b>${n(c.o)}</b></button>`).join("")}</div><p class="hpl-key"><span><i class="hv0"></i>0</span>${hpSc.legend.map((x) => `<span><i class="${x.cls}"></i>${x.label}</span>`).join("")}<small>미조치 건수</small></p>` : `<p class="help">동을 추가하면 여기에 동별 건수가 보여요.</p>`}
-    </section>
-    <div class="actions3">
+    </section>` : ""}
+    ${hp("find") ? `<div class="actions3${hp("send") ? "" : " one"}">
       <button type="button" class="act" id="home-find"><span class="act-i">🔎</span><b>건수 찾기</b><small>업체·동·유형별</small></button>
-      <button type="button" class="act" id="home-send"><span class="act-i">📲</span><b>요청서 보내기</b><small>${unsent ? `미전달 ${n(unsent)}건 · 업체 고르기` : "업체에 카톡·PDF·문자"}</small></button>
-      <button type="button" class="act" id="home-sendph"><span class="act-i">🖼</span><b>사진으로 보내기</b><small>띠 붙여 여러 장</small></button>
-    </div>
+      ${hp("send") ? `<button type="button" class="act" id="home-send"><span class="act-i">📲</span><b>요청서 보내기</b><small>${unsent ? `미전달 ${n(unsent)}건 · 업체 고르기` : "업체에 카톡·PDF·문자"}</small></button>
+      <button type="button" class="act" id="home-sendph"><span class="act-i">🖼</span><b>사진으로 보내기</b><small>띠 붙여 여러 장</small></button>` : ""}
+    </div>` : ""}
     <h3 class="sec">최근 기록 <small>오늘 등록 ${n(todayN)}건 · 전체 ${n(list.length)}건</small>${recent.length ? `<button type="button" class="sec-link" data-go="#/list">전체 하자 ›</button>` : ""}</h3>
-    ${recent.length ? recent.map((d) => defectCard(d)).join("") : `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-sm" data-go="#/help?s=add">등록하는 법 보기</button></div>`}
+    ${recent.length ? recent.map((d) => defectCard(d)).join("") : (hp("new") ? `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-sm" data-go="#/help?s=add">등록하는 법 보기</button></div>` : `<div class="card empty-card"><p>${vScope ? "내 업체로 지정된 하자가 아직 없어요." : "표시할 하자가 아직 없어요."}</p></div>`)}
     ${verFoot()}</div>`;
   bindCards(); bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
-  $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
-  $("#btn-proj").addEventListener("click", switchProject);
+  $$("[data-f]", view()).forEach((b) => b.addEventListener("click", () => { S.filter = JSON.parse(b.dataset.f); if (vScope) S.filter.vendorId = [vScope]; if (uHo) { S.filter.ho = uHo; if (uScope.dong) S.filter.dong = [uScope.dong]; } LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); }));
+  $("#btn-proj")?.addEventListener("click", switchProject);
+  bindRoleBanner();
+  $("#home-afterph")?.addEventListener("click", () => { S.filter = { photo: "noafter", status: "_open", ...(vScope ? { vendorId: [vScope] } : {}) }; LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); });
+  $("#home-export")?.addEventListener("click", () => exportSheet(list, "전체"));
   bindPresetRow(view());
   $("#home-sendph")?.addEventListener("click", photosByVendor);
   $("#home-find")?.addEventListener("click", () => filterSheet());
@@ -610,7 +690,7 @@ ROUTES.home = async () => {
   $("#home-send")?.addEventListener("click", () => { const un = PD().filter((d) => d.status === "접수" || d.status === "재접수"); if (!un.length) { toast("미전달 건이 없어요 · 업체 화면으로 갈게요", { ms: 3000 }); return go("#/vendors"); } return sendChecked(un); });
   { const qi = $("#qs"); if (qi) { const ex = qi.dataset.phEx, ph = qi.placeholder; qi.addEventListener("focus", () => { qi.placeholder = ex; }); qi.addEventListener("blur", () => { qi.placeholder = ph; }); } }
   $("[data-a=switch]", view())?.addEventListener("click", switchProject);
-  $("#qsearch").addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#qs").value); });
+  $("#qsearch")?.addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#qs").value); });
 };
 function exampleQuery(p) { const d = p.dongs[0]; if (!d) return "1203"; const f = Math.min(12, d.floors || 1); return `${d.alias ? d.alias + "동" : d.name} ${f * 100 + 3}`; }
 function quickSearch(text) {
@@ -1610,7 +1690,7 @@ function startDraft(loc = {}, base = null) {
   const p = P();
   S.draft = base ? { ...structuredClone({ ...base, history: undefined }), _editId: base.id, photos: [] } : {
     dong: "", core: "", floor: "", ho: "", common: "", room: "", part: "", locEtc: "", trade: "", subTrade: "", type: "", category: LS.get("lastCat", "시공불량"),
-    severity: "보통", content: "", vendorId: "", vendorAuto: true, due: M.addDays(p.dueDays ?? 7), pin: null, photos: [], ...loc,
+    severity: "보통", content: "", vendorId: "", vendorAuto: true, due: M.addDays(p.dueDays ?? 7), pin: null, photos: [], ...residentLoc(), ...loc,
   };
 }
 ROUTES.new = async () => { if (!S.draft || S.draft._editId) startDraft(); renderForm(); };
@@ -1799,7 +1879,7 @@ function renderForm() {
       <button type="submit" class="btn btn-primary btn-lg">${editing ? "수정 저장" : "저장"}</button></div>
     <p class="help" id="form-err" role="alert"></p></form>`;
   const stepState = () => { const c = ($("#f-content")?.value || dr.content || "").trim();
-    const st = { loc: !!M.locText(dr), ph: dr.photos.length > 0 || prevPhotos.before > 0, what: !!dr.trade && !!(c || dr.type), save: false };
+    const st = { loc: !!M.locText(dr), ph: dr.photos.length > 0 || prevPhotos.before > 0, what: (!!dr.trade || roleId() === "resident") && !!(c || dr.type), save: false };
     $$(".fs-i", view()).forEach((b) => b.classList.toggle("done", !!st[b.dataset.fs]));
     const cur = ["loc", "ph", "what", "save"].find((k) => !st[k]) || "save"; $$(".fs-i", view()).forEach((b) => b.classList.toggle("cur", b.dataset.fs === cur)); };
   stepState(); $("#f-content").addEventListener("input", stepState);
@@ -1865,7 +1945,7 @@ function renderForm() {
   $("#btn-cancel")?.addEventListener("click", () => { S.draft = null; back(); });
   const save = async (next) => {
     sync();
-    const err = !dr.dong && !dr.common && !dr.locEtc?.trim() && !dr.room && !dr.part ? "위치를 선택하세요" : !dr.trade ? "공종을 선택하세요" : !dr.content.trim() && !dr.type ? "내용 또는 유형을 입력하세요" : "";
+    const err = !dr.dong && !dr.common && !dr.locEtc?.trim() && !dr.room && !dr.part ? "위치를 선택하세요" : !dr.trade && roleId() !== "resident" ? "공종을 선택하세요" : !dr.content.trim() && !dr.type ? "내용 또는 유형을 입력하세요" : "";
     if (err) { $("#form-err").textContent = err; toast(err); return; }
     busy(true, "저장 중…");
     const now = new Date().toISOString();
@@ -3509,7 +3589,8 @@ ROUTES.photos = async () => {
 ROUTES.more = async () => {
   setTab("more"); setHeader("더보기", { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
   const p = P(); const list = PD(); const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
-  const item = (go2, ico, t, sub = "", attr = "") => `<button type="button" class="sitem" ${go2 ? `data-go="${go2}"` : ""} ${attr}><span class="si-ico">${ico}</span><span><b>${t}</b>${sub ? `<small>${sub}</small>` : ""}</span><span class="chev">›</span></button>`;
+  const rid = roleId();
+  const item = (go2, ico, t, sub = "", attr = "") => !RL.moreShows(rid, go2 ? go2.slice(2) : (attr.match(/data-a="([^"]+)"/) || [])[1] || "") ? "" : `<button type="button" class="sitem" ${go2 ? `data-go="${go2}"` : ""} ${attr}><span class="si-ico">${ico}</span><span><b>${t}</b>${sub ? `<small>${sub}</small>` : ""}</span><span class="chev">›</span></button>`;
   view().innerHTML = `<div class="more-hub">
     <h3 class="sec">현장 보기</h3><div class="slist">
       ${item("#/vendors", "🏢", "업체", `${S.vendors.length}곳 · 업체별 하자·보내기`, 'id="mo-vendors"')}
@@ -3525,8 +3606,10 @@ ROUTES.more = async () => {
       ${item("#/settings", "⚙️", "설정", "현장·사진 띠·동기화·백업·요청자 이름", 'id="mo-settings"')}
       ${item("#/import", "📥", "엑셀 가져오기", "다른 시스템·엑셀 목록")}
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장`, 'data-a="switch"')}
-      ${item("#/help", "📘", "사용법 보기", "처음이라면 여기부터")}</div>
+      ${item("#/help", "📘", "사용법 보기", "처음이라면 여기부터")}
+      ${item("#/role", RL.roleOf(rid).ico, "내 역할", `${RL.roleOf(rid).name} · 화면 구성 바꾸기`, 'id="mo-role"')}</div>
     ${verFoot()}</div>`;
+  if (rid !== "manager") view().innerHTML = view().innerHTML.replace(/<h3 class="sec">[^<]*<\/h3><div class="slist">\s*<\/div>/g, "");
   bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {

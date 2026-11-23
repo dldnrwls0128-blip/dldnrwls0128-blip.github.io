@@ -801,3 +801,18 @@ body.has-selbar #view{padding-bottom:150px}
 
 .photos .ph-open{display:block;width:100%;height:100%;padding:0;border:0;background:transparent;cursor:pointer}
 .photos .ph-open img{width:100%;height:100%;object-fit:cover;display:block}
+
+/* 1.4.0 역할 고르기 — 화면 구성만 바꿈 */
+.role-pick{padding:8px 4px 24px}.role-pick h2{margin:8px 0 6px;font-size:22px}
+.role-list{display:flex;flex-direction:column;gap:10px;margin:14px 0}
+.role-card{display:flex;align-items:center;gap:14px;width:100%;min-height:76px;padding:12px 14px;text-align:left;background:var(--card);border:1.5px solid var(--line);border-radius:16px;color:inherit;font:inherit;cursor:pointer}
+.role-card.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 8%,var(--card))}
+.role-card .rc-i{font-size:30px;width:40px;text-align:center;flex:none}
+.role-card .rc-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}.role-card .rc-t b{font-size:17px}.role-card .rc-t small{color:var(--sub);font-size:13px;line-height:1.35}
+.role-card .rc-ck{color:var(--brand);font-weight:800;font-size:20px}
+.role-bn{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;margin-bottom:var(--gap,10px);border-radius:12px;background:color-mix(in srgb,var(--brand) 10%,var(--card));border:1px solid var(--line)}
+.role-bn .rb-t{flex:1;min-width:140px;font-size:14px}
+.home2 .btn-xl small{font-weight:400;font-size:13px;margin-left:6px;opacity:.85}
+.home2 .actions3.one{grid-template-columns:1fr}
+/* 입주자 점검: 등록 화면은 사진·위치·내용만 */
+body[data-myrole=resident] #fs-what .fld:not(:has(#f-content)),body[data-myrole=resident] #fs-what .recent-c,body[data-myrole=resident] #fs-save,body[data-myrole=resident] .fs-i[data-fs=save]{display:none}
