@@ -111,6 +111,68 @@ const ROUTES = {};
 /* 1.2.3 보던 자리 유지: 같은 화면 다시 그리기(상태변경·보내기·이관 후)와 뒤로가기는 스크롤 위치를 되살림.
  * 높이가 바뀌어도 맞도록 ‘화면 맨 위에 보이던 하자 카드’ 기준(없으면 scrollY). 열린 <details>도 유지 */
 const scrollMem = new Map(); let curHash = "";
+/** 클립보드용 PNG. 카톡 PC 붙여넣기 한도(약 10MB)를 넘지 않게 줄임 */
+const CLIP_MAX = 8 * 1024 * 1024;
+async function canvasToPng(cv, maxBytes = CLIP_MAX) {
+  let blob = await new Promise((r) => cv.toBlob(r, "image/png"));
+  let src = cv;
+  while (blob && blob.size > maxBytes && src.width > 400) {
+    const c2 = document.createElement("canvas"); c2.width = Math.round(src.width * 0.8); c2.height = Math.round(src.height * 0.8);
+    c2.getContext("2d").drawImage(src, 0, 0, c2.width, c2.height);
+    blob = await new Promise((r) => c2.toBlob(r, "image/png")); src = c2;
+  }
+  return blob;
+}
+async function pngOf(blob, maxEdge = 2000) {
+  const im = await createImageBitmap(blob);
+  const sc = Math.min(1, maxEdge / Math.max(im.width, im.height));
+  const cv = document.createElement("canvas"); cv.width = Math.max(1, Math.round(im.width * sc)); cv.height = Math.max(1, Math.round(im.height * sc));
+  const ctx = cv.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height); ctx.drawImage(im, 0, 0, cv.width, cv.height);
+  im.close?.();
+  return canvasToPng(cv);
+}
+/** 여러 장을 2열 격자로 이어 붙인 한 장(띠가 이미 있으면 그대로) */
+async function collagePng(blobs, { cols = 2, maxW = 1600 } = {}) {
+  if (blobs.length === 1) return pngOf(blobs[0]);
+  const ims = await Promise.all(blobs.map((b) => createImageBitmap(b)));
+  const gap = 8, pad = 8, cellW = Math.floor((maxW - pad * 2 - gap * (cols - 1)) / cols);
+  const cells = ims.map((im) => { const sc = Math.min(cellW / im.width, 1); return { im, w: Math.round(im.width * sc), h: Math.round(im.height * sc) }; });
+  const rows = []; for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
+  const rowH = rows.map((r) => Math.max(...r.map((c) => c.h)));
+  const W = maxW, H = pad * 2 + rowH.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
+  let y = pad;
+  for (let ri = 0; ri < rows.length; ri++) {
+    const row = rows[ri];
+    for (let ci = 0; ci < row.length; ci++) {
+      const c = row[ci]; const x = pad + ci * (cellW + gap) + Math.floor((cellW - c.w) / 2);
+      ctx.drawImage(c.im, x, y + Math.floor((rowH[ri] - c.h) / 2), c.w, c.h);
+    }
+    y += rowH[ri] + gap;
+  }
+  ims.forEach((im) => im.close?.());
+  return canvasToPng(cv);
+}
+const canCopyImg = () => !!(window.ClipboardItem && navigator.clipboard?.write);
+async function copyImageBlob(blob, { ok = "복사됨 — 카톡 창에 Ctrl+V", fail = "복사가 안 됐어요 — ‘사진 따로 저장’으로 받은 뒤 첨부해 주세요" } = {}) {
+  try {
+    if (!canCopyImg()) throw new Error("no clipboard");
+    const png = blob.type === "image/png" && blob.size <= CLIP_MAX ? blob : await pngOf(blob);
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    let w = 0, h = 0; try { const im = await createImageBitmap(png); w = im.width; h = im.height; im.close?.(); } catch {}
+    window.__lastClip = { ok: true, bytes: png.size, type: "image/png", w, h };
+    toast(ok, { ms: 6000 });
+    return true;
+  } catch (e) {
+    console.warn(e);
+    window.__lastClip = { ok: false, err: String(e?.message || e) };
+    toast(fail, { ms: 8000 });
+    return false;
+  }
+}
+
+
 function captureView() {
   const top = (document.querySelector(".app-header")?.getBoundingClientRect().bottom || 0) + 2;
   let anchor = "", off = 0;
@@ -195,7 +257,9 @@ function defectCard(d, { sel = false, photo = false } = {}) {
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
-      ${pc.before + pc.after ? `<span>📷${pc.before}${pc.after ? "/" + pc.after : ""}</span>` : ""}<span>${esc(d.category || "")}</span></div>${!photo && camBtn(d) ? `<div class="dc-cam">${camBtn(d)}</div>` : ""}
+      ${pc.before + pc.after ? `<span>📷${pc.before}${pc.after ? "/" + pc.after : ""}</span>` : ""}<span>${esc(d.category || "")}</span></div>
+    ${!photo && camBtn(d) ? `<div class="dc-cam">${camBtn(d)}</div>` : ""}
+    ${M.isOpen(d) && !isViewerNow() ? `<div class="dc-act"><button type="button" class="btn btn-sm ddone" data-done="${d.id}">✓ 조치완료</button></div>` : ""}
   </article>`;
 }
 /** 1.3.6 세대 사진 보기: 카드 위 큰 썸네일(조치 전·후 나란히). 없으면 회색 칸에 ‘촬영’. 썸네일은 보일 때 불러옴(지연 로딩) */
@@ -283,6 +347,8 @@ function bindCards(root = view()) {
     $(".dmore", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     $(".dcam", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardShoot(d, e.currentTarget.dataset.cam); });
     $(".dcam", c)?.addEventListener("keydown", (e) => e.stopPropagation());
+    $(".ddone", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) doneFromCard(d); });
+    $(".ddone", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     $$(".ph-slot[data-view]", c).forEach((b) => { b.addEventListener("click", (e) => { e.stopPropagation(); galleryViewer($$(".dcard[data-id]", view()).map((x) => x.dataset.id), b.dataset.view, b.dataset.k); }); b.addEventListener("keydown", (e) => e.stopPropagation()); });
     const open = () => go(`#/item?id=${c.dataset.id}`);
     c.addEventListener("click", open);
@@ -298,7 +364,7 @@ function selBarHtml({ all = false, core = false } = {}) {
       ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
       <button type="button" class="btn btn-sm" data-sa="req">🧾 요청서 이미지·PDF</button><button type="button" class="btn btn-sm" data-sa="move">🔁 업체 이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm" data-sa="tabadd">★ 탭에 추가</button><button type="button" class="btn btn-sm" data-sa="tabdel">탭에서 빼기</button><button type="button" class="btn btn-sm" data-sa="copyto">📋 선택 위치들에 복사</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm" data-sa="clear">선택 해제</button>
     </div>
-    <div class="sel-main"><span id="selcount"></span><button type="button" class="btn btn-sm btn-primary" data-sa="send">요청서 보내기</button><button type="button" class="btn btn-sm" id="sel-more" aria-expanded="false" aria-controls="sel-tray">더보기 ▴</button></div></div>`;
+    <div class="sel-main"><span id="selcount"></span><button type="button" class="btn btn-sm btn-primary" data-sa="send">요청서 보내기</button><button type="button" class="btn btn-sm" data-sa="done" id="sel-done">✓ 조치완료</button><button type="button" class="btn btn-sm" id="sel-more" aria-expanded="false" aria-controls="sel-tray">더보기 ▴</button></div></div>`;
 }
 /** 하단 바 ‘더보기’ 펼치기/접기(테스트는 selMore(true)) */
 function selMore(open) {
@@ -322,6 +388,8 @@ function updateSelBar() {
   const bar = $("#selbar"); if (!bar) return;
   const n0 = selItems().length; bar.hidden = !n0; document.body.classList.toggle("has-selbar", !!n0);
   const c = $("#selcount"); if (c) c.textContent = `선택 ${n0}건`; if (!n0) selMore(false);
+  const openN = selItems().filter((d) => M.isOpen(d)).length; const db = $("#sel-done", bar);
+  if (db) { db.hidden = !openN || isViewerNow(); db.textContent = openN ? `✓ 조치완료 ${n(openN)}건` : "✓ 조치완료"; }
 }
 /** 하단 바 버튼. pool: ‘전체선택’ 대상 */
 function bindSelBar(pool = []) {
@@ -337,6 +405,7 @@ function bindSelBar(pool = []) {
     if (a === "core") return coreAssign(sel);
     if (a === "copyto") return bulkCopySheet(sel);
     if (a === "tabadd" || a === "tabdel") return tabBulk(sel, a === "tabadd");
+    if (a === "done") return markDoneMany(sel);
     const st = await choose(`${sel.length}건 상태 변경`, M.STATUSES.map((x) => ({ label: x, value: x })));
     if (!st) return;
     for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
@@ -1974,6 +2043,58 @@ ROUTES.item = async (qq) => {
     S.defects = S.defects.filter((x) => x.id !== d.id); S.pidx.delete(d.id); toast("삭제했어요"); back();
   });
 };
+/** 목록에서 바로 조치완료(상세와 같은 기록·동기화). 완료로 바꿀 때는 ‘되돌리기’ 스낵바 없음 */
+const askAfterPhoto = () => LS.get("askAfterPhoto", true) !== false;
+async function markDone(d, { afterFiles = null, silent = false } = {}) {
+  if (isViewerNow()) { toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요"); return false; }
+  if (M.DONE_STATUSES.has(d.status)) { if (!silent) toast("이미 완료된 하자예요"); return false; }
+  if (!(await stepsGuard(d, "조치완료"))) return false;
+  if (afterFiles?.length) { busy(true, "사진 저장 중…"); await addPhotos(d.id, afterFiles, "after", stampOf(d)); busy(false); }
+  setStatus(d, "조치완료", "목록에서 완료"); await saveDefect(d);
+  if (!silent) toast("조치완료로 바꿨어요", { ms: 2500 });
+  return true;
+}
+async function doneFromCard(d) {
+  if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+  if (M.DONE_STATUSES.has(d.status)) return toast("이미 완료된 하자예요");
+  if (!photoCount(d).after && askAfterPhoto()) {
+    const a = await donePhotoSheet(); if (!a) return;
+    if (a === "photo") {
+      const files = await pickFile("image/*", { capture: isMobileDevice(), multiple: true });
+      if (!files.length) return;
+      if (await markDone(d, { afterFiles: files })) rerender();
+      return;
+    }
+  }
+  if (await markDone(d)) rerender();
+}
+function donePhotoSheet() {
+  return new Promise((resolve) => {
+    const s = openSheet({ title: "조치 후 사진이 없어요", cls: "dialog done-ask",
+      html: `<p>이 하자를 조치완료할까요?</p>
+        <div class="col done-ask-btns"><button type="button" class="btn btn-primary btn-lg" data-a="photo" id="da-photo">📷 조치 후 사진 찍고 완료</button>
+        <button type="button" class="btn btn-lg" data-a="none" id="da-none">그냥 완료</button></div>
+        <label class="check"><input type="checkbox" id="da-skip"> 이제 묻지 않기 <small>(설정에서 다시 켤 수 있어요)</small></label>`,
+      footer: `<button type="button" class="btn" data-a="cancel" id="da-cancel">취소</button>` });
+    $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => {
+      if ($("#da-skip", s.el)?.checked) LS.set("askAfterPhoto", false);
+      const v = b.dataset.a; await s.close(); resolve(v === "cancel" ? null : v);
+    }));
+  });
+}
+async function markDoneMany(items) {
+  if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+  const open = items.filter((d) => M.isOpen(d));
+  if (!open.length) return toast("이미 완료된 하자만 있어요");
+  const noA = open.filter((d) => !photoCount(d).after).length;
+  if (!(await ask(`${open.length}건을 조치완료할까요?${noA ? `
+조치 후 사진이 없는 건 ${noA}건이에요.` : ""}`, { ok: "조치완료" }))) return;
+  let k = 0;
+  for (const d of open) { if (await markDone(d, { silent: true })) k++; }
+  S.select.clear();
+  toast(`${k}건을 조치완료로 바꿨어요`, { ms: 2500 });
+  rerender();
+}
 /** 상세 화면 상태 단계 탭: 묻지 않고 바로 바꾸고 3초 ‘되돌리기’. 조치완료인데 조치 후 사진이 없으면 안내만(막지 않음) */
 async function quickStatus(d, st) {
   if (d.status === st) return toast(`이미 ‘${st}’ 상태예요`);
@@ -2211,21 +2332,50 @@ async function photosSendSheet({ items, vendor = null, onSent = null }) {
   const el = s.el;
   $("#ps-shoot", el)?.addEventListener("click", async () => { await s.close(); shootSheet({ items: noPh.map((x) => x.d), kind: "before" }); });
   $("#ps-bandset", el).addEventListener("click", () => bandSheet());
+  let copyI = 0; const copiedCh = new Set();
   const chunksOf = () => { const k = Number($("#ps-n", el).value) || 10; const out = []; for (let i = 0; i < files.length; i += k) out.push(files.slice(i, i + k)); return out; };
   const caption = (i, tot) => `[${P().name}] ${vname} 하자 사진${tot > 1 ? ` ${i + 1}/${tot}` : ""}`;
+  const preferCopy = () => canCopyImg() && !mobile;
   const renderOut = () => {
-    const ch = chunksOf(); const box = $("#ps-out", el);
+    const ch = chunksOf(); const box = $("#ps-out", el); const main = preferCopy();
+    const shareBtns = ch.map((c, i) => `<button type="button" class="btn ${main ? "" : "btn-kakao"} btn-lg ps-ch ${sent.has(i) ? "done" : ""}" data-ch="${i}">${sent.has(i) ? "✓ " : ""}${ch.length > 1 ? `${i + 1}/${ch.length} · ` : ""}카톡·공유로 보내기 <small>${n(c.length)}장</small></button>`).join("");
+    const colBtns = canCopyImg() ? ch.map((c, i) => `<button type="button" class="btn ${main ? "btn-kakao" : ""} btn-lg ps-col ${copiedCh.has(i) ? "done" : ""}" data-col="${i}">${copiedCh.has(i) ? "✓ " : ""}${ch.length > 1 ? `${i + 1}/${ch.length} · ` : ""}묶음을 한 장으로 복사 <small>${n(c.length)}장</small></button>`).join("") : "";
+    const oneLab = copyI >= files.length ? `✓ ${n(files.length)}/${n(files.length)} · 모두 복사됨` : `${copyI + 1}/${n(files.length)} · ${copyI ? "다음 장 복사" : "한 장씩 복사"}`;
+    const oneBtn = canCopyImg() ? `<button type="button" class="btn ${main ? "btn-kakao" : ""} btn-lg" id="ps-one">${oneLab}</button>` : "";
     box.innerHTML = `<p class="help" id="ps-ready">사진 ${n(files.length)}장 준비됨${ch.length > 1 ? ` · ${n(ch.length)}번에 나눠서 보내요` : ""}</p>
-      ${ch.map((c, i) => `<button type="button" class="btn btn-kakao btn-lg ps-ch ${sent.has(i) ? "done" : ""}" data-ch="${i}">${sent.has(i) ? "✓ " : ""}${ch.length > 1 ? `${i + 1}/${ch.length} · ` : ""}카톡·공유로 보내기 <small>${n(c.length)}장</small></button>`).join("")}
+      ${main ? oneBtn + colBtns + shareBtns : shareBtns + oneBtn + colBtns}
       <div class="row"><button type="button" class="btn btn-lg" id="ps-zip">🗜 ZIP 한 파일로 저장</button><button type="button" class="btn btn-lg" id="ps-each">사진 따로 저장</button></div>
-      ${mobile ? '<p class="help small">폰: 공유창에서 <b>카카오톡</b> → 업체 대화방을 고르세요. 여러 번이면 위에서부터 차례로 눌러요.</p>' : '<p class="help small">PC: ZIP 또는 여러 파일로 저장한 뒤 카카오톡 PC 대화방에 끌어다 놓으세요.</p>'}`;
+      ${main ? '<p class="help small" id="ps-hint">PC: 복사한 뒤 카카오톡 대화방에 <b>Ctrl+V</b>로 붙여 넣으세요. 묶음은 여러 장을 한 장으로 이어 붙여요.</p>' : '<p class="help small" id="ps-hint">폰: 공유창에서 <b>카카오톡</b> → 업체 대화방을 고르세요. 여러 번이면 위에서부터 차례로 눌러요.</p>'}`;
+    window.__psCopy = { i: Math.min(copyI, files.length), n: files.length, chunks: copiedCh.size, prefer: main };
     $$("[data-ch]", box).forEach((b) => b.addEventListener("click", async () => {
       const i = Number(b.dataset.ch); const c = ch[i];
       let r = "";
       try { if (navigator.canShare?.({ files: c })) { await navigator.share({ files: c, text: caption(i, ch.length) }); r = "shared"; } } catch (e) { if (e?.name === "AbortError") return; }
-      if (r !== "shared") { await saveZip(c); toast("이 기기는 사진 공유창을 못 써서 ZIP으로 저장했어요"); r = "zip"; }
+      if (r !== "shared") {
+        if (canCopyImg()) { toast("이 기기는 카톡 공유창을 못 써요 — 위에서 복사한 뒤 카톡 창에 Ctrl+V 하세요"); return; }
+        await saveZip(c); toast("이 기기는 사진 공유창을 못 써서 ZIP으로 저장했어요"); r = "zip";
+      }
       sent.add(i); renderOut();
       if (sent.size === ch.length) { toast(`사진 ${n(files.length)}장을 보냈어요`); if ($("#ps-mark", el).checked && onSent) { await onSent("사진"); } }
+    }));
+    $("#ps-one", box)?.addEventListener("click", async () => {
+      if (copyI >= files.length) { copyI = 0; renderOut(); return; }
+      const ok = await copyImageBlob(files[copyI]);
+      if (!ok) return;
+      copyI += 1; window.__psCopy = { i: copyI, n: files.length, chunks: copiedCh.size, prefer: main };
+      renderOut();
+      if (copyI === files.length && $("#ps-mark", el).checked && onSent) await onSent("사진(복사)");
+    });
+    $$("[data-col]", box).forEach((b) => b.addEventListener("click", async () => {
+      const i = Number(b.dataset.col); const c = ch[i];
+      busy(true, "묶음 이미지 만드는 중…");
+      let png; try { png = await collagePng(c); } finally { busy(false); }
+      const ok = await copyImageBlob(png);
+      if (!ok) return;
+      copiedCh.add(i); window.__lastClip = { ...window.__lastClip, collage: true, n: c.length, i: i + 1, tot: ch.length };
+      window.__psCopy = { i: Math.min(copyI, files.length), n: files.length, chunks: copiedCh.size, prefer: main };
+      renderOut();
+      if (copiedCh.size === ch.length && $("#ps-mark", el).checked && onSent) await onSent("사진(묶음 복사)");
     }));
     $("#ps-zip", box).addEventListener("click", async () => { await saveZip(files); toast("ZIP으로 저장했어요"); if ($("#ps-mark", el).checked && onSent) await onSent("사진(ZIP)"); });
     $("#ps-each", box).addEventListener("click", async () => { for (const f of files) { downloadBlob(f, f.name); await new Promise((r2) => setTimeout(r2, 350)); } toast(`${n(files.length)}장을 저장했어요`); });
@@ -2242,7 +2392,7 @@ async function photosSendSheet({ items, vendor = null, onSent = null }) {
         for (const [ph, lab] of pick) { const bl = band ? await photoOut(ph, x.d, { force: true }) : ph.blob; out.push(new File([bl], `${String(out.length + 1).padStart(2, "0")}_${safe(M.locText(x.d) || "위치미지정")}_${safe(M.tradeText(x.d))}_${lab}.jpg`, { type: "image/jpeg" })); busy(true, `사진 준비 중 ${out.length}/${total}`); }
       }
     } finally { busy(false); }
-    files = out; sent.clear(); window.__psFiles = out; renderOut();
+    files = out; sent.clear(); copyI = 0; copiedCh.clear(); window.__psFiles = out; renderOut();
   });
 }
 /** 1.3.6 사진 띠 설정: 방식(원본 유지·보낼 때만 합성 / 찍을 때 새김) + 띠에 넣을 항목, 미리보기 */
@@ -2681,17 +2831,20 @@ async function workOrderSheet({ items, filter = null }) {
   const meta = () => ({ date: M.todayStr(), who: who.name ? `${who.name}${who.team ? `(${who.team})` : ""}` : who.team ? `(${who.team})` : "", cond });
   const rows = () => W.woRows(items, { project: p, all: allP, high });
   let imgs = null; // { key, files, pngs }
+  let woCopyI = 0;
   const s = openSheet({ title: `${W.WO_TITLE} · ${n(items.length)}건`, full: true, cls: "wo-sheet",
     html: `<div class="wo-bar"><label class="wo-tg"><input type="checkbox" id="wo-high" ${high ? "checked" : ""}><span class="wo-sw" aria-hidden="true"></span> 고층부터</label><span class="sp"></span>
         <button type="button" class="rbtn" data-w="print" id="wo-print">🖨<small>인쇄</small></button><button type="button" class="rbtn" data-w="close" id="wo-close">✕<small>닫기</small></button></div>
       <div class="wo-who"><label>출력자 <input class="inp" id="wo-name" value="${esc(who.name)}" placeholder="이름" maxlength="20"></label><label>팀 <input class="inp" id="wo-team" value="${esc(who.team)}" placeholder="(선택)" maxlength="20"></label></div>
       <div class="wo-prev" id="wo-prev"></div>
-      <div class="send-grid wo-share main-fmt">${woPh ? `<button type="button" class="btn btn-kakao btn-lg" data-w="pdffile">📄 PDF로 보내기 <small>사진 포함 · ${isMobileDevice() ? "공유" : "저장"}</small></button>` : `<button type="button" class="btn btn-kakao btn-lg" data-w="share">🖼 이미지로 보내기 <small>카톡·공유</small></button>`}</div>
+      <div class="send-grid wo-share main-fmt">${woPh ? `<button type="button" class="btn btn-kakao btn-lg" data-w="pdffile">📄 PDF로 보내기 <small>사진 포함 · ${isMobileDevice() ? "공유" : "저장"}</small></button>` : (isMobileDevice() ? `<button type="button" class="btn btn-kakao btn-lg" data-w="share">🖼 이미지로 보내기 <small>카톡·공유</small></button>` : "")}
+        ${canCopyImg() ? `<button type="button" class="btn ${isMobileDevice() && !woPh ? "" : "btn-kakao"} btn-lg" data-w="copy" id="wo-copy">🖼 이미지 복사${isMobileDevice() ? "" : " <small>카톡 창에 Ctrl+V</small>"}</button>` : ""}
+        ${!isMobileDevice() && !woPh ? `<button type="button" class="btn btn-lg" data-w="share">🖼 이미지로 보내기 <small>카톡·공유</small></button>` : ""}</div>
       <details class="alt-fmt" id="alt-fmt" ${window.__altOpen ? "open" : ""}><summary>다른 형식으로 보내기 <small>이미지 복사·저장 · 인쇄·PDF(인쇄)</small></summary><div class="send-grid wo-share">${woPh ? `<button type="button" class="btn btn-kakao btn-lg" data-w="share">카톡으로 공유 <small>이미지</small></button>` : `<button type="button" class="btn btn-kakao btn-lg" data-w="pdffile">📄 PDF 파일 <small>표만 · ${isMobileDevice() ? "공유" : "저장"}</small></button>`}
         <button type="button" class="btn btn-lg" data-w="copy">🖼 이미지 복사</button><button type="button" class="btn btn-lg" data-w="save">💾 이미지 저장</button><button type="button" class="btn btn-lg" data-w="pdf">🖨 PDF 저장(인쇄)</button></div></details>
       <p class="help small">인쇄·PDF는 A4 가로, 쪽마다 표 머리글이 반복돼요(PDF는 인쇄 창에서 ‘PDF로 저장’). 이미지는 장당 ${W.IMG_ROWS}건씩 여러 장으로 나눠요.</p>` });
   const el = s.el;
-  const draw = () => { const r = rows(); $("#wo-prev", el).innerHTML = W.woHtml({ rows: r, meta: meta() }); fit(); window.__wo = { n: r.length, high, rows: r.map((x) => ({ no: x.no, stage: x.stage, dong: x.dong, ho: x.ho, utype: x.utype, movein: x.movein, room: x.room, trade: x.trade, core: x.core, head: x.head, text: x.text, status: x.status, date: x.date })), meta: meta() }; imgs = null; };
+  const draw = () => { const r = rows(); $("#wo-prev", el).innerHTML = W.woHtml({ rows: r, meta: meta() }); fit(); window.__wo = { n: r.length, high, rows: r.map((x) => ({ no: x.no, stage: x.stage, dong: x.dong, ho: x.ho, utype: x.utype, movein: x.movein, room: x.room, trade: x.trade, core: x.core, head: x.head, text: x.text, status: x.status, date: x.date })), meta: meta() }; imgs = null; woCopyI = 0; const cb = $("#wo-copy", el); if (cb) cb.innerHTML = `🖼 이미지 복사${isMobileDevice() ? "" : " <small>카톡 창에 Ctrl+V</small>"}`; };
   const fit = () => { const pv = $("#wo-prev", el); const doc = $(".wo-doc", pv); if (!doc) return; const z = Math.min(1, Math.max(0.5, (pv.clientWidth - 2) / 1200)); doc.style.zoom = z; };
   const makeImgs = async () => {
     const key = `${high}|${meta().who}`; if (imgs && imgs.key === key) return imgs;
@@ -2722,7 +2875,18 @@ async function workOrderSheet({ items, filter = null }) {
       if (canShareFiles(im.files)) { try { await navigator.share({ files: im.files, title: W.WO_TITLE, text: `${W.WO_TITLE} ${items.length}건` }); window.__woImg.shared = true; return; } catch (er) { if (er?.name === "AbortError") return; } }
       im.files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 300)); window.__woImg.fallback = true; return toast("이미지 공유가 안 되는 환경이라 이미지를 저장했어요. 카톡에서 사진으로 첨부해 주세요.", { ms: 7000 });
     }
-    if (k === "copy") { try { await navigator.clipboard.write([new ClipboardItem({ "image/png": im.pngs[0] })]); window.__woImg.copied = 1; return toast(`${im.pngs.length > 1 ? `1/${im.pngs.length}장 ` : ""}이미지를 복사했어요 — 카톡에 붙여넣기(Ctrl+V)`); } catch { return toast("이미지 복사가 막혔어요 — ‘이미지 저장’을 써 주세요"); } }
+    if (k === "copy") {
+      if (woCopyI >= im.pngs.length) woCopyI = 0;
+      const i = woCopyI;
+      const src = im.pngs[i];
+      const png = (src.size && src.size > CLIP_MAX) ? await pngOf(src) : src;
+      const ok = await copyImageBlob(png, { fail: "복사가 안 됐어요 — ‘이미지 저장’으로 받은 뒤 첨부해 주세요" });
+      if (!ok) return;
+      woCopyI = i + 1; window.__woImg.copied = woCopyI; window.__woImg.copyN = im.pngs.length;
+      const lab = im.pngs.length > 1 ? (woCopyI >= im.pngs.length ? `✓ ${im.pngs.length}/${im.pngs.length} · 모두 복사됨` : `${woCopyI + 1}/${im.pngs.length} · 다음 장 복사`) : "✓ 이미지 복사됨";
+      $$("[data-w=copy]", el).forEach((x) => { x.innerHTML = `🖼 ${lab}`; });
+      return;
+    }
     if (k === "save") { im.files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 300)); window.__woImg.saved = true; return toast(`이미지 ${im.files.length}장을 저장했어요`); }
   }));
   const ro = new ResizeObserver(fit); ro.observe($("#wo-prev", el)); s.onClose = () => ro.disconnect();
@@ -3144,6 +3308,7 @@ ROUTES.settings = async () => {
     <h3 class="sec">사진·표시</h3><div class="slist">
       ${item("", "📷", "사진에 위치·일시 새기기", stampOn() ? (stampMode() === "burn" ? "켬 · 찍을 때 사진 아래에 현장·위치·공종·조치 전/후·일시 표시" : "켬 · 원본은 그대로, 보낼 때만 띠(위치·공종·현장명·시각) 합성") : "끔 · 원본 그대로 저장(보낼 때도 새기지 않음)", 'data-a="stamp" id="si-stamp"')}
       ${item("", "🖼", "사진 띠 설정", "방식(원본 유지·보낼 때만 / 찍을 때 새김) · 띠에 넣을 항목 켜고 끄기", 'data-a="band" id="si-band"')}
+      ${item("", "✓", "목록에서 조치완료할 때", askAfterPhoto() ? "조치 후 사진이 없으면 물어볼게요" : "사진 없이도 바로 완료(안 물어봄)", 'data-a="askafter" id="si-askafter"')}
       ${p ? item("", "🎨", "하자위치 색 기준", M.heatLegendText(M.heatThresholds(p, PD())) + ` · ${M.heatCfg(p).basis === "all" ? "전체" : "미조치"}${M.heatCfg(p).mode === "auto" ? " · 자동" : ""}`, 'data-a="heat"') : ""}
       ${item("", "✍️", "요청자 이름", esc(S.issuer || "요청서에 표시될 이름(선택)"), 'data-a="issuer"')}
       ${p ? item("", "🏷", "공종 → 업체 자동 지정", `표 ${(p.vendorMap || []).length}줄 · 없으면 기록에서 가장 많이 맡은 업체`, 'data-a="vendor-map" id="si-vmap"') : ""}
@@ -3173,6 +3338,7 @@ ROUTES.settings = async () => {
     if (a === "heat") return heatSheet();
     if (a === "band") return bandSheet();
     if (a === "stamp") { LS.set("stampPhotos", !stampOn()); toast(stampOn() ? "사진에 위치·일시를 새겨요" : "사진을 원본 그대로 저장해요"); return rerender(); }
+    if (a === "askafter") { LS.set("askAfterPhoto", !askAfterPhoto()); toast(askAfterPhoto() ? "조치 후 사진이 없으면 물어볼게요" : "이제 묻지 않고 바로 조치완료해요"); return rerender(); }
     if (a === "export") return exportSheet(PD(), "전체");
     if (a === "backup") return doBackup();
     if (a === "persist") { const ok = await navigator.storage?.persist?.(); toast(ok ? "저장공간 보호가 켜졌어요" : "브라우저가 거절했어요. 앱을 홈 화면에 설치하면 보통 허용돼요"); return rerender(); }
