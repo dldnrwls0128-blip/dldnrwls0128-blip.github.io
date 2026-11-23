@@ -4147,6 +4147,108 @@ async function wzImportVendors(w) {
   toast(`업체 ${add}곳을 불러왔어요${r.vendors.length - add ? ` (같은 이름 ${r.vendors.length - add}곳은 건너뜀)` : ""}`, { ms: 3500 }); return true;
 }
 const wzChips = (key, base, w, extra = "") => `<div class="chips wrap" id="w-${key}">${[...new Set([...base, ...w[key]])].map((c) => `<button type="button" class="chip ${w[key].includes(c) ? "on" : ""}" data-wk="${key}" data-c="${esc(c)}" aria-pressed="${w[key].includes(c)}">${esc(c)}</button>`).join("")}<button type="button" class="chip add" data-wadd="${key}">＋ 직접입력</button></div>${extra}`;
+
+function pdHtml(d) {
+  const warn = (d.warnings || []).map((w) => `<p class="pd-warn">⚠ ${esc(w.file ? `${w.file}${w.page ? " " + w.page + "쪽" : ""} · ` : "")}${esc(w.msg || w)}</p>`).join("");
+  const pages = (d.pages || []).length ? `<details class="pd-pages" id="pd-pages"><summary>읽은 쪽 ${d.pages.length}장 · 글자 있는 쪽 ${d.readable}장</summary><ul>${d.pages.map((pg) => `<li class="${pg.ok ? "" : "off"}">${esc(pg.file)} ${pg.page ? pg.page + "쪽" : ""}${pg.title ? " · " + esc(String(pg.title).slice(0, 40)) : pg.ok ? "" : " · 글자 없음"}</li>`).join("")}</ul></details>` : "";
+  const dongs = (d.dongs || []).map((dong) => `<div class="pd-dong" data-pd-dong="${esc(dong.id)}">
+      <label class="chk-line"><input type="checkbox" data-pd="on" ${dong.checked ? "checked" : ""}> <input class="inp" data-pd="name" value="${esc(dong.name)}" placeholder="건물 이름" aria-label="건물 이름"></label>
+      <div class="pd-nums">
+        <label>지상 <input class="inp" type="number" min="1" max="99" data-pd="floors" value="${dong.floors || 1}" aria-label="지상 층수">층</label>
+        <label>지하 <input class="inp" type="number" min="0" max="9" data-pd="basement" value="${dong.basement || 0}" aria-label="지하 층수">층</label>
+        <label>층당 호 <input class="inp" type="number" min="0" max="20" data-pd="lines" value="${dong.lines || 0}" aria-label="층당 호 수">개</label>
+        ${Number(dong.unitStart) > 1 ? `<label>시작 층 <input class="inp" type="number" min="1" max="99" data-pd="unitStart" value="${dong.unitStart}" aria-label="시작 층"></label>` : ""}
+      </div>
+      ${dong.hos?.length ? `<p class="help">읽은 호 번호 예 <label class="pd-use"><input type="checkbox" data-pd="useUnits" ${dong.useUnits ? "checked" : ""}> 이 호만 쓰기</label></p>
+        <div class="pd-hos">${dong.hos.map((h) => `<label class="pd-item ${h.checked !== false ? "on" : ""}"><input type="checkbox" data-pd-ho="${esc(h.id)}" ${h.checked !== false ? "checked" : ""}>${esc(h.no)}</label>`).join("")}</div>` : ""}
+    </div>`).join("");
+  const roomChip = (r, key) => `<label class="pd-item ${r.checked ? "on" : ""}" data-pd-${key}="${esc(r.id)}"><input type="checkbox" ${r.checked ? "checked" : ""}><input class="inp" value="${esc(r.name)}" data-pd-${key}-name aria-label="${esc(r.name)}"></label>`;
+  const rooms = (d.rooms || []).map((r) => roomChip(r, "room")).join("");
+  const commons = (d.commons || []).map((r) => roomChip(r, "common")).join("");
+  return `<div class="pd-body" id="pd-preview">
+    <p class="help">체크한 항목만 마법사에 넣어요. 확인하기 전에는 값이 바뀌지 않아요. 도면은 이 기기를 떠나지 않았어요.</p>
+    ${warn}${(d.unreadable && !d.ok && !warn) ? `<p class="pd-warn">⚠ ${esc("글자를 읽지 못했어요. 직접 입력하거나 엑셀로 불러오세요.")}</p>` : ""}
+    ${pages}
+    <h3 class="sec">건물 · 층 · 호</h3>
+    <div id="pd-dongs">${dongs || `<p class="help" id="pd-nodong">동 이름을 찾지 못했어요. 아래에서 직접 추가하거나, 취소한 뒤 직접 입력·엑셀로 불러오세요.</p>`}</div>
+    <button type="button" class="btn btn-sm" id="pd-addong">건물 이름 추가</button>
+    <h3 class="sec">실 이름</h3>
+    <div class="pd-rooms" id="pd-rooms">${rooms || `<p class="help">실 이름을 찾지 못했어요.</p>`}</div>
+    ${(d.commons || []).length ? `<h3 class="sec">건물 안 공용</h3><div class="pd-rooms" id="pd-commons">${commons}</div>` : ""}
+  </div>`;
+}
+function pdRead(d, root) {
+  $$("[data-pd-dong]", root).forEach((el) => {
+    const dong = (d.dongs || []).find((x) => x.id === el.dataset.pdDong); if (!dong) return;
+    dong.checked = !!$("[data-pd=on]", el)?.checked;
+    dong.name = $("[data-pd=name]", el)?.value || "";
+    dong.floors = Number($("[data-pd=floors]", el)?.value || dong.floors || 1);
+    dong.basement = Number($("[data-pd=basement]", el)?.value || 0);
+    const us = $("[data-pd=unitStart]", el); if (us) dong.unitStart = Number(us.value || 1);
+    dong.lines = Number($("[data-pd=lines]", el)?.value || 0);
+    const uu = $("[data-pd=useUnits]", el); if (uu) dong.useUnits = !!uu.checked;
+    $$("[data-pd-ho]", el).forEach((inp) => { const h = (dong.hos || []).find((x) => x.id === inp.dataset.pdHo); if (h) h.checked = inp.checked; });
+  });
+  $$("[data-pd-room]", root).forEach((el) => {
+    const r = (d.rooms || []).find((x) => x.id === el.dataset.pdRoom); if (!r) return;
+    r.checked = !!$("input[type=checkbox]", el)?.checked;
+    r.name = $("[data-pd-room-name]", el)?.value || r.name;
+  });
+  $$("[data-pd-common]", root).forEach((el) => {
+    const r = (d.commons || []).find((x) => x.id === el.dataset.pdCommon); if (!r) return;
+    r.checked = !!$("input[type=checkbox]", el)?.checked;
+    r.name = $("[data-pd-common-name]", el)?.value || r.name;
+  });
+  return d;
+}
+/** 도면 PDF(여러 파일·쪽)에서 초안을 만들고, 확인 뒤에만 마법사에 반영 */
+async function wzImportPlan(w) {
+  const files = await pickFile("application/pdf,.pdf,image/*", { multiple: true }); if (!files.length) return false;
+  const PlanDraft = await import("./plandraft.js");
+  busy(true, "도면 글자 읽는 중…");
+  let scans;
+  try { scans = await PlanDraft.scanFiles(files, { onProgress: (i, n, name) => busy(true, `도면 글자 읽는 중… (${i}/${n}) ${name}`) }); }
+  catch (e) { busy(false); toast("도면을 읽지 못했어요: " + (e.message || e), { ms: 4000 }); return false; }
+  busy(false);
+  const draft = PlanDraft.buildDraft(scans);
+  if (!draft.readable) toast(PlanDraft.NO_TEXT_MSG, { ms: 4500 });
+  return wzReviewDraft(w, draft);
+}
+async function wzReviewDraft(w, draft) {
+  const PlanDraft = await import("./plandraft.js");
+  const d = JSON.parse(JSON.stringify(draft || { dongs: [], rooms: [], commons: [], warnings: [], pages: [] }));
+  return new Promise((resolve) => {
+    let applied = false;
+    const paint = () => { const box = $("#pd-preview", s.el) || $("#pd-box", s.el); if (box) box.outerHTML = pdHtml(d); };
+    const s = openSheet({
+      title: "도면에서 읽은 초안", full: true, cls: "pd-sheet",
+      html: `<div id="pd-box">${pdHtml(d)}</div>`,
+      footer: `<button type="button" class="btn" id="pd-cancel" data-a="no">취소</button><button type="button" class="btn btn-primary" id="pd-ok" data-a="yes">이대로 채우기</button>`,
+    });
+    s.onClose = () => resolve(applied);
+    s.el.addEventListener("change", (e) => {
+      const item = e.target.closest(".pd-item"); if (item && e.target.type === "checkbox") item.classList.toggle("on", e.target.checked);
+    });
+    s.el.addEventListener("click", (e) => {
+      if (e.target.closest("#pd-addong")) { pdRead(d, s.el); PlanDraft.addBlankDong(d, ""); const box = s.el.querySelector("#pd-preview") || s.el.querySelector("#pd-box"); if (box) { const wrap = document.createElement("div"); wrap.innerHTML = pdHtml(d); box.replaceWith(wrap.firstElementChild); } return; }
+      const a = e.target.closest("[data-a]"); if (!a) return;
+      if (a.dataset.a === "yes") {
+        pdRead(d, s.el);
+        const imp = PlanDraft.draftToImported(d);
+        if (!imp.dongs.length && !imp.rooms.length && !imp.commons.length) return toast("채울 항목을 하나 이상 고르거나 건물 이름을 추가해 주세요", { ms: 3500 });
+        const before = { imported: w.imported, rooms: [...(w.rooms || [])], dongCommons: [...(w.dongCommons || [])], naming: w.naming };
+        PlanDraft.applyDraftToWizard(w, imp);
+        w.planDraft = d;
+        applied = true;
+        const ho = (imp.dongs || []).reduce((a, x) => a + (x.units?.length || (x.lines && x.floors ? x.lines * (x.floors - (x.unitStart || 1) + 1) : 0)), 0);
+        toast(imp.dongs.length ? `도면 초안을 넣었어요 · 건물 ${imp.dongs.length}개 · 호 약 ${n(ho)}개${imp.rooms.length ? ` · 실 ${imp.rooms.length}개` : ""}` : `실 이름 ${imp.rooms.length}개를 넣었어요. 건물 이름은 직접 적어 주세요`, { ms: 4000 });
+        void before;
+        s.close();
+      } else s.close();
+    });
+  });
+}
+
 ROUTES.wizard = async (qq) => {
   const step = Math.max(1, Math.min(5, Number(qq.step || 1))); const addMode = !!qq.add;
   if (addMode && !P()) return replace("#/home");
@@ -4174,7 +4276,9 @@ ROUTES.wizard = async (qq) => {
     const num = (k, label, min, max) => `<label class="fld"><span>${label}</span><input class="inp" type="number" inputmode="numeric" data-k="${k}" min="${min}" max="${max}" value="${w[k]}"></label>`;
     const chip = (k, v, label, cur = w[k]) => `<button type="button" class="chip ${cur === v ? "on" : ""}" data-wc="${k}" data-v="${esc(String(v))}" aria-pressed="${cur === v}">${label}</button>`;
     const imp = w.imported;
-    const nameBox = imp ? `<div class="card wz-imp" id="w-impres"><b>📥 엑셀에서 불러옴</b> <small>${esc(imp.file || "")}${imp.sheet ? " · " + esc(imp.sheet) : ""}</small><br>건물 ${imp.dongs.length}개 · 호 ${n(imp.dongs.reduce((a, d) => a + (d.units?.length || 0), 0))}개${imp.skipped ? ` · 못 읽은 줄 ${imp.skipped}` : ""}${(imp.warnings || []).map((x) => `<br><small class="wz-warn">⚠ ${esc(x)}</small>`).join("")}<br><button type="button" class="btn btn-sm" id="w-impclear">직접 입력으로 바꾸기</button></div>`
+    const planImp = imp?.source === "plan";
+    const hoN = imp ? n(imp.dongs.reduce((a, d) => a + (d.units?.length || SITE.dongStats({ ...d, id: d.id || "d" }).total || 0), 0)) : 0;
+    const nameBox = imp ? `<div class="card wz-imp" id="w-impres"><b>${planImp ? "📐 도면에서 읽음" : "📥 엑셀에서 불러옴"}</b> <small>${esc(imp.file || "")}${imp.sheet ? " · " + esc(imp.sheet) : ""}</small><br>건물 ${imp.dongs.length}개 · 호 ${hoN}개${imp.skipped ? ` · 못 읽은 줄 ${imp.skipped}` : ""}${(imp.warnings || []).map((x) => `<br><small class="wz-warn">⚠ ${esc(x)}</small>`).join("")}<br>${planImp && w.planDraft ? `<button type="button" class="btn btn-sm" id="w-planedit">초안 다시 보기</button> ` : ""}<button type="button" class="btn btn-sm" id="w-impclear">직접 입력으로 바꾸기</button></div>`
       : `<h3 class="sec">건물 이름</h3><div class="chips wrap" aria-label="건물 이름 방식">${chip("naming", "num", "번호 (101동·102동…)")}${chip("naming", "alpha", "알파벳 (A동·B동…)")}${chip("naming", "custom", "직접 적기 (본관·신관…)")}</div>
       ${w.naming === "num" ? `<div class="grid2">${num("start", "시작 번호", 1, 9999)}${num("count", "건물 수", 1, 60)}</div>` : w.naming === "alpha" ? `<div class="grid2">${num("count", "건물 수 (A부터)", 1, 26)}</div>` : `<label class="fld"><span>이름 <small>쉼표나 줄바꿈으로 나눠요 · ‘신관:5’처럼 쓰면 그 건물만 5층</small></span><textarea class="inp" rows="2" data-wt="names" placeholder="예: 본관, 신관, 주차타워:8">${esc(w.names || "")}</textarea></label>`}
       ${w.naming !== "custom" ? `<div class="fld"><span>이름 끝 글자</span><div class="chips">${wzSfxOpts.map((s) => chip("suffix", s, s || "없음")).join("")}</div></div>` : ""}`;
@@ -4190,6 +4294,8 @@ ROUTES.wizard = async (qq) => {
       ${nameBox}${floorsBox}
       ${addMode ? "" : `<div class="wz-xl"><b>📥 엑셀·CSV로 불러오기</b><small>건물·층·호 목록이 이미 있다면 파일로 한 번에 올리세요(‘동’, ‘층’, ‘호’ 제목 줄).</small>
         <div class="row"><button type="button" class="btn btn-sm" id="w-impdong">파일 고르기</button><button type="button" class="btn btn-sm" id="w-tpl">빈 엑셀 보기</button></div></div>`}
+      ${addMode ? "" : `<div class="wz-xl wz-plan"><b>📐 도면 올려서 자동 채우기</b><small>PDF 도면의 글자에서 동 이름·층수·호 번호·실 이름 초안을 만들어요. 여러 파일·여러 쪽을 한꺼번에 올릴 수 있고, 확인하기 전에는 값이 바뀌지 않아요. 도면은 이 기기를 떠나지 않아요.</small>
+        <div class="row"><button type="button" class="btn btn-sm" id="w-impplan">도면 올리기</button></div></div>`}
       <h3 class="sec">미리보기</h3><div class="card preview" id="w-prev"></div>
       <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">${addMode ? "건물 추가" : "다음"}</button></div>`;
     const read = () => $$("[data-k]", view()).forEach((i) => { w[i.dataset.k] = Math.max(Number(i.min), Math.min(Number(i.max), Number(i.value) || 0)); });
@@ -4198,9 +4304,11 @@ ROUTES.wizard = async (qq) => {
     view().oninput = prev; prev();
     $$("[data-wb]", view()).forEach((i) => i.addEventListener("change", () => { w[i.dataset.wb] = i.checked; if (imp) imp.dongs.forEach((d) => { d.roof = i.checked; }); prev(); }));
     $$("[data-wc]", view()).forEach((b) => b.addEventListener("click", () => { read(); readT(); w[b.dataset.wc] = b.dataset.v; if (b.dataset.wc === "hoRule" && b.dataset.v === "none") w.lines = 0; if (b.dataset.wc === "hoRule" && b.dataset.v !== "none" && !w.lines) w.lines = 4; rr(); }));
-    $("#w-impclear")?.addEventListener("click", () => { w.imported = null; w.naming = SITE.typeOf(w.type).w.naming; rr(); });
+    $("#w-impclear")?.addEventListener("click", () => { w.imported = null; w.planDraft = null; w.naming = SITE.typeOf(w.type).w.naming; rr(); });
     $("#w-impdong")?.addEventListener("click", async () => { read(); readT(); if (await wzImportDong(w)) rr(); });
     $("#w-tpl")?.addEventListener("click", wzTemplateChoose);
+    $("#w-impplan")?.addEventListener("click", async () => { read(); readT(); if (await wzImportPlan(w)) rr(); });
+    $("#w-planedit")?.addEventListener("click", async () => { if (w.planDraft && await wzReviewDraft(w, w.planDraft)) rr(); });
     $("#w-next").addEventListener("click", async () => {
       read(); readT(); const ds = SITE.makeDongsFromSpec(w);
       if (!ds.length) return toast("건물 이름을 하나 이상 적어 주세요");

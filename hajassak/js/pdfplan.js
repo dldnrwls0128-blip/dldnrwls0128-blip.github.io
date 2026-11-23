@@ -250,7 +250,7 @@ export async function scanPdf(blob, fileName, { onPage, signal } = {}) {
     const { title, no } = makeTitle(pg.cand, boiler);
     const info = classifySheet(title, fileName, pg.nText >= 5);
     const rooms = ["unit", "floor", "parking", "amenity", "site"].includes(info.kind) ? extractRooms(pg.words, pg.W, pg.H, info.kind) : [];
-    return { pdf: doc, page: pg.page, file: n > 1 ? `${base}_p${pg.page}` : base, no, info, kind: info.kind === "site" ? "amenity" : info.kind, rooms, nText: pg.nText };
+    return { pdf: doc, page: pg.page, file: n > 1 ? `${base}_p${pg.page}` : base, no, info, title: info.title || title, kind: info.kind === "site" ? "amenity" : info.kind, rooms, nText: pg.nText, texts: (pg.words || []).map((w) => String(w[4] || "")) };
   });
   pickUnitVariants(rows);
   return { doc, rows, pages: n };

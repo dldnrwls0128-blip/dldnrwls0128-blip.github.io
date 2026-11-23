@@ -844,3 +844,20 @@ body[data-myrole=resident] #fs-what .fld:not(:has(#f-content)),body[data-myrole=
 body[data-simple="1"] #ltabs,body[data-simple="1"] #ltab-cfg,body[data-simple="1"] .dtag,body[data-simple="1"] #heat-cfg{display:none!important}
 .guide .ob-ico{font-size:48px}
 .simple-more .slist{margin-bottom:8px}
+
+/* 1.4.3 도면 초안 미리보기 */
+.wz-plan small{display:block}
+.pd-warn{color:#b45309;background:#fff7ed;border-radius:8px;padding:8px 10px;margin:6px 0;font-size:13px}
+.pd-dong{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0}
+.pd-dong .chk-line{display:flex;align-items:center;gap:8px}
+.pd-dong .chk-line .inp{flex:1;min-width:0}
+.pd-nums{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:8px}
+.pd-nums label{display:flex;align-items:center;gap:4px;font-size:13px;color:var(--sub)}
+.pd-nums .inp{width:4.5em;padding:4px 6px}
+.pd-hos,.pd-rooms{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.pd-item{display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:2px 8px 2px 6px;background:var(--card,#fff)}
+.pd-item.on{border-color:var(--accent, #2563eb);background:#eff6ff}
+.pd-item .inp{border:0;background:transparent;width:7.5em;padding:2px 0;font-size:13px}
+.pd-pages{margin:8px 0;color:var(--sub);font-size:13px}
+.pd-pages li.off{opacity:.65}
+.pd-use{display:inline-flex;align-items:center;gap:4px;margin-left:8px}
