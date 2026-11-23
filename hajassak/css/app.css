@@ -734,3 +734,62 @@ body.has-selbar #view{padding-bottom:150px}
   .dcard .ddone{min-height:36px;width:100%}
   .dc-act{justify-content:stretch}
 }
+/* 1.3.7 세대 도면: 방별 건수 배지 · 하자 핀 · 실 영역 */
+.uv-mini{min-width:44px;justify-content:center}
+.up-wrap{padding:10px;margin-bottom:var(--gap)}
+.up-tools,.up-foot{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:4px 0 8px}.up-foot{margin:8px 0 4px}
+.up-mode{display:inline-flex;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.up-mode button{min-height:40px;padding:0 12px;border:0;background:var(--card);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.up-mode button.on{background:var(--brand);color:#fff}
+@media (prefers-color-scheme:dark){.up-mode button.on{color:#04211e}}
+.up-scroll{overflow:auto;max-height:68vh;border-radius:10px;-webkit-overflow-scrolling:touch}
+.up-plan{cursor:default;min-width:100%}.up-plan img{background:#fff}
+.upin{position:absolute;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;border:3px solid #fff;display:flex;align-items:center;justify-content:center;font:700 13px/1 system-ui,sans-serif;color:#fff;box-shadow:0 2px 6px #0007;cursor:pointer;padding:0;z-index:2}
+.upin::after{content:"";position:absolute;inset:-5px;border-radius:50%}
+.upin.ph-none{background:var(--ph-none);color:#111827}.upin.ph-before{background:var(--ph-before)}.upin.ph-after{background:var(--ph-after)}
+.upin.approx{border-style:dashed;opacity:.88}
+.upin.on{width:38px;height:38px;z-index:3;outline:3px solid var(--brand);outline-offset:1px}
+.ubadge{position:absolute;transform:translate(-50%,-50%);min-width:48px;min-height:48px;padding:4px 8px;border-radius:14px;border:2px solid #fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;color:#1f2937;box-shadow:0 2px 8px #0005;cursor:pointer;z-index:2;font:inherit;background:var(--hv1)}
+.ubadge b{font-size:20px;line-height:1.05}.ubadge small{font-size:11px;font-weight:600;white-space:nowrap}
+.ubadge.hv1{background:var(--hv1)}.ubadge.hv2{background:var(--hv2)}.ubadge.hv3{background:var(--hv3)}.ubadge.hv4{background:var(--hv4)}
+.ubadge:focus-visible,.upin:focus-visible{outline:3px solid var(--brand);outline-offset:2px}
+.up-key{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:11px;color:var(--sub)}.up-key span{display:inline-flex;align-items:center;gap:4px}
+.up-key i{display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid color-mix(in srgb,var(--ink) 30%,transparent)}.up-key i.hv1,.up-key i.hv2,.up-key i.hv3,.up-key i.hv4{border-radius:3px}
+.up-key i.ph-none{background:var(--ph-none)}.up-key i.ph-before{background:var(--ph-before)}.up-key i.ph-after{background:var(--ph-after)}.up-key i.approx{border:2px dashed var(--sub);background:transparent}.up-key small{margin-left:auto}
+.up-unbtn b{margin:0 2px}.up-unbtn.zero{opacity:.6}
+.up-un{position:relative;margin-bottom:8px}.up-un .dcard{margin-bottom:4px}.up-pinbtn{margin:0 0 4px auto;display:flex}
+.up-no{position:absolute;left:-4px;top:-6px;z-index:2;min-width:22px;height:22px;padding:0 5px;border-radius:11px;background:var(--ink);color:var(--card);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.up-sel{padding:10px;margin-bottom:var(--gap);border-color:var(--brand)}.up-sel-hd{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}.up-sel-hd small{color:var(--sub)}
+.up-empty{padding:14px}
+.rl-list .dcard{margin-bottom:8px}
+.uplans .ut-card{padding:12px;margin-bottom:var(--gap)}.ut-hd{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}.ut-hd b{font-size:18px}.ut-hd small{color:var(--sub)}
+.ut-thumb{width:100%;max-height:240px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
+.ut-acts{gap:6px}
+.ul-row{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-bottom:1px solid var(--line)}.ul-row>b{min-width:52px}.ul-cs{display:flex;flex-wrap:wrap;gap:4px}
+.ul-c{font-size:12px;padding:3px 8px;border-radius:8px;background:var(--chip)}.ul-c.none{opacity:.6}.ul-c small{color:var(--sub);margin-left:2px}
+.ra-plan{touch-action:none;cursor:crosshair;user-select:none}
+.ra-box,.ra-pt{position:absolute;border:2px solid var(--brand);background:color-mix(in srgb,var(--brand) 14%,transparent);border-radius:4px;pointer-events:none}
+.ra-pt{width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--brand)}
+.ra-box em,.ra-pt em{position:absolute;left:2px;top:2px;font-style:normal;font-size:12px;font-weight:700;background:var(--card);color:var(--ink);padding:1px 4px;border-radius:6px;white-space:nowrap;pointer-events:auto}
+.ra-box em b,.ra-pt em b{margin-left:4px;color:var(--bad);cursor:pointer;padding:0 2px}
+.ra-drag{position:absolute;border:2px dashed var(--brand);background:color-mix(in srgb,var(--brand) 10%,transparent);pointer-events:none}
+.unit-hd .chips{flex-wrap:wrap;row-gap:6px}
+
+/* 1.3.9 숫자·이름이 칩/칸 밖으로 잘리거나 넘치지 않게(5자리 12,345까지) */
+.hpl-chips{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
+.hpl-chip{flex-direction:column;align-items:flex-start;justify-content:center;gap:0;min-width:0;max-width:100%;padding:6px 10px;box-sizing:border-box;overflow:hidden}
+.hpl-chip span{white-space:nowrap;font-size:clamp(11px,3.3vw,13px)}
+.hpl-chip b{font-size:clamp(15px,4.6vw,18px);line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums}
+@media (min-width:600px){.hpl-chip span{font-size:13px}.hpl-chip b{font-size:18px}}
+.hpl-chips,.pl-grid,.cgrid{max-width:100%}
+.pl-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+.pl-card{min-width:0;container-type:inline-size}
+.pl-card .pl-n,.pl-card .pl-s,.pl-card .pl-c{max-width:100%;overflow-wrap:anywhere}
+.pl-card b,.pl-card b.pl-big{white-space:nowrap;font-variant-numeric:tabular-nums;font-size:clamp(11px,calc((100cqw - 26px) / (var(--len,6) * .62)),24px)}
+.pl-card b small,.pl-card b.pl-big small{font-size:max(10px,.55em)}
+.cgrid{grid-template-columns:repeat(auto-fill,minmax(112px,1fr))}
+.cc{min-width:0}.cc span{overflow-wrap:anywhere}.cc b{white-space:nowrap;font-variant-numeric:tabular-nums}
+.hgrid{grid-template-columns:38px repeat(var(--cols),minmax(0,1fr))}
+.hc{min-width:0;container-type:inline-size;overflow:hidden}
+.hc span{white-space:nowrap}
+.hc b{white-space:nowrap;font-variant-numeric:tabular-nums;font-size:clamp(9px,calc(92cqw / (var(--len,3) * .62)),15px)}
