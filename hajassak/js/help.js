@@ -14,15 +14,18 @@ const FIG = {
 };
 
 export const SECTIONS = [
-  { id: "start", ico: "🚀", t: "시작하기", k: "설치 홈화면 현장 만들기 샘플 엑셀", html: () => `
+  { id: "start", ico: "🚀", t: "시작하기", k: "설치 홈화면 현장 만들기 샘플 엑셀 간단 모드 안내 역할", html: () => `
     ${h("1. 앱 설치(홈 화면에 추가)")}
     ${steps(`안드로이드: <b>크롬</b>으로 이 주소를 열고 메뉴(⋮) › ${B("홈 화면에 추가")} 또는 ${B("앱 설치")}`, `아이폰: 사파리 › 공유(□↑) › ${B("홈 화면에 추가")}`, "설치한 아이콘으로 열면 인터넷 없이도 써요.")}
     ${tip("삼성 인터넷보다 크롬으로 설치하면 연락처 고르기 등 더 많은 기능이 돼요.")}
     ${h("2. 현장 만들기")}
-    ${steps(`첫 화면 ${B("+ 새 현장 만들기")} (또는 홈 위 ${B("현장 ▾")} › ${B("＋ 새 현장 만들기")})`, `① 현장 유형(아파트·오피스텔·상가·호텔·단독·리모델링) 고르고 이름 적기 › ② 건물 이름·층·호(미리보기 확인, 엑셀·CSV로 불러오기 가능) › ③ 위치 이름 › ④ 공종 › ⑤ 업체(건너뛰어도 돼요) › ${B("현장 만들기")}`, `동·층은 나중에 ${P("설정", "현장", "동")}에서 고칠 수 있어요.`)}
-    ${tip(`건물·층·호 목록이나 업체 목록이 엑셀에 있다면 ② ⑤ 단계의 ${B("📥 엑셀·CSV 불러오기")}를 쓰세요. ${B("양식 받기")}로 빈 양식을 받을 수 있어요.`)}
+    ${steps(`첫 화면 ${B("+ 새 현장 만들기")} (또는 홈 위 ${B("현장 ▾")} › ${B("＋ 새 현장 만들기")})`, `① 현장 유형(아파트·오피스텔·상가·호텔·단독·리모델링) 고르고 이름 적기 › ② 건물 이름·층·호(미리보기 확인, 엑셀·CSV로 불러오기 가능) › ③ 위치 이름 › ④ 공사 종류 › ⑤ 업체(건너뛰어도 돼요) › ${B("현장 만들기")}`, `동·층은 나중에 ${P("설정", "현장", "동")}에서 고칠 수 있어요.`)}
+    ${tip(`건물·층·호 목록이나 업체 목록이 엑셀에 있다면 ② ⑤ 단계의 ${B("📥 엑셀·CSV 불러오기")}를 쓰세요. ${B("빈 엑셀 보기")}로 채울 칸이 있는 파일을 받을 수 있어요.`)}
     ${tip(`먼저 둘러보려면 ${B("샘플 현장 불러오기")} — 가상의 데이터예요.`)}
-    ${h("3. 엑셀로 한 번에 가져오기")}
+    ${h("3. 간단 모드 · 처음 안내")}
+    <p>역할을 고른 뒤에는 그 역할에 맞는 짧은 안내(3~4장)가 나와요. ${B("건너뛰기")}를 누를 수 있고, 아래 ${B("역할 안내 다시 보기")}로 언제든 다시 볼 수 있어요. 이미 쓰던 분에게는 자동으로 띄우지 않아요.</p>
+    <p>${P("설정", "간단 모드")} 또는 ${P("더보기", "간단 모드")}를 켜면 등록·목록·조치완료·보내기만 큰 버튼으로 남고, 고급 기능은 숨겨요. 입주자 점검·협력업체로 처음 시작하는 분은 기본이 켜져 있어요. 시공관리자로 이미 쓰던 분은 기본이 꺼져 있어요.</p>
+    ${h("4. 엑셀로 한 번에 가져오기")}
     ${steps(`홈 ${B("더보기")} › ${B("엑셀 가져오기")} › ${B("파일 선택")} (.xlsx·.xls·.csv)`, "각 열이 무엇인지 맞추기(자동 추정) › 미리보기 확인", `${B("적용하기")} — 잘못됐으면 ${B("↩ 되돌리기 (이번 가져오기 취소)")}`)}
     ${go("#/wizard", "새 현장 만들기")} ${go("#/import", "엑셀 가져오기")}` },
   { id: "add", ico: "📍", t: "하자 등록", k: "공종 업체 자동 도장공사 합치기 정리 위치 건너뛰기 사진 카메라 촬영 앨범 한 장 더 스탬프 일시 음성 마이크 저장 후 계속", html: () => `
@@ -158,13 +161,13 @@ export const SECTIONS = [
     <details class="hp-q"><summary>‘대기 N건’이 안 줄어요(업로드 대기)</summary><ul><li>동기화 화면에서 대기 종류(사진·하자…)와 ‘상태’ 원인 확인</li><li>와이파이에서 앱을 켜 두기(화면 꺼짐·다른 앱 전환 시 멈춰요)</li><li>‘무료 한도’면 오후 5시쯤(한국 시간) 이후 자동으로 이어져요. 데이터는 지워지지 않아요.</li></ul></details>` },
 ];
 
-export function renderHelp(root, { s = "", onboard } = {}) {
+export function renderHelp(root, { s = "", onboard, guide } = {}) {
   root.innerHTML = `<div class="help-page">
     <form class="search" role="search" onsubmit="return false"><input class="inp" id="hp-q" type="search" placeholder="찾기: 예) 도면, 카톡, 연락처, 업데이트" aria-label="사용법 검색"></form>
     <nav class="hp-toc" aria-label="목차">${SECTIONS.map((x) => `<button type="button" class="hp-tc" data-to="${x.id}"><span>${x.ico}</span>${x.t}</button>`).join("")}</nav>
     <div id="hp-list">${SECTIONS.map((x) => `<details class="hp-sec card" id="hp-${x.id}" data-k="${x.t} ${x.k}"><summary><span class="hp-ico">${x.ico}</span><b>${x.t}</b></summary><div class="hp-bd">${x.html()}</div></details>`).join("")}</div>
     <p class="help hp-none" id="hp-none" hidden>찾는 내용이 없어요. 다른 말로 찾아보세요.</p>
-    <div class="row wrap hp-foot"><button type="button" class="btn btn-sm" id="hp-all">모두 펼치기</button>${onboard ? `<button type="button" class="btn btn-sm btn-ghost" data-go="${onboard}">처음 안내 다시 보기</button>` : ""}</div></div>`;
+    <div class="row wrap hp-foot"><button type="button" class="btn btn-sm" id="hp-all">모두 펼치기</button>${onboard ? `<button type="button" class="btn btn-sm btn-ghost" data-go="${onboard}">처음 안내 다시 보기</button>` : ""}${guide ? `<button type="button" class="btn btn-sm btn-ghost" id="hp-guide" data-go="${guide}">역할 안내 다시 보기</button>` : ""}</div></div>`;
   const secs = [...root.querySelectorAll(".hp-sec")];
   const open = (id) => { const d = root.querySelector("#hp-" + id); if (!d) return; d.open = true; setTimeout(() => d.scrollIntoView({ block: "start" }), 30); };
   root.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => open(b.dataset.to)));

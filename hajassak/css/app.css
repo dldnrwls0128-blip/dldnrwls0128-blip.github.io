@@ -833,3 +833,14 @@ body[data-myrole=resident] #fs-what .fld:not(:has(#f-content)),body[data-myrole=
 .wz-us{display:flex;gap:4px;flex-wrap:wrap;min-width:0}.wz-us i{font-style:normal;font-size:12px;padding:2px 6px;border-radius:6px;background:color-mix(in srgb,var(--brand) 10%,var(--card));font-variant-numeric:tabular-nums}.wz-us em{font-style:normal;font-size:12px;color:var(--sub)}
 .wz-v{display:flex;align-items:center;gap:8px;min-height:56px}.wz-v>span:nth-child(2){flex:1;min-width:0;display:flex;flex-direction:column}
 .wz-fin{margin:12px 0}
+
+/* ---------- 1.4.2 간단 모드 · 첫 안내 · 작은 도움말 ---------- */
+.qtip{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-left:4px;padding:0;border:1px solid var(--line);border-radius:50%;background:var(--card);color:var(--sub);font-size:12px;font-weight:700;line-height:1;vertical-align:middle;cursor:pointer}
+.qtip:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.simple-home .sm-sum{margin:4px 0 12px;font-size:15px;color:var(--sub)}
+.simple-home .sm-sum b{color:var(--fg);font-size:18px}
+.simple-home .btn-xl{min-height:64px;font-size:18px;margin:0 0 10px}
+.simple-home .sm-hint{margin:4px 0 16px;text-align:center}
+body[data-simple="1"] #ltabs,body[data-simple="1"] #ltab-cfg,body[data-simple="1"] .dtag,body[data-simple="1"] #heat-cfg{display:none!important}
+.guide .ob-ico{font-size:48px}
+.simple-more .slist{margin-bottom:8px}

@@ -9,6 +9,7 @@ import { speechSupported, startDictation } from "./speech.js";
 import * as Sync from "./sync.js";
 import * as RL from "./roles.js";
 import * as SITE from "./sitetypes.js";
+import * as EZ from "./ease.js";
 
 export const APP_VERSION = self.HAJASSAK_VERSION || "0.0.0"; // 유일 출처: /version.js (sw.js 캐시 이름도 같은 값)
 export const APP_NAME = "하자싹";
@@ -37,25 +38,36 @@ const fmtDT = (iso) => { const d = new Date(iso); return `${M.todayStr(d)} ${Str
 const shortDate = (s) => (s ? s.slice(5).replace("-", "/") : "");
 
 /** 화면별 ‘?’ → 사용법의 해당 부분 */
-const HELP_OF = { unitplans: "plans", places: "grid", new: "add", edit: "add", unit: "add", item: "status", list: "grid", grid: "grid", dash: "grid", vendors: "vendors", vendor: "send", "vendor-edit": "vendors", settings: "settings", photos: "add", more: "settings", project: "plans", import: "excel", imported: "excel", restore: "excel", sync: "team", wizard: "start", lists: "plans" };
+const HELP_OF = { unitplans: "plans", places: "grid", new: "add", edit: "add", unit: "add", item: "status", list: "grid", grid: "grid", dash: "grid", vendors: "vendors", vendor: "send", "vendor-edit": "vendors", settings: "settings", photos: "add", more: "settings", project: "plans", import: "excel", imported: "excel", restore: "excel", sync: "team", wizard: "start", guide: "start", lists: "plans" };
 function setHeader(title, { backBtn = navDepth() > 1, action = "", help } = {}) {
   $("#header-title").textContent = title;
   $("#btn-back").hidden = !backBtn;
   const path = (location.hash.split("?")[0] || "").slice(2); const hs = help ?? HELP_OF[path];
   $("#hdr-action").innerHTML = action + (hs ? `<button type="button" class="hdr-help" data-help="${hs}" aria-label="이 화면 사용법" title="사용법">?</button>` : "");
 }
-document.addEventListener("click", (e) => { const b = e.target.closest?.("[data-help]"); if (b) { e.preventDefault(); go(`#/help?s=${b.dataset.help}`); } });
+document.addEventListener("click", (e) => { const b = e.target.closest?.("[data-help]"); if (b) { e.preventDefault(); go(`#/help?s=${b.dataset.help}`); } const q = e.target.closest?.("[data-qtip]"); if (q) { e.preventDefault(); toast(q.dataset.qtip, { ms: 3500 }); } });
 /** 1.4.0 역할: 이 기기 안에서 화면만 바꾼다(저장 안 된 기존 사용자 = 시공관리자 = 예전과 같은 화면) */
 const roleId = () => { const r = LS.get("role", "manager"); return RL.ROLES[r] ? r : "manager"; };
 function applyRoleTabs() {
-  const rl = RL.roleOf(roleId()); document.body.dataset.myrole = rl.id;
+  const id = roleId(); const rl = RL.roleOf(id); const sm = EZ.simpleOn((k, d) => LS.get(k, d));
+  document.body.dataset.myrole = rl.id; document.body.dataset.simple = sm ? "1" : "0";
+  const tabs = sm ? EZ.simpleTabs(id) : rl.tabs;
+  const tabLabel = sm ? EZ.simpleTabLabel(id) : rl.tabLabel;
+  const tabHref = sm ? EZ.simpleTabHref(id) : rl.tabHref;
   $$(".tab-item").forEach((a) => {
-    const t = a.dataset.tab; a.style.display = rl.tabs.includes(t) ? "" : "none";
-    const tn = a.lastChild; if (tn && tn.nodeType === 3) { if (a.dataset.lab0 === undefined) a.dataset.lab0 = tn.textContent; tn.textContent = rl.tabLabel[t] || a.dataset.lab0; }
-    if (a.dataset.href0 === undefined) a.dataset.href0 = a.getAttribute("href"); a.setAttribute("href", rl.tabHref[t] || a.dataset.href0);
+    const t = a.dataset.tab; a.style.display = tabs.includes(t) ? "" : "none";
+    const tn = a.lastChild; if (tn && tn.nodeType === 3) { if (a.dataset.lab0 === undefined) a.dataset.lab0 = tn.textContent; tn.textContent = tabLabel[t] || a.dataset.lab0; }
+    if (a.dataset.href0 === undefined) a.dataset.href0 = a.getAttribute("href"); a.setAttribute("href", tabHref[t] || a.dataset.href0);
   });
 }
 function setTab(tab) { applyRoleTabs(); $$(".tab-item").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab)); $(".tab-bar").hidden = !tab; }
+const isSimple = () => EZ.simpleOn((k, d) => LS.get(k, d));
+function toggleSimple() {
+  const on = !isSimple(); LS.set("simple", on);
+  toast(on ? "간단 모드를 켰어요 · 등록·목록·조치완료·보내기만 크게 보여요" : "간단 모드를 껐어요 · 모든 기능이 다시 보여요", { ms: 2800 });
+  applyRoleTabs(); rerender();
+}
+
 
 /* ---------- 데이터 ---------- */
 async function loadAll() {
@@ -207,8 +219,8 @@ async function route() {
   curHash = hash;
   document.body.classList.remove("printing");
   view().oninput = null;
-  if (!LS.get("onboarded", false) && !["onboard", "role", "privacy", "help"].includes(path)) return replace("#/onboard");
-  if (!P() && !["onboard", "role", "wizard", "settings", "privacy", "about", "restore", "pro", "sync", "help"].includes(path)) {
+  if (!LS.get("onboarded", false) && !["onboard", "role", "privacy", "help", "guide"].includes(path)) return replace("#/onboard");
+  if (!P() && !["onboard", "role", "wizard", "settings", "privacy", "about", "restore", "pro", "sync", "help", "guide"].includes(path)) {
     setTab("home"); setHeader(APP_NAME, { backBtn: false });
     view().innerHTML = noProject(); bindNoProject(); return;
   }
@@ -223,9 +235,9 @@ async function route() {
 }
 function noProject() {
   const rid = roleId();
-  if (rid === "resident") return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>내 세대 점검을 시작해요</h2>
-    <p class="help">점검할 세대(동·호)를 한 번만 적어 두면, 사진·위치·내용만 바로 등록할 수 있어요.</p>
-    <button type="button" class="btn btn-primary btn-lg" data-a="myunit">🏠 내 세대 입력하고 시작</button>
+  if (rid === "resident") return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>내 집 점검을 시작해요</h2>
+    <p class="help">점검할 집(동·호)을 한 번만 적어 두면, 사진·위치·내용만 바로 등록할 수 있어요.</p>
+    <button type="button" class="btn btn-primary btn-lg" data-a="myunit">🏠 내 집 입력하고 시작</button>
     <button type="button" class="btn btn-ghost" data-a="restore">백업 파일에서 복원</button></div>`;
   if (rid === "vendor" || rid === "auditor") return `<div class="empty-hero"><img src="./icons/icon-192.png" alt="" width="72" height="72"><h2>현장에 참여해 주세요</h2>
     <p class="help">${rid === "vendor" ? "시공사에서 받은 초대코드로 참여하면 내 하자와 조치 후 사진을 볼 수 있어요." : "시공사에서 받은 초대코드로 참여하면 현황을 확인할 수 있어요."}</p>
@@ -288,7 +300,7 @@ async function pickRoleVendor() {
 const residentLoc = () => { if (roleId() !== "resident") return {}; const u = LS.get("roleUnit", null) || {}; return { dong: u.dong || "", ho: u.ho || "", floor: u.ho ? M.floorOfHo(u.ho) : "", category: "입주자하자" }; };
 async function residentSetup() {
   const u0 = LS.get("roleUnit", null) || {};
-  const r = await formSheet({ title: "내 세대", ok: "저장", hint: "점검할 세대 한 곳만 등록해요. 동이 따로 없으면 비워 두세요.",
+  const r = await formSheet({ title: "내 집", ok: "저장", hint: "점검할 집 한 곳만 등록해요. 동이 따로 없으면 비워 두세요.",
     fields: [{ k: "dong", label: "동", value: u0.dong || "", placeholder: "예: 101동 (선택)" }, { k: "ho", label: "호", value: u0.ho || "", placeholder: "예: 1203" }],
     validate: ({ ho }) => (ho && !M.normHo(ho) ? "호수는 3~4자리 숫자로 적어 주세요 (예: 1203)" : "") });
   if (!r) return false;
@@ -315,8 +327,29 @@ ROUTES.role = async (qq) => {
     if (id !== prev || first) { S.filter = { status: "_open" }; LS.set("filter", S.filter); S.listMode = "list"; S.draft = null; }
     if (id === "vendor") await pickRoleVendor();
     if (id === "resident") { const u = LS.get("roleUnit", null); if (u?.ho) { S.filter = { status: "_open", ho: u.ho, ...(u.dong ? { dong: [u.dong] } : {}) }; LS.set("filter", S.filter); } }
+    if (first && EZ.simplePref((k, d) => LS.get(k, d)) == null && EZ.defaultSimpleFor(id, true)) LS.set("simple", true);
     toast(`${RL.roleOf(id).name} 화면으로 바꿨어요`, { ms: 2200 });
-    replace("#/home");
+    replace(first ? "#/guide?first=1" : "#/home");
+  }));
+};
+
+
+/* ---------- 1.4.2 역할별 첫 사용 안내(기존 사용자에게는 자동으로 안 뜸: first=1일 때만) ---------- */
+ROUTES.guide = async (qq) => {
+  const pages = EZ.guideOf(roleId()); const i = Math.min(Math.max(Number(qq.i || 0), 0), pages.length - 1);
+  const again = !!qq.again; const first = !!qq.first;
+  setTab(null); setHeader("처음 안내", { backBtn: i > 0 });
+  const s = pages[i];
+  view().innerHTML = `<div class="onboard guide" id="guide"><div class="ob-ico" aria-hidden="true">${s.ico}</div><h2>${esc(s.t)}</h2><p>${esc(s.d)}</p>
+    <div class="dots" aria-label="${i + 1} / ${pages.length}">${pages.map((_, j) => `<span class="${j === i ? "on" : ""}"></span>`).join("")}</div>
+    <div class="ob-act">${i < pages.length - 1 ? `<button type="button" class="btn btn-ghost" data-a="skip" id="g-skip">건너뛰기</button><button type="button" class="btn btn-primary btn-lg" data-a="next" id="g-next">다음</button>`
+      : `<button type="button" class="btn btn-primary btn-lg" data-a="done" id="g-done">시작하기</button>`}</div>
+    <p class="help small">이 안내는 더보기 › 사용법에서 다시 볼 수 있어요.</p></div>`;
+  const href = (ni) => `#/guide?${again ? "again=1&" : first ? "first=1&" : ""}i=${ni}`;
+  const finish = () => { LS.set("guideSeen", true); if (again) history.go(-(i + 1)); else replace("#/home"); };
+  $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.a === "next") { if (again) go(href(i + 1)); else replace(href(i + 1)); }
+    else finish();
   }));
 };
 
@@ -630,8 +663,39 @@ async function sendChecked(sel) {
 }
 
 /* ---------- 홈 ---------- */
+
+function renderSimpleHome() {
+  const rid = roleId(); const hp = (k) => RL.homeShows(rid, k);
+  const vScope = rid === "vendor" ? LS.get("roleVendor", "") : "";
+  const uScope = rid === "resident" ? LS.get("roleUnit", null) : null; const uHo = uScope?.ho || "";
+  const p = P(); const list = vScope ? PD().filter((d) => d.vendorId === vScope) : uHo ? PD().filter((d) => d.ho === uHo && (!uScope.dong || d.dong === uScope.dong)) : PD();
+  const today = M.todayStr(); const open = list.filter(M.isOpen);
+  const todayN = list.filter((d) => (d.createdAt || "").slice(0, 10) === today).length;
+  setHeader(p.name, { backBtn: false, action: `<span class="ver-badge" id="hdr-ver" title="앱 버전">v${APP_VERSION}</span>` });
+  const recent = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)).slice(0, 5);
+  const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
+  const waitAfter = list.filter((d) => M.photoMissing(d, "noafter") && M.isOpen(d)).length;
+  view().innerHTML = `<div class="home2 simple-home" id="simple-home">
+    ${homeSyncHtml()}
+    ${rid !== "manager" ? roleBanner(rid) : ""}
+    <p class="sm-sum">미조치 <b>${n(open.length)}</b>건 · 오늘 등록 ${n(todayN)}건 · 전체 ${n(list.length)}건</p>
+    ${hp("new") ? `<button type="button" class="btn btn-primary btn-xl" id="sm-new" data-go="#/new">＋ 하자 등록</button>` : ""}
+    <button type="button" class="btn btn-xl" id="sm-list" data-go="#/list">📋 목록 보기 <small>미조치 ${n(open.length)}건</small></button>
+    ${hp("send") ? `<button type="button" class="btn btn-xl" id="home-send">📲 보내기 <small>${unsent ? `아직 안 보낸 건 ${n(unsent)}건` : "카톡·파일·문자"}</small></button>` : ""}
+    ${hp("afterphoto") ? `<button type="button" class="btn btn-xl" id="home-afterph">📷 조치 후 사진 올리기 <small>${n(waitAfter)}건 대기</small></button>` : ""}
+    <p class="help small sm-hint">고급 기능은 더보기에서 ‘간단 모드’를 끄면 나와요.</p>
+    <h3 class="sec">최근 기록 ${recent.length ? `<button type="button" class="sec-link" data-go="#/list">전체 목록 ›</button>` : ""}</h3>
+    ${recent.length ? recent.map((d) => defectCard(d)).join("") : (hp("new") ? `<div class="card empty-card"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p></div>` : `<div class="card empty-card"><p>${vScope ? "내 업체로 지정된 하자가 아직 없어요." : "표시할 하자가 아직 없어요."}</p></div>`)}
+    ${verFoot()}</div>`;
+  bindCards(); bindVerFoot(); bindRoleBanner();
+  $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
+  $("#home-afterph")?.addEventListener("click", () => { S.filter = { photo: "noafter", status: "_open", ...(vScope ? { vendorId: [vScope] } : {}) }; LS.set("filter", S.filter); S.listMode = "list"; go("#/list"); });
+  $("#home-send")?.addEventListener("click", () => { const un = PD().filter((d) => d.status === "접수" || d.status === "재접수"); if (!un.length) { toast("아직 안 보낸 건이 없어요 · 업체 화면으로 갈게요", { ms: 3000 }); return go("#/vendors"); } return sendChecked(un); });
+}
+
 ROUTES.home = async () => {
   setTab("home");
+  if (isSimple()) return renderSimpleHome();
   const rid = roleId(); const hp = (k) => RL.homeShows(rid, k); const vScope = rid === "vendor" ? LS.get("roleVendor", "") : "";
   const uScope = rid === "resident" ? LS.get("roleUnit", null) : null; const uHo = uScope?.ho || "";
   const p = P(); const list = vScope ? PD().filter((d) => d.vendorId === vScope) : uHo ? PD().filter((d) => d.ho === uHo && (!uScope.dong || d.dong === uScope.dong)) : PD(); const today = M.todayStr();
@@ -835,7 +899,7 @@ function locIndex() {
 }
 ROUTES.list = async () => {
   setTab("places");
-  setHeader("하자위치", { backBtn: navDepth() > 1 });
+  setHeader(isSimple() ? "목록" : "하자위치", { backBtn: navDepth() > 1 });
   /* 1.2.8 관리 탭: [전체] [중점관리 n] … — 고른 탭 안에서 필터·정렬·묶음·보내기 그대로 */
   const allP = PD(); const tabs = TABS(); let ltab = LS.get("listTab", ""); if (ltab && !tabs.some((t) => t.id === ltab)) { ltab = ""; LS.set("listTab", ""); }
   const f = S.filter; const all = ltab ? allP.filter((d) => M.inTab(d, ltab)) : allP;
@@ -3534,7 +3598,7 @@ function vendorMapSheet() {
 ROUTES.help = async (qq) => {
   setTab(null); setHeader("사용법", { backBtn: true, help: "" });
   const { renderHelp } = await import("./help.js");
-  renderHelp(view(), { s: qq.s || "", onboard: "#/onboard?again=1" });
+  renderHelp(view(), { s: qq.s || "", onboard: "#/onboard?again=1", guide: "#/guide?again=1" });
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   if (qq.s) return "keep-scroll";
 };
@@ -3608,14 +3672,27 @@ ROUTES.more = async () => {
       ${item("#/import", "📥", "엑셀 가져오기", "다른 시스템·엑셀 목록")}
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장`, 'data-a="switch"')}
       ${item("#/help", "📘", "사용법 보기", "처음이라면 여기부터")}
+      ${item("", "✨", "간단 모드", isSimple() ? "켜짐 · 등록·목록·조치완료·보내기만 크게" : "꺼짐 · 눌러서 핵심만 크게 보기", 'data-a="simple" id="mo-simple"')}
       ${item("#/role", RL.roleOf(rid).ico, "내 역할", `${RL.roleOf(rid).name} · 화면 구성 바꾸기`, 'id="mo-role"')}</div>
     ${verFoot()}</div>`;
   if (rid !== "manager") view().innerHTML = view().innerHTML.replace(/<h3 class="sec">[^<]*<\/h3><div class="slist">\s*<\/div>/g, "");
+
+  if (isSimple()) {
+    view().innerHTML = `<div class="more-hub simple-more">
+    <h3 class="sec">이어서</h3><div class="slist">
+      ${item("", "📲", "보내기", unsent ? `아직 안 보낸 건 ${n(unsent)}건` : "카톡·파일·문자", 'data-a="send"')}
+      ${item("#/settings", "⚙️", "설정", "간단 모드·현장·동기화", 'id="mo-settings"')}
+      ${item("#/help", "📘", "사용법 보기", "처음 안내를 다시 볼 수 있어요")}
+      ${item("", "✨", "간단 모드", "켜짐 · 눌러서 끄기", 'data-a="simple" id="mo-simple"')}
+      ${item("#/role", RL.roleOf(rid).ico, "내 역할", `${RL.roleOf(rid).name} · 화면 구성 바꾸기`, 'id="mo-role"')}</div>
+    ${verFoot()}</div>`;
+  }
   bindVerFoot();
   $$("[data-go]", view()).forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", () => {
     const a = b.dataset.a;
     if (a === "switch") return switchProject();
+    if (a === "simple") return toggleSimple();
     if (a === "export") return exportSheet(PD(), "전체");
     if (a === "tabs") return tabManager(() => {});
     if (a === "wo") return workOrderSheet({ items: PD() });
@@ -3629,6 +3706,8 @@ ROUTES.settings = async () => {
   let persisted = false; try { persisted = await navigator.storage?.persisted?.(); } catch {}
   const item = (go2, ico, t, sub = "", attr = "") => `<button type="button" class="sitem" ${go2 ? `data-go="${go2}"` : ""} ${attr}><span class="si-ico">${ico}</span><span><b>${t}</b>${sub ? `<small>${sub}</small>` : ""}</span><span class="chev">›</span></button>`;
   view().innerHTML = `${verFoot().replace('class="ver-foot"', 'class="ver-foot top"')}
+    <h3 class="sec">화면</h3><div class="slist">
+      ${item("", "✨", "간단 모드", isSimple() ? "켜짐 · 등록·목록·조치완료·보내기만 큰 버튼으로" : "꺼짐 · 핵심 흐름만 크게 보려면 켜세요", 'data-a="simple" id="si-simple"')}</div>
     <h3 class="sec">현장</h3><div class="slist">
       ${p ? item("#/project", "🏗", esc(p.name), `${p.dongs.length}개 동 · 공종 ${p.trades.length} · 유형 ${p.types.length} · 도면 ${S.plans.filter((x) => x.projectId === p.id).length}`) : ""}
       ${item("", "🔁", "현장 전환 / 새 현장", `${S.projects.length}개 현장${Pro.isPro() ? "" : " · 무료판 1개"}`, 'data-a="switch"')}
@@ -3662,6 +3741,7 @@ ROUTES.settings = async () => {
   $$("[data-a]", view()).forEach((b) => b.addEventListener("click", async () => {
     const a = b.dataset.a;
     if (a === "switch") return switchProject();
+    if (a === "simple") return toggleSimple();
     if (a === "sample") return loadSample();
     if (a === "heat") return heatSheet();
     if (a === "band") return bandSheet();
@@ -4019,13 +4099,13 @@ ROUTES.lists = async (qq) => {
 
 /* ---------- 새 현장 마법사 (단계마다 history 항목 → 뒤로가기로 이전 단계) ---------- */
 /* ---------- 1.4.1 현장 만들기 마법사 (유형 → 건물·층·호 → 공용·실 → 공종 → 업체) ---------- */
-const WZ_STEPS = ["유형", "건물·층·호", "공용·실", "공종", "업체"];
+const WZ_STEPS = ["유형", "건물·층·호", "공용 장소·방", "공사 종류", "업체"];
 const wzProg = (step) => `<ol class="wz-prog" aria-label="진행 단계">${WZ_STEPS.map((t, i) => `<li class="${i + 1 === step ? "on" : i + 1 < step ? "done" : ""}"><b>${i + 1}</b><span>${t}</span></li>`).join("")}</ol>`;
 const wzSfxOpts = ["동", "관", ""];
 function wzTemplateChoose() {
-  return choose("양식 받기", [
-    { label: "엑셀 양식 (동·호 + 업체, 시트 2장)", sub: "예시 값이 들어 있어요 · 지우고 쓰세요", value: "xlsx", icon: "📊" },
-    { label: "CSV · 동·호 양식", value: "csv-dong", icon: "📄" }, { label: "CSV · 업체 양식", value: "csv-ven", icon: "📄" }]).then(async (k) => {
+  return choose("빈 엑셀 보기", [
+    { label: "엑셀 파일 (건물·호 + 업체, 시트 2장)", sub: "예시 값이 들어 있어요 · 지우고 쓰세요", value: "xlsx", icon: "📊" },
+    { label: "CSV · 건물·호 목록", value: "csv-dong", icon: "📄" }, { label: "CSV · 업체 목록", value: "csv-ven", icon: "📄" }]).then(async (k) => {
     if (!k) return; let b, fn;
     if (k === "xlsx") { b = await SITE.templateXlsx(); fn = "하자싹_현장양식.xlsx"; } else if (k === "csv-dong") { b = SITE.templateCsv(SITE.DONG_TEMPLATE); fn = "하자싹_동호양식.csv"; } else { b = SITE.templateCsv(SITE.VENDOR_TEMPLATE); fn = "하자싹_업체양식.csv"; }
     downloadBlob(b, fn); toast(`${fn} 받았어요 · 예시 줄은 지우고 내 목록을 적어 올려 주세요`, { ms: 4000 }); S.lastWzTemplate = fn;
@@ -4040,7 +4120,7 @@ function wzPreviewHtml(w) {
   return `<div class="wz-sum"><b>${n(ds.length)}개 건물</b> · 호 <b>${n(total)}</b>개${total ? ` · 호수 예 ${esc(s0.first)} ~ ${esc(s0.last)}` : ""}</div>
     <ul class="wz-dl">${ds.slice(0, 8).map((d, i) => `<li><b>${esc(d.name)}</b> <small>${d.basement ? `지하 ${d.basement}층 ~ ` : ""}지상 ${d.floors}층${d.skipFloors?.length ? ` (${d.skipFloors.join("·")}층 없음)` : ""} · 호 ${n(st[i].total)}개${d.alias ? ` · 줄임말 ${esc(d.alias)}동` : ""}</small></li>`).join("")}${ds.length > 8 ? `<li><small>…외 ${ds.length - 8}개</small></li>` : ""}</ul>
     <div class="wz-grid" aria-label="${esc(d0.name)} 층별 호 미리보기"><div class="wz-gt">${esc(d0.name)} 모습 <small>(위쪽 층부터)</small></div>${pick.map(row).join("")}</div>
-    ${bad.length ? `<p class="help wz-warn">⚠ ‘${esc(bad.join("’, ‘"))}’은(는) 단지 공용 위치 이름으로 읽혀요. 다른 이름을 써 주세요.</p>` : ""}${total > 20000 ? `<p class="help wz-warn">⚠ 호가 아주 많아요(${n(total)}개). 층·라인 수를 확인해 주세요.</p>` : ""}`;
+    ${bad.length ? `<p class="help wz-warn">⚠ ‘${esc(bad.join("’, ‘"))}’은(는) 단지 공용 위치 이름으로 읽혀요. 다른 이름을 써 주세요.</p>` : ""}${total > 20000 ? `<p class="help wz-warn">⚠ 호가 아주 많아요(${n(total)}개). 층과 호 수를 확인해 주세요.</p>` : ""}`;
 }
 async function wzImportDong(w) {
   const files = await pickFile(".xlsx,.xls,.csv,text/csv", { multiple: false }); if (!files.length) return false;
@@ -4082,7 +4162,7 @@ ROUTES.wizard = async (qq) => {
   const go2 = (s) => go(`#/wizard?step=${s}&keep=1`);
   const rr = () => rerender();
   if (step === 1 && !addMode) {
-    view().innerHTML = `<div class="wiz wz">${wzProg(1)}<h2>어떤 현장인가요?</h2><p class="help">유형을 고르면 건물·층·호, 위치 이름, 공종이 그 유형에 맞게 미리 채워져요. 뒤에서 모두 고칠 수 있어요.</p>
+    view().innerHTML = `<div class="wiz wz">${wzProg(1)}<h2>어떤 현장인가요?</h2><p class="help">유형을 고르면 건물·층·호, 위치 이름, 공사 종류가 그 유형에 맞게 미리 채워져요. 뒤에서 모두 고칠 수 있어요.</p>
       <div class="wz-types" role="radiogroup" aria-label="현장 유형">${SITE.SITE_TYPES.map((t) => `<button type="button" class="wz-type ${w.type === t.id ? "on" : ""}" data-t="${t.id}" role="radio" aria-checked="${w.type === t.id}"><span class="wt-i" aria-hidden="true">${t.ico}</span><span class="wt-t"><b>${esc(t.name)}</b><small>${esc(t.sub)}</small></span>${w.type === t.id ? '<span class="wt-ck">✓</span>' : ""}</button>`).join("")}</div>
       <h3 class="sec">현장 이름</h3><input class="inp inp-lg" id="w-name" value="${esc(w.name)}" placeholder="예: ○○지구 A블록 신축공사 · ○○빌딩 리모델링" autocomplete="off">
       <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">다음</button></div>`;
@@ -4100,16 +4180,16 @@ ROUTES.wizard = async (qq) => {
       ${w.naming !== "custom" ? `<div class="fld"><span>이름 끝 글자</span><div class="chips">${wzSfxOpts.map((s) => chip("suffix", s, s || "없음")).join("")}</div></div>` : ""}`;
     const floorsBox = `<h3 class="sec">층${imp ? "" : "·호"}</h3>${imp ? `<label class="chk-line"><input type="checkbox" data-wb="roof" ${w.roof ? "checked" : ""}> 옥상도 위치로 쓰기</label>`
       : `<div class="grid2">${num("floors", "지상 층수", 1, 99)}${num("basement", "지하 층수", 0, 9)}</div>
-      <div class="fld"><span>호수 규칙</span><div class="chips wrap">${chip("hoRule", "floor100", "층+번호 (101·1203)")}${chip("hoRule", "perfloor", "층마다 호 수가 달라요")}${chip("hoRule", "none", "호 없이 층까지만")}</div></div>
-      ${w.hoRule !== "none" ? `<div class="grid2">${num("lines", w.hoRule === "perfloor" ? "기본 호 수(층당)" : "층당 호 수", 0, 20)}${num("unitStart", "호가 시작되는 층", 1, 99)}</div>` : ""}
+      <div class="fld"><span>호 번호를 어떻게 매길지 <button type="button" class="qtip" data-qtip="한 층에 호가 몇 개인지, 번호를 어떻게 붙일지 정해요. 예: 12층 3호는 1203." aria-label="도움말">?</button></span><div class="chips wrap">${chip("hoRule", "floor100", "층+번호 (101·1203)")}${chip("hoRule", "perfloor", "층마다 호 수가 달라요")}${chip("hoRule", "none", "호 없이 층까지만")}</div></div>
+      ${w.hoRule !== "none" ? `<div class="grid2">${num("lines", w.hoRule === "perfloor" ? "기본 호 수(한 층)" : "한 층에 호가 몇 개인지", 0, 20)}${num("unitStart", "몇 층부터 호가 있는지", 1, 99)}</div>` : ""}
       ${w.hoRule === "perfloor" ? `<label class="fld"><span>호 수가 다른 층만 적기 <small>예: 1:8, 2-3:5 → 1층 8개, 2~3층 5개 (나머지는 위 기본 호 수)</small></span><input class="inp" data-wt="perFloor" value="${esc(w.perFloor || "")}" placeholder="1:8, 2-3:5"></label>` : ""}
-      <div class="grid2"><label class="fld"><span>없는 층 <small>예: 4, 13</small></span><input class="inp" data-wt="skipFloors" value="${esc(w.skipFloors || "")}" placeholder="비우면 전부 있음"></label>
-      ${w.hoRule === "floor100" ? `<label class="fld"><span>없는 호 줄 <small>예: 3, 4 (3·4호선)</small></span><input class="inp" data-wt="skipLines" value="${esc(w.skipLines || "")}" placeholder="비우면 전부 있음"></label>` : ""}</div>
+      <div class="grid2"><label class="fld"><span>빼 둘 층 <small>예: 4, 13</small></span><input class="inp" data-wt="skipFloors" value="${esc(w.skipFloors || "")}" placeholder="비우면 전부 있음"></label>
+      ${w.hoRule === "floor100" ? `<label class="fld"><span>빼 둘 호 줄 <small>예: 3, 4 (3·4호선)</small></span><input class="inp" data-wt="skipLines" value="${esc(w.skipLines || "")}" placeholder="비우면 전부 있음"></label>` : ""}</div>
       <label class="chk-line"><input type="checkbox" data-wb="roof" ${w.roof ? "checked" : ""}> 옥상도 위치로 쓰기</label>`}`;
     view().innerHTML = `<div class="wiz wz">${addMode ? "" : wzProg(2)}<h2>${addMode ? "건물 더 추가" : "건물·층·호"}</h2><p class="help">${addMode ? "새 건물을 한 번에 만들어요. 이미 있는 이름은 건너뛰어요." : "이름은 자유롭게 정하고, 층과 호는 아래 미리보기로 바로 확인하세요. 나중에 건물별로 고칠 수 있어요."}</p>
       ${nameBox}${floorsBox}
       ${addMode ? "" : `<div class="wz-xl"><b>📥 엑셀·CSV로 불러오기</b><small>건물·층·호 목록이 이미 있다면 파일로 한 번에 올리세요(‘동’, ‘층’, ‘호’ 제목 줄).</small>
-        <div class="row"><button type="button" class="btn btn-sm" id="w-impdong">파일 고르기</button><button type="button" class="btn btn-sm" id="w-tpl">양식 받기</button></div></div>`}
+        <div class="row"><button type="button" class="btn btn-sm" id="w-impdong">파일 고르기</button><button type="button" class="btn btn-sm" id="w-tpl">빈 엑셀 보기</button></div></div>`}
       <h3 class="sec">미리보기</h3><div class="card preview" id="w-prev"></div>
       <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">${addMode ? "건물 추가" : "다음"}</button></div>`;
     const read = () => $$("[data-k]", view()).forEach((i) => { w[i.dataset.k] = Math.max(Number(i.min), Math.min(Number(i.max), Number(i.value) || 0)); });
@@ -4137,19 +4217,19 @@ ROUTES.wizard = async (qq) => {
     view().innerHTML = `<div class="wiz wz">${wzProg(3)}<h2>하자 위치 이름</h2><p class="help">누르면 켜고 꺼요. 목록에 없으면 ＋ 직접입력으로 더하세요.</p>
       <h3 class="sec">건물 밖·단지 공용</h3>${wzChips("commons", t.commons, w)}
       <h3 class="sec">건물 안 공용부 <small>계단·복도 같은 곳</small></h3>${wzChips("dongCommons", t.dongCommons, w)}
-      <h3 class="sec">실(방) 이름</h3>${wzChips("rooms", t.rooms, w)}
-      <h3 class="sec">부위</h3>${wzChips("parts", t.parts, w)}
+      <h3 class="sec">방 이름</h3>${wzChips("rooms", t.rooms, w)}
+      <h3 class="sec">어디(벽·천장 등)</h3>${wzChips("parts", t.parts, w)}
       <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">다음</button></div>`;
   } else if (step === 4) {
     const sel = new Set(w.trades.map((x) => x.name)); const names = [...new Set([...SITE.typeOf(w.type).trades, ...SITE.TRADE_CATALOG.map((x) => x.name), ...w.trades.map((x) => x.name)])];
-    view().innerHTML = `<div class="wiz wz">${wzProg(4)}<h2>공종 고르기</h2><p class="help">이 현장에서 쓸 공종만 켜 두세요(${w.trades.length}개 선택). 세부 공종은 ✎로 고쳐요.</p>
+    view().innerHTML = `<div class="wiz wz">${wzProg(4)}<h2>공사 종류 고르기</h2><p class="help">이 현장에서 쓸 공사 종류만 켜 두세요(${w.trades.length}개 선택). 더 자세한 항목은 ✎로 고쳐요.</p>
       <div class="chips wrap" id="w-trades">${names.map((c) => `<button type="button" class="chip ${sel.has(c) ? "on" : ""}" data-wtr="${esc(c)}" aria-pressed="${sel.has(c)}">${esc(c)}</button>`).join("")}<button type="button" class="chip add" id="w-tradd">＋ 직접입력</button></div>
-      <h3 class="sec">세부 공종 고치기</h3><div class="slist" id="w-tsubs">${w.trades.map((x, i) => `<button type="button" class="sitem" data-wsub="${i}"><span class="si-ico">✎</span><span><b>${esc(x.name)}</b><small>${esc(x.subs.join(" · ") || "세부 공종 없음 — 눌러서 적기")}</small></span><span class="chev">›</span></button>`).join("")}</div>
+      <h3 class="sec">더 자세한 공사 종류 고치기</h3><div class="slist" id="w-tsubs">${w.trades.map((x, i) => `<button type="button" class="sitem" data-wsub="${i}"><span class="si-ico">✎</span><span><b>${esc(x.name)}</b><small>${esc(x.subs.join(" · ") || "자세한 항목 없음 — 눌러서 적기")}</small></span><span class="chev">›</span></button>`).join("")}</div>
       <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">다음</button></div>`;
   } else {
     const vs = w.vendors;
-    view().innerHTML = `<div class="wiz wz">${wzProg(5)}<h2>업체 등록 <small>(건너뛰어도 돼요)</small></h2><p class="help">담당 공종을 적어 두면 하자 등록 때 업체가 자동으로 정해져요. 나중에 더보기 › 업체에서도 더할 수 있어요.</p>
-      <div class="row wz-vbtn"><button type="button" class="btn btn-sm" id="w-vadd">＋ 직접 추가</button><button type="button" class="btn btn-sm" id="w-impven">📥 엑셀·CSV 불러오기</button><button type="button" class="btn btn-sm" id="w-tpl2">양식 받기</button></div>
+    view().innerHTML = `<div class="wiz wz">${wzProg(5)}<h2>업체 등록 <small>(건너뛰어도 돼요)</small></h2><p class="help">맡은 공사 종류를 적어 두면 하자 등록 때 업체가 자동으로 정해져요. 나중에 더보기 › 업체에서도 더할 수 있어요.</p>
+      <div class="row wz-vbtn"><button type="button" class="btn btn-sm" id="w-vadd">＋ 직접 추가</button><button type="button" class="btn btn-sm" id="w-impven">📥 엑셀·CSV 불러오기</button><button type="button" class="btn btn-sm" id="w-tpl2">빈 엑셀 보기</button></div>
       ${w.vendorFile ? `<p class="help" id="w-venres">📥 ${esc(w.vendorFile.file)} — 업체 ${w.vendorFile.read}곳 읽음${w.vendorFile.read - w.vendorFile.added ? ` · 같은 이름 ${w.vendorFile.read - w.vendorFile.added}곳 건너뜀` : ""}</p>` : ""}
       <div class="slist" id="w-vlist">${vs.length ? vs.map((v, i) => `<div class="sitem wz-v"><span class="si-ico">🏢</span><span><b>${esc(v.name)}</b><small>${esc([v.trades.join("·"), v.person, v.phone].filter(Boolean).join(" · ") || "담당 공종 없음")}</small></span><button type="button" class="btn btn-sm" data-wve="${i}" aria-label="${esc(v.name)} 고치기">✎</button><button type="button" class="btn btn-sm" data-wvd="${i}" aria-label="${esc(v.name)} 빼기">✕</button></div>`).join("") : `<div class="card empty-card"><p>아직 없어요. 건너뛰고 나중에 해도 돼요.</p></div>`}</div>
       <div class="card wz-fin" id="w-fin"><b>만들 현장</b><br>${esc(SITE.typeOf(w.type).name)} · ${esc(w.name)}<br><small>${(() => { const ds = SITE.makeDongsFromSpec(w); const t = ds.reduce((a, d) => a + SITE.dongStats(d).total, 0); return `건물 ${ds.length}개 · 호 ${n(t)}개 · 공종 ${w.trades.length}개 · 업체 ${vs.length}곳`; })()}</small></div>
@@ -4706,6 +4786,6 @@ async function main() {
   initSync();
   setTimeout(() => autoMergeTrades().catch((e) => console.warn(e)), 1500);
   setTimeout(() => autoMergeTypes().catch((e) => console.warn(e)), 2600);
-  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync, removePhoto, thumbUrl, makeThumb, compressImage, PHOTO_MAX, THUMB_MAX, selMore, listMore: (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); } }; // 테스트·디버그용
+  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync, EZ, isSimple, removePhoto, thumbUrl, makeThumb, compressImage, PHOTO_MAX, THUMB_MAX, selMore, listMore: (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); } }; // 테스트·디버그용
 }
 main();
