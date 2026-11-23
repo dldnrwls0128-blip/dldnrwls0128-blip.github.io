@@ -10,6 +10,7 @@ import * as Sync from "./sync.js";
 import * as RL from "./roles.js";
 import * as SITE from "./sitetypes.js";
 import * as EZ from "./ease.js";
+import * as VT from "./vendorteam.js";
 
 export const APP_VERSION = self.HAJASSAK_VERSION || "0.0.0"; // 유일 출처: /version.js (sw.js 캐시 이름도 같은 값)
 export const APP_NAME = "하자싹";
@@ -84,6 +85,7 @@ async function saveDefect(d, { local = true } = {}) {
   await db.put("defects", d);
   const i = S.defects.findIndex((x) => x.id === d.id); if (i >= 0) S.defects[i] = d; else S.defects.push(d);
   requestPersist();
+  if (VT.managerOn()) VT.schedulePublish();
 }
 async function saveVendor(v) { await db.put("vendors", v); const i = S.vendors.findIndex((x) => x.id === v.id); if (i >= 0) S.vendors[i] = v; else S.vendors.push(v); }
 function setStatus(d, status, note = "") {
@@ -219,8 +221,8 @@ async function route() {
   curHash = hash;
   document.body.classList.remove("printing");
   view().oninput = null;
-  if (!LS.get("onboarded", false) && !["onboard", "role", "privacy", "help", "guide"].includes(path)) return replace("#/onboard");
-  if (!P() && !["onboard", "role", "wizard", "settings", "privacy", "about", "restore", "pro", "sync", "help", "guide"].includes(path)) {
+  if (!LS.get("onboarded", false) && !["onboard", "role", "privacy", "help", "guide", "vjoin", "vwork"].includes(path)) return replace("#/onboard");
+  if (!P() && !["onboard", "role", "wizard", "settings", "privacy", "about", "restore", "pro", "sync", "help", "guide", "vjoin", "vwork"].includes(path)) {
     setTab("home"); setHeader(APP_NAME, { backBtn: false });
     view().innerHTML = noProject(); bindNoProject(); return;
   }
@@ -359,7 +361,7 @@ function defectCard(d, { sel = false, photo = false, cam = true } = {}) {
   return `<article class="dcard ${phState(d)} ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
     ${photo ? phBlock(d) : ""}
-    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${pill(d.status)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기(복사해서 등록 등)" title="복사해서 등록 · 수정 …">⋯</button></div>
+    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${d.waitReport && d.status === "조치완료" ? `<span class="pill s3 wait">확인 대기</span>` : pill(d.status)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기(복사해서 등록 등)" title="복사해서 등록 · 수정 …">⋯</button></div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
@@ -676,7 +678,7 @@ function renderSimpleHome() {
   const unsent = list.filter((d) => d.status === "접수" || d.status === "재접수").length;
   const waitAfter = list.filter((d) => M.photoMissing(d, "noafter") && M.isOpen(d)).length;
   view().innerHTML = `<div class="home2 simple-home" id="simple-home">
-    ${homeSyncHtml()}
+    ${homeSyncHtml()}${vendorHomeHtml()}
     ${rid !== "manager" ? roleBanner(rid) : ""}
     <p class="sm-sum">미조치 <b>${n(open.length)}</b>건 · 오늘 등록 ${n(todayN)}건 · 전체 ${n(list.length)}건</p>
     ${hp("new") ? `<button type="button" class="btn btn-primary btn-xl" id="sm-new" data-go="#/new">＋ 하자 등록</button>` : ""}
@@ -711,7 +713,7 @@ ROUTES.home = async () => {
   { const sl = list.filter((d) => !M.locParts(d).dong); if (sl.length || sitePlaces().length) hpChips.push({ name: "단지 공용", o: sl.filter(M.isOpen).length, a: sl.length, site: true }); }
   const hpSc = relScale(hpChips.map((c) => c.o)); for (const c of hpChips) c.cls = hpSc.cls(c.o);
   view().innerHTML = `<div class="home2${rid !== "manager" ? " role-" + rid : ""}">
-    ${homeSyncHtml()}
+    ${homeSyncHtml()}${vendorHomeHtml()}
     ${rid !== "manager" ? roleBanner(rid) : ""}
     ${hp("search") ? `<form class="search" id="qsearch" role="search"><input class="inp" id="qs" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="빠른 검색"><button class="btn btn-primary" type="submit">검색</button></form>` : ""}
     ${hp("stat") ? `<section class="card home-stat">
@@ -3618,7 +3620,7 @@ ROUTES.photos = async () => {
   const list = PD(); const today = M.todayStr(); const ids = new Set(list.map((d) => d.id));
   const noB = list.filter((d) => M.photoMissing(d, "none")); const noA = list.filter((d) => M.photoMissing(d, "noafter"));
   const mine = (await db.getAll("photos")).filter((x) => ids.has(x.defectId)).sort((a, b) => (a.at < b.at ? 1 : -1));
-  const nBef = mine.filter((x) => x.kind !== "after").length, nAft = mine.length - nBef; const nToday = mine.filter((x) => (x.at || "").slice(0, 10) === today).length;
+  const nBef = mine.filter((x) => x.kind !== "after").length, nAft = mine.length - nBef; const nToday = mine.filter((x) => x.at && M.todayStr(new Date(x.at)) === today).length; /* 1.5.0: 기기 현지 날짜 기준(자정~오전 9시 한국시간에 UTC 날짜로 틀리던 것) */
   if (S._phUrls) { S._phUrls.forEach((u) => URL.revokeObjectURL(u)); } S._phUrls = [];
   const rec = mine.slice(0, 12).map((x) => { const u = URL.createObjectURL(x.thumb || x.blob); S._phUrls.push(u); return { x, u }; });
   view().innerHTML = `<div class="photos-home">
@@ -4710,6 +4712,7 @@ async function initUpdates() {
 const UNSAFE_ROUTES = ["new", "edit", "wizard", "import", "imported", "lists", "dong", "project"];
 let _remoteT = 0, _remoteToast = 0;
 function onRemoteChange() {
+  if (VT.managerOn()) { VT.schedulePublish(); VT.reingest(); }
   clearTimeout(_remoteT);
   _remoteT = setTimeout(async () => {
     await loadAll();
@@ -4740,7 +4743,7 @@ function paintSyncChip(stt = Sync.status()) {
 }
 const ROLE_KO = { owner: "소유자", editor: "편집", viewer: "보기 전용" };
 function initSync() {
-  Sync.onChange((stt) => paintSyncChip(stt));
+  Sync.onChange((stt) => { paintSyncChip(stt); if (VT.managerOn()) VT.startManager(vendorHooks); else VT.stopManager(); });
   $("#sync-chip")?.addEventListener("click", () => go("#/sync"));
   paintSyncChip();
   // 보기 전용 멤버가 고치려 하면 안내
@@ -4749,6 +4752,8 @@ function initSync() {
 }
 /** 초대 링크(?join=CODE)로 열렸을 때: 코드 기억 → 동기화·팀 화면에서 참여 */
 function takeJoinParam() {
+  const u0 = new URL(location.href); const vc = u0.searchParams.get("vjoin");
+  if (vc) { VT.setPendingVJoin(VT.normVCode(vc)); u0.searchParams.delete("vjoin"); history.replaceState(null, "", u0.pathname + u0.search + "#/vjoin"); return true; }
   const u = new URL(location.href); const code = u.searchParams.get("join");
   if (!code) return false;
   LS.set("pendingJoin", Sync.normCode(code)); u.searchParams.delete("join");
@@ -4806,6 +4811,13 @@ ROUTES.sync = async () => {
       <div class="btn-col">${Sync.isOwner() ? '<button type="button" class="btn" data-a="rename">팀 현장 이름 바꾸기</button>' : ""}
         <button type="button" class="btn" data-a="to-local">이 기기 전용 데이터로 전환</button>
         ${!Sync.isOwner() && wd ? '<button type="button" class="btn btn-danger" data-a="leave">이 팀 현장 나가기</button>' : ""}</div>`) : ""}
+    ${on && ["owner", "editor"].includes(ws.role) ? card(`<h3>🛠 협력업체 초대 <small>업체 역할</small></h3>
+      <p class="help">업체 한 곳을 이 현장(<b>${esc(P()?.name || "")}</b>)에 묶어 초대해요. 업체는 <b>자기 업체 하자만</b> 보고 ‘조치 완료’(사진·메모)만 올릴 수 있어요. 현장 설정·동·도면·업체 목록·하자 내용은 못 고쳐요. 링크는 <b>1회용</b>이고 기한이 지나면 못 써요.</p>
+      <div class="grid2"><label class="fld"><span>업체</span><select class="inp" id="vi-vendor">${S.vendors.filter((v) => !v.projectId || v.projectId === S.pid).map((v) => `<option value="${esc(v.id)}">${esc(v.name)}</option>`).join("")}</select></label>
+        <label class="fld"><span>기한</span><select class="inp" id="vi-days">${VT.INVITE_DAYS.map((d) => `<option value="${d}" ${d === 7 ? "selected" : ""}>${d}일</option>`).join("")}</select></label></div>
+      <button type="button" class="btn btn-primary" data-a="vi-new" id="vi-new">업체 초대 링크 만들기</button>
+      <div id="vi-made"></div>
+      <h4 class="sec">업체 초대·참여 <small>팀 인원(${Sync.FREE_MEMBERS}명)에 세지 않음 · 업체당 계정 1개</small></h4><div class="mlist" id="vi-list"><p class="help">불러오는 중…</p></div>`) : ""}
     ${user ? card(`<h3>현장 전환</h3><div class="opt-list">
       ${on ? "" : `<div class="opt cur"><span class="opt-ico">📱</span><span><b>이 기기 전용 (지금)</b><small>로그인 없이 쓰던 데이터</small></span></div>`}
       ${list.map((w) => `<button type="button" class="opt" data-open="${esc(w.id)}"><span class="opt-ico">🏗</span><span><b>${esc(w.name)}</b><small>${ROLE_KO[w.role] || ""} · 멤버 ${w.members}명</small></span></button>`).join("")}
@@ -4819,6 +4831,7 @@ ROUTES.sync = async () => {
       <li>같은 건을 두 사람이 동시에 고치면 나중에 고친 쪽으로 맞춰져요. 상세 화면에 누가 언제 고쳤는지 나와요.</li>
       <li>무료 버전: 팀 현장 ${Pro.FREE_LIMITS.workspaces}개 · 현장당 팀원 ${Sync.FREE_MEMBERS}명까지(소유자 포함). ${Sync.FREE_MEMBERS + 1}명 이상은 유료 버전(준비 중 · 문의).</li></ul>`)}`;
   renderSyncStatus($("#sync-status"));
+  if (on && ["owner", "editor"].includes(ws.role)) paintVendorInvites();
   if (navigator.onLine !== false) Sync.preload();
   const wsCount = async () => { try { return (await Sync.myWorkspaces()).length; } catch { return list.length; } };
   const doJoin = async (code) => {
@@ -4850,6 +4863,11 @@ ROUTES.sync = async () => {
         if (!(await ask(`‘${name || "팀 현장"}’ 팀 현장을 만들고 지금 데이터(현장 ${c.projects}개 · 하자 ${c.defects}건 · 사진 ${c.photos}장 · 업체 ${c.vendors}곳)를 올릴까요?\n이 기기 전용 데이터는 그대로 남아요(복사).`, { ok: "만들기" }))) return;
         busy(true, "팀 현장 만드는 중…"); await Sync.createWorkspace(name.trim() || "팀 현장", { workspaceCount: n0, isPro: Pro.isPro() });
       }
+      if (a === "vi-new") {
+        const vid = $("#vi-vendor")?.value; const v = S.vendors.find((x) => x.id === vid); if (!v) return toast("먼저 업체를 등록해 주세요");
+        b.disabled = true; const r = await VT.createInvite({ vendorId: v.id, vendorName: v.name, projectId: S.pid, projectName: P()?.name || "", days: Number($("#vi-days").value) || 7 }); b.disabled = false;
+        showVendorInvite(r, v.name); await paintVendorInvites(); return;
+      }
       if (a === "inv-copy") { (await copyText(Sync.inviteLink(Sync.state.wsDoc.inviteCode))) ? toast("초대 링크를 복사했어요") : toast("복사 실패"); }
       if (a === "inv-kakao") {
         const text = `[하자싹] ‘${ws.name}’ 팀 현장에 초대합니다.\n아래 링크를 열고 구글로 로그인하면 참여돼요.\n${Sync.inviteLink(Sync.state.wsDoc.inviteCode)}\n(초대코드 ${Sync.state.wsDoc.inviteCode})`;
@@ -4878,6 +4896,163 @@ ROUTES.sync = async () => {
     try { await Sync.removeMember(b.dataset.kick); toast("내보냈어요"); } catch (e) { toast(e.message); }
   }));
 };
+
+/* ---------- 1.5.0 협력업체(vendor): 초대·조치 보고·확인 대기·승인/재작업 ---------- */
+const vendorHooks = {
+  defects: () => S.defects, locText: (d) => M.locText(d), tradeText: (d) => M.tradeText(d),
+  beforeMap: async (bd) => { const m = new Map(); for (const d of S.defects) if (d.projectId === bd.projectId && d.vendorId === bd.vendorId && d.status !== "확인완료") m.set(d.id, (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").sort((a, b) => (a.at < b.at ? -1 : 1)).map((x) => x.id)); return m; },
+  photoBlob: async (pid) => { const ph = await db.get("photos", pid); return ph ? ph.thumb || ph.blob : null; },
+  ingest: async (r) => {
+    const d = S.defects.find((x) => x.id === r.defectId); if (!d) return false; if (d.vendorId !== r.vendorId || d.projectId !== r.projectId) return true;
+    if (d.waitReport === r.id) return true;
+    if (d.status !== "조치완료") setStatus(d, "조치완료", `업체 조치 보고(확인 대기)${r.memo ? ": " + String(r.memo).slice(0, 60) : ""}`);
+    d.waitReport = r.id; await saveDefect(d, { local: false }); return true;
+  },
+  onChange: () => { const h = (location.hash || "").split("?")[0]; if (["#/home", "#/confirm", ""].includes(h) && !document.body.classList.contains("sheet-open")) rerender(); },
+};
+function vendorHomeHtml() {
+  const ses = VT.vendorSession();
+  const vb = ses ? `<button type="button" class="sync-line vend-line" id="home-vwork" data-go="#/vwork"><span>🛠 협력업체로 참여: <b>${esc(ses.wsName)}</b> · ${esc(ses.vendorName)}</span><span class="chev">›</span></button>` : "";
+  if (!VT.managerOn()) return vb;
+  const n0 = VT.pendingCount();
+  return vb + (n0 ? `<button type="button" class="card cw-card" id="home-confirm" data-go="#/confirm"><span class="cw-ico" aria-hidden="true">✅</span><span class="cw-t"><b>확인 대기 <em id="cw-n">${n(n0)}</em>건</b><small>업체가 조치 완료를 올렸어요 · 전·후 사진 보고 승인·재작업</small></span><span class="chev">›</span></button>` : "");
+}
+function showVendorInvite(r, vname) {
+  const el = $("#vi-made"); if (!el) return;
+  el.innerHTML = `<div class="invite vi-made"><span>${esc(vname)} 초대코드</span><b class="code" id="vi-code">${esc(r.code)}</b><small>기한 ${esc(new Date(r.exp).toLocaleDateString("ko-KR"))}까지 · 1회용</small></div>
+    <div class="btn-row"><button type="button" class="btn btn-kakao" id="vi-kakao">카톡으로 보내기</button><button type="button" class="btn" id="vi-copy">링크 복사</button></div>`;
+  const text = `[하자싹] ‘${Sync.state.ws?.name || ""}’ 현장 협력업체(${vname}) 초대입니다.\n링크를 열고 구글로 로그인하면 우리 업체 하자만 보고 조치 완료 사진을 올릴 수 있어요.\n${r.link}\n(업체 초대코드 ${r.code} · 1회용)`;
+  $("#vi-copy").addEventListener("click", async () => toast((await copyText(r.link)) ? "업체 초대 링크를 복사했어요" : "복사 실패"));
+  $("#vi-kakao").addEventListener("click", async () => { const k = await shareKakao({ text }); if (k === "kakao-pc" || k === "copied") toast("초대 내용 복사됨 — 카카오톡에 붙여넣기", { ms: 5000 }); });
+}
+async function paintVendorInvites() {
+  const el = $("#vi-list"); if (!el) return;
+  let invs = [], mems = [];
+  try { [invs, mems] = await Promise.all([VT.listInvites(), VT.listVendorMembers()]); } catch (e) { el.innerHTML = `<p class="help">불러오지 못했어요: ${esc(e.message || e)}</p>`; return; }
+  if (!el.isConnected) return;
+  const mm = new Map(mems.map((m) => [m.code, m]));
+  el.innerHTML = invs.length ? invs.map((iv) => { const st = VT.inviteState(iv); const m = mm.get(iv.code);
+    return `<div class="mrow vi-row" data-code="${esc(iv.code)}"><span class="mname"><b>${esc(iv.vendorName || "업체")}</b><small>${esc(iv.projectName || "")} · ${VT.INVITE_KO[st]}${m ? ` · ${esc(m.name || m.email || "")}` : ""} · ${esc(iv.code)}</small></span>
+      ${st !== "revoked" ? `<button type="button" class="btn btn-sm" data-vi-reissue="${esc(iv.code)}">재발급</button><button type="button" class="btn btn-sm btn-danger" data-vi-revoke="${esc(iv.code)}">해제</button>` : ""}</div>`; }).join("") : `<p class="help">아직 초대한 업체가 없어요.</p>`;
+  $$("[data-vi-revoke]", el).forEach((b) => b.addEventListener("click", async () => {
+    if (!(await ask("이 업체 초대를 해제할까요?\n그 링크로 들어온 업체 계정도 더 이상 하자를 보거나 올릴 수 없어요.", { ok: "해제", danger: true }))) return;
+    try { await VT.revokeInvite(b.dataset.viRevoke); toast("해제했어요"); paintVendorInvites(); } catch (e) { toast(e.message || String(e)); }
+  }));
+  $$("[data-vi-reissue]", el).forEach((b) => b.addEventListener("click", async () => {
+    if (!(await ask("예전 링크를 해제하고 같은 업체로 새 링크를 만들까요?", { ok: "재발급" }))) return;
+    try { const r = await VT.reissueInvite(b.dataset.viReissue, Number($("#vi-days")?.value) || 7); const iv = invs.find((x) => x.code === b.dataset.viReissue); showVendorInvite(r, iv?.vendorName || "업체"); paintVendorInvites(); } catch (e) { toast(e.message || String(e)); }
+  }));
+}
+/* 관리자: 확인 대기 목록 · 전·후 비교 · 승인/재작업 */
+ROUTES.confirm = async () => {
+  setTab("home"); setHeader("확인 대기", { backBtn: true });
+  const list = VT.pendingReports(); const canDecide = VT.managerOn() && !isViewerNow();
+  if (!Sync.attached()) { view().innerHTML = `<div class="card empty-card"><p>팀 현장에서만 쓰는 화면이에요.</p></div>`; return; }
+  const urls = []; ROUTES._cleanup = () => urls.forEach((u) => URL.revokeObjectURL(u));
+  const vname = (id) => S.vendors.find((v) => v.id === id)?.name || "업체";
+  const at = (t) => { const m = t?.toMillis ? t.toMillis() : 0; return m ? fmtDT(new Date(m).toISOString()) : ""; };
+  view().innerHTML = `<div class="cw-list" id="cw-list">${list.length ? "" : `<div class="card empty-card"><p>확인 대기 중인 건이 없어요.</p></div>`}</div>`;
+  for (const r of list) {
+    const d = S.defects.find((x) => x.id === r.defectId);
+    const before = d ? (await db.byIndex("photos", "by_defect", d.id)).filter((x) => x.kind !== "after").sort((a, b) => (a.at < b.at ? -1 : 1)).slice(0, 3) : [];
+    const bu = before.map((ph) => { const u = URL.createObjectURL(ph.thumb || ph.blob); urls.push(u); return u; });
+    const au = VT.reportPhotoBlobs(r).map((b) => { const u = URL.createObjectURL(b); urls.push(u); return u; });
+    const card = document.createElement("section"); card.className = "card cw-item"; card.dataset.rid = r.id;
+    card.innerHTML = `<div class="cw-h"><b>${esc(d ? M.locText(d) || "위치 미지정" : "하자를 찾지 못함")}</b><span class="pill s3 wait">확인 대기</span></div>
+      <p class="cw-m">${d ? `${esc(M.tradeText(d))} · ${esc(d.content || "")}` : `<span class="wz-warn">이 기기에 없는 하자예요(${esc(r.defectId)})</span>`}</p>
+      ${d && d.vendorId !== r.vendorId ? `<p class="help wz-warn">⚠ 이 하자의 담당 업체가 아닌 곳에서 올렸어요</p>` : ""}
+      <div class="cw-cmp"><figure><figcaption>조치 전</figcaption>${bu.length ? bu.map((u) => `<img src="${u}" alt="조치 전">`).join("") : `<div class="ph-empty"><span>사진 없음</span></div>`}</figure>
+        <figure><figcaption>조치 후 <small>(업체)</small></figcaption>${au.map((u) => `<img src="${u}" alt="조치 후">`).join("") || `<div class="ph-empty"><span>사진 없음</span></div>`}</figure></div>
+      <p class="cw-memo"><b>${esc(vname(r.vendorId))}</b> ${esc(r.byName || "")} · ${esc(at(r.at))}${r.memo ? `<br>“${esc(r.memo)}”` : ""}</p>
+      ${canDecide ? `<div class="btn-row cw-act"><button type="button" class="btn" data-rw="${esc(r.id)}">↩ 재작업</button><button type="button" class="btn btn-primary" data-ok="${esc(r.id)}">✓ 승인</button></div>` : `<p class="help">승인·재작업은 소유자·편집 멤버만 할 수 있어요.</p>`}`;
+    $("#cw-list").appendChild(card);
+  }
+  const act = async (rid, action) => {
+    const r = list.find((x) => x.id === rid); if (!r) return; const d = S.defects.find((x) => x.id === r.defectId);
+    let reason = "";
+    if (action === "rework") { reason = await prompt2("재작업 사유 (필수)", "", { ok: "재작업 보내기", placeholder: "예: 모서리 들뜸 남음" }); if (reason === null) return; reason = reason.trim(); if (!reason) return toast("재작업 사유를 적어 주세요"); }
+    busy(true, "처리 중…");
+    try {
+      await VT.decide(r, action, reason);
+      if (d) {
+        if (action === "approve") {
+          for (const blob of VT.reportPhotoBlobs(r)) { let w = 0, h = 0; try { const bm = await createImageBitmap(blob); w = bm.width; h = bm.height; bm.close?.(); } catch {} await db.put("photos", { id: M.uid("ph"), defectId: d.id, kind: "after", blob, thumb: blob, w, h, at: new Date().toISOString(), stamp: "0", by: r.byName || "업체" }); const m = S.pidx.get(d.id) || { before: 0, after: 0 }; m.after++; S.pidx.set(d.id, m); }
+          setStatus(d, "확인완료", `업체 조치 승인${r.byName ? " (" + r.byName + ")" : ""}${r.memo ? " · " + String(r.memo).slice(0, 60) : ""}`); d.reworkReason = "";
+        } else { setStatus(d, "재접수", `재작업: ${reason}`); d.reworkReason = reason; }
+        delete d.waitReport; await saveDefect(d);
+      }
+      busy(false); toast(action === "approve" ? "승인했어요 · 확인완료" : "재작업으로 돌려보냈어요"); VT.schedulePublish(200); rerender();
+    } catch (e) { busy(false); toast(e.message || String(e), { ms: 4000 }); }
+  };
+  $$("[data-ok]", view()).forEach((b) => b.addEventListener("click", () => act(b.dataset.ok, "approve")));
+  $$("[data-rw]", view()).forEach((b) => b.addEventListener("click", () => act(b.dataset.rw, "rework")));
+};
+/* 업체: 초대 받기 */
+ROUTES.vjoin = async () => {
+  setTab(""); setHeader("협력업체 초대", { backBtn: false });
+  const code = VT.pendingVJoin(); let st; try { st = await Sync.fbReady(); } catch (e) { view().innerHTML = `<div class="card"><p>인터넷 연결을 확인해 주세요.</p></div>`; return; }
+  if (!code) { if (VT.vendorSession()) return replace("#/vwork"); view().innerHTML = `<div class="card"><p>업체 초대 링크가 없어요. 관리자에게 링크를 받아 주세요.</p><label class="fld"><span>업체 초대코드(10자리)</span><input class="inp" id="vj-code"></label><button type="button" class="btn btn-primary" id="vj-set">확인</button></div>`; $("#vj-set").addEventListener("click", () => { VT.setPendingVJoin(VT.normVCode($("#vj-code").value)); rerender(); }); return; }
+  let inv = null, err = "";
+  if (st.user) { try { inv = await VT.lookupVendorCode(code); } catch (e) { err = e.message || String(e); } }
+  const s = inv ? VT.inviteState(inv) : "";
+  view().innerHTML = `<section class="card vj-card"><h3>🛠 협력업체로 초대받았어요</h3>
+    ${inv ? `<p><b>${esc(inv.wsName || "팀 현장")}</b> · ${esc(inv.projectName || "")}<br>업체: <b>${esc(inv.vendorName || "")}</b></p><p class="help">참여하면 <b>우리 업체 하자만</b> 보고, 조치 후 사진·메모를 올릴 수 있어요. 관리자가 확인하면 완료돼요. 현장 설정이나 하자 내용은 바꿀 수 없어요.</p>
+      ${s === "active" || (s === "used" && inv.usedBy === st.uid) ? `<button type="button" class="btn btn-primary btn-lg btn-block" id="vj-join">참여하기</button>` : `<p class="help wz-warn">⚠ ${s === "revoked" ? "해제된 초대예요" : s === "expired" ? "기한이 지난 초대예요" : "이미 사용된 초대예요(1회용)"} — 관리자에게 새 링크를 받아 주세요.</p>`}`
+      : st.user ? `<p class="help wz-warn">⚠ ${esc(err)}</p>` : `<p>초대코드 <b class="code">${esc(code)}</b></p><p class="help">구글 계정으로 로그인하면 참여할 수 있어요.</p><button type="button" class="btn btn-primary btn-lg gbtn" id="vj-login"><span class="g-logo" aria-hidden="true">G</span> Google 계정으로 로그인</button>`}
+    <button type="button" class="btn btn-ghost btn-block" id="vj-cancel">초대 무시</button></section>`;
+  if (!st.user) { const off = Sync.onChange(() => { if (Sync.signedIn() && (location.hash || "").startsWith("#/vjoin")) { off(); rerender(); } else if (!(location.hash || "").startsWith("#/vjoin")) off(); }); }
+  $("#vj-login")?.addEventListener("click", async () => { try { const r = await Sync.signIn(); if (r !== "redirect") rerender(); } catch (e) { toast(e.message || String(e)); } });
+  $("#vj-cancel")?.addEventListener("click", () => { VT.setPendingVJoin(""); replace("#/home"); });
+  $("#vj-join")?.addEventListener("click", async () => { busy(true, "참여하는 중…"); try { await VT.joinVendor(code); busy(false); toast("참여했어요"); replace("#/vwork"); } catch (e) { busy(false); toast(e.message || String(e), { ms: 5000 }); } });
+};
+/* 업체: 우리 업체 하자 · 조치 완료 올리기 · 재작업 사유 */
+ROUTES.vwork = async () => {
+  const ses = VT.vendorSession(); if (!ses) return replace("#/vjoin");
+  setTab(""); setHeader(`협력업체 · ${ses.vendorName}`, { backBtn: navDepth() > 1 });
+  const vs = VT.vendorState();
+  if (!vs.unsubs.length && !vs.err) { await VT.startVendor(() => { if ((location.hash || "").startsWith("#/vwork") && !document.body.classList.contains("sheet-open")) rerender(); }); }
+  const urls = []; ROUTES._cleanup = () => urls.forEach((u) => URL.revokeObjectURL(u));
+  if (vs.err === "revoked") { view().innerHTML = `<div class="card"><p>관리자가 이 업체 참여를 해제했어요. 다시 참여하려면 새 링크를 받아 주세요.</p><button type="button" class="btn" id="vw-leave">이 현장 목록에서 지우기</button></div>`; $("#vw-leave").addEventListener("click", async () => { await VT.leaveVendor(); replace("#/home"); }); return; }
+  if (vs.err === "login") { view().innerHTML = `<div class="card"><p>다시 로그인해 주세요.</p><button type="button" class="btn btn-primary" id="vw-login">Google 로그인</button></div>`; $("#vw-login").addEventListener("click", async () => { await Sync.signIn(); VT.stopVendor(); VT.vendorState().err = ""; rerender(); }); return; }
+  const rows = VT.vendorView(vs.items, vs.reports); const order = { rework: 0, todo: 1, wait: 2, done: 3 };
+  rows.sort((a, b) => order[a.st] - order[b.st]);
+  const cnt = (k) => rows.filter((r) => r.st === k).length;
+  view().innerHTML = `<div class="vw">
+    <section class="card vw-head"><b>${esc(ses.wsName)}</b> · ${esc(ses.projectName)}<div class="kpis"><span class="kpi"><b>${cnt("rework")}</b><span>재작업</span></span><span class="kpi"><b>${cnt("todo")}</b><span>조치 필요</span></span><span class="kpi ok"><b>${cnt("wait")}</b><span>확인 대기</span></span></div></section>
+    ${!vs.ready ? `<p class="help">불러오는 중…</p>` : rows.length ? rows.map((it) => `<article class="card vw-item st-${it.st}" data-vid="${esc(it.id)}">
+      <div class="cw-h"><b>${esc(it.loc || "위치 미지정")}</b><span class="pill ${it.st === "rework" ? "s5" : it.st === "wait" ? "s3 wait" : it.st === "done" ? "s4" : "s1"}">${VT.VSTATE_KO[it.st]}</span></div>
+      <p class="cw-m">${esc([it.trade, it.type].filter(Boolean).join(" · "))} ${esc(it.content)}${it.due ? ` · 기한 ${esc(it.due)}` : ""}</p>
+      ${it.st === "rework" && it.reason ? `<p class="vw-reason">↩ 재작업 사유: <b>${esc(it.reason)}</b></p>` : ""}
+      ${it.ph?.length ? `<div class="vw-ph">${it.ph.map((pid) => `<img class="vw-b" data-pid="${esc(pid)}" alt="조치 전">`).join("")}</div>` : ""}
+      ${it.st === "todo" || it.st === "rework" ? `<button type="button" class="btn btn-primary btn-block" data-vdone="${esc(it.id)}">✓ 조치 완료 올리기</button>` : it.st === "wait" ? `<p class="help">관리자 확인을 기다리고 있어요.</p>` : ""}
+    </article>`).join("") : `<div class="card empty-card"><p>우리 업체로 지정된 하자가 없어요.</p></div>`}
+    <button type="button" class="btn btn-ghost btn-block" id="vw-out">이 현장 참여 그만하기</button></div>`;
+  for (const im of $$(".vw-b", view())) VT.beforePhoto(im.dataset.pid).then((b) => { if (b && im.isConnected) { const u = URL.createObjectURL(b); urls.push(u); im.src = u; } }).catch(() => {});
+  $("#vw-out").addEventListener("click", async () => { if (!(await ask("이 현장 참여를 그만할까요? 다시 하려면 새 링크가 필요해요.", { ok: "그만하기", danger: true }))) return; await VT.leaveVendor(); replace("#/home"); });
+  $$("[data-vdone]", view()).forEach((b) => b.addEventListener("click", () => vendorDoneSheet(rows.find((r) => r.id === b.dataset.vdone))));
+};
+function vendorDoneSheet(it) {
+  if (!it) return; const shots = []; const urls = [];
+  const s = openSheet({ title: "조치 완료 올리기", html: `<p class="help"><b>${esc(it.loc)}</b> · ${esc(it.trade)} ${esc(it.content)}</p>${it.reason ? `<p class="vw-reason">↩ 재작업 사유: <b>${esc(it.reason)}</b></p>` : ""}
+      <div class="vd-ph" id="vd-ph"></div><button type="button" class="btn btn-block" id="vd-add">📷 조치 후 사진 (최대 ${VT.MAX_REPORT_PHOTOS}장)</button>
+      <label class="fld"><span>메모 <small>(선택)</small></span><textarea class="inp" id="vd-memo" rows="3" maxlength="1000" placeholder="예: 도배지 재시공, 모서리 마감"></textarea></label>`,
+    footer: `<button type="button" class="btn" data-a="no">취소</button><button type="button" class="btn btn-primary" id="vd-send" data-a="yes">올리기</button>` });
+  s.onClose = () => urls.forEach((u) => URL.revokeObjectURL(u));
+  const paint = () => { $("#vd-ph", s.el).innerHTML = shots.map((x, i) => `<span class="vd-th"><img src="${x.u}" alt="조치 후 ${i + 1}"><b data-del="${i}">✕</b></span>`).join(""); };
+  $("#vd-ph", s.el).addEventListener("click", (e) => { const d = e.target.closest("[data-del]"); if (d) { shots.splice(+d.dataset.del, 1); paint(); } });
+  $("#vd-add", s.el).addEventListener("click", async () => {
+    const files = await pickFile("image/*", { capture: isMobileDevice(), multiple: true });
+    for (const f of files.slice(0, VT.MAX_REPORT_PHOTOS - shots.length)) { try { const c = await compressImage(f, { max: 1280, quality: 0.72, thumbMax: 160 }); const u = URL.createObjectURL(c.blob); urls.push(u); shots.push({ blob: c.blob, u }); } catch (e) { toast(e.message || "사진 처리 실패"); } }
+    paint();
+  });
+  $$("[data-a]", s.el).forEach((b) => b.addEventListener("click", async () => {
+    if (b.dataset.a !== "yes") return s.close();
+    if (!shots.length) return toast("조치 후 사진을 한 장 이상 올려 주세요");
+    busy(true, "올리는 중…");
+    try { await VT.submitReport(it.id, shots.map((x) => x.blob), $("#vd-memo", s.el).value.trim()); busy(false); toast("올렸어요 · 관리자 확인을 기다려요", { ms: 3500 }); s.close(); }
+    catch (e) { busy(false); toast(e.code === "permission-denied" ? "올릴 수 없어요(참여가 해제됐을 수 있어요)" : e.message || String(e), { ms: 4500 }); }
+  }));
+}
 async function main() {
   $("#btn-back").addEventListener("click", () => back());
   $$(".tab-item").forEach((a) => a.addEventListener("click", (e) => {
@@ -4894,6 +5069,6 @@ async function main() {
   initSync();
   setTimeout(() => autoMergeTrades().catch((e) => console.warn(e)), 1500);
   setTimeout(() => autoMergeTypes().catch((e) => console.warn(e)), 2600);
-  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync, EZ, isSimple, removePhoto, thumbUrl, makeThumb, compressImage, PHOTO_MAX, THUMB_MAX, selMore, listMore: (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); } }; // 테스트·디버그용
+  window.__hs = { S, M, db, Pro, go, replace, UPD, APP_VERSION, Sync, EZ, VT, isSimple, removePhoto, thumbUrl, makeThumb, compressImage, PHOTO_MAX, THUMB_MAX, selMore, listMore: (o) => { const m = $("#list-menu"); if (!m) return; const on = o === undefined ? m.hidden : !!o; m.hidden = !on; $("#btn-listmore")?.setAttribute("aria-expanded", String(on)); } }; // 테스트·디버그용
 }
 main();

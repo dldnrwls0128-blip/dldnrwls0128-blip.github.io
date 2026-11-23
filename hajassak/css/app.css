@@ -861,3 +861,18 @@ body[data-simple="1"] #ltabs,body[data-simple="1"] #ltab-cfg,body[data-simple="1
 .pd-pages{margin:8px 0;color:var(--sub);font-size:13px}
 .pd-pages li.off{opacity:.65}
 .pd-use{display:inline-flex;align-items:center;gap:4px;margin-left:8px}
+/* 1.5.0 협력업체·확인 대기 */
+.pill.wait{background:#f59e0b;color:#1f1300}
+.cw-card{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:2px solid #f59e0b;background:#fff8eb;cursor:pointer;font:inherit;color:inherit}
+.cw-card .cw-ico{font-size:1.6rem}.cw-card .cw-t{flex:1;display:flex;flex-direction:column}.cw-card .cw-t b{font-size:1.1rem}.cw-card em{font-style:normal;color:#b45309;font-size:1.3rem}.cw-card small{color:var(--muted,#666)}
+.cw-h{display:flex;justify-content:space-between;align-items:center;gap:8px}.cw-m{margin:6px 0;color:var(--muted,#555)}
+.cw-cmp{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}.cw-cmp figure{margin:0;display:flex;flex-direction:column;gap:4px}
+.cw-cmp figcaption{font-weight:700;font-size:.85rem}.cw-cmp img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;background:#eee}
+.cw-memo{font-size:.9rem;margin:6px 0}.cw-act{justify-content:flex-end}
+.vend-line{border-color:#0ea5e9}
+.vw-head .kpis{display:flex;gap:8px;margin-top:8px}.vw-head .kpi{flex:1;display:flex;flex-direction:column;align-items:center;padding:6px;border-radius:8px;background:var(--bg2,#f3f4f6)}
+.vw-item.st-rework{border-left:4px solid var(--s5,#dc2626)}.vw-item.st-wait{opacity:.85}.vw-item.st-done{opacity:.6}
+.vw-reason{background:#fef2f2;color:#991b1b;padding:6px 8px;border-radius:8px;margin:6px 0}
+.vw-ph{display:flex;gap:6px;margin:6px 0 8px}.vw-ph img{width:31%;aspect-ratio:4/3;object-fit:cover;border-radius:6px;background:#eee}
+.vd-ph{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.vd-th{position:relative}.vd-th img{width:96px;height:72px;object-fit:cover;border-radius:6px}.vd-th b{position:absolute;top:2px;right:2px;background:#0009;color:#fff;border-radius:50%;width:22px;height:22px;display:grid;place-items:center;cursor:pointer;font-size:12px}
+.vi-made{margin-top:10px}.vi-row small{display:block}

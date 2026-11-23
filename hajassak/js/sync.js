@@ -597,3 +597,12 @@ export async function syncNow() {
   if (st.phase === "error") st.phase = "loading";
   st.err = ""; stopListeners(); watchWorkspace(); startListeners(); await push();
 }
+
+/** 1.5.0 협력업체 기능용: Firebase 준비(로그인 상태 감시 포함) 후 {F, fs, uid, user} — 팀 현장 동기화와는 별개로 씀 */
+export async function fbReady() {
+  await ensureApp(); if (!_started) await startAuth();
+  try { await st.auth.authStateReady?.(); } catch {}
+  for (let i = 0; i < 40 && (st.auth.currentUser?.uid || null) !== (st.user?.uid || null); i++) await new Promise((r) => setTimeout(r, 50));
+  return st;
+}
+export const CODE_CHARS = CODE_ABC;
