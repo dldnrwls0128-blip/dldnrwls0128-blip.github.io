@@ -8,6 +8,7 @@ import * as Pro from "./pro.js";
 import { speechSupported, startDictation } from "./speech.js";
 import * as Sync from "./sync.js";
 import * as RL from "./roles.js";
+import * as SITE from "./sitetypes.js";
 
 export const APP_VERSION = self.HAJASSAK_VERSION || "0.0.0"; // 유일 출처: /version.js (sw.js 캐시 이름도 같은 값)
 export const APP_NAME = "하자싹";
@@ -692,7 +693,7 @@ ROUTES.home = async () => {
   $("[data-a=switch]", view())?.addEventListener("click", switchProject);
   $("#qsearch")?.addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#qs").value); });
 };
-function exampleQuery(p) { const d = p.dongs[0]; if (!d) return "1203"; const f = Math.min(12, d.floors || 1); return `${d.alias ? d.alias + "동" : d.name} ${f * 100 + 3}`; }
+function exampleQuery(p) { const d = p.dongs[0]; if (!d) return "1203"; if (!d.lines && !(d.units || []).length) return d.name; const f = Math.min(12, d.floors || 1); return `${d.alias ? d.alias + "동" : d.name} ${f * 100 + 3}`; }
 function quickSearch(text) {
   const r = M.parseQuery(P(), text);
   if (r.dong && r.ho) return go(`#/unit?dong=${encodeURIComponent(r.dong)}&ho=${r.ho}`);
@@ -4017,51 +4018,167 @@ ROUTES.lists = async (qq) => {
 };
 
 /* ---------- 새 현장 마법사 (단계마다 history 항목 → 뒤로가기로 이전 단계) ---------- */
+/* ---------- 1.4.1 현장 만들기 마법사 (유형 → 건물·층·호 → 공용·실 → 공종 → 업체) ---------- */
+const WZ_STEPS = ["유형", "건물·층·호", "공용·실", "공종", "업체"];
+const wzProg = (step) => `<ol class="wz-prog" aria-label="진행 단계">${WZ_STEPS.map((t, i) => `<li class="${i + 1 === step ? "on" : i + 1 < step ? "done" : ""}"><b>${i + 1}</b><span>${t}</span></li>`).join("")}</ol>`;
+const wzSfxOpts = ["동", "관", ""];
+function wzTemplateChoose() {
+  return choose("양식 받기", [
+    { label: "엑셀 양식 (동·호 + 업체, 시트 2장)", sub: "예시 값이 들어 있어요 · 지우고 쓰세요", value: "xlsx", icon: "📊" },
+    { label: "CSV · 동·호 양식", value: "csv-dong", icon: "📄" }, { label: "CSV · 업체 양식", value: "csv-ven", icon: "📄" }]).then(async (k) => {
+    if (!k) return; let b, fn;
+    if (k === "xlsx") { b = await SITE.templateXlsx(); fn = "하자싹_현장양식.xlsx"; } else if (k === "csv-dong") { b = SITE.templateCsv(SITE.DONG_TEMPLATE); fn = "하자싹_동호양식.csv"; } else { b = SITE.templateCsv(SITE.VENDOR_TEMPLATE); fn = "하자싹_업체양식.csv"; }
+    downloadBlob(b, fn); toast(`${fn} 받았어요 · 예시 줄은 지우고 내 목록을 적어 올려 주세요`, { ms: 4000 }); S.lastWzTemplate = fn;
+  });
+}
+function wzPreviewHtml(w) {
+  const ds = SITE.makeDongsFromSpec(w); if (!ds.length) return `<p class="help">건물 이름을 하나 이상 적어 주세요.</p>`;
+  const st = ds.map(SITE.dongStats); const total = st.reduce((a, s) => a + s.total, 0); const bad = SITE.nameProblems(ds);
+  const d0 = ds[0], s0 = st[0]; const fl = s0.floors.filter((f) => !/^옥상$/.test(f));
+  const pick = [...new Set([...fl.filter((f) => !/^B/.test(f)).slice(-2).reverse(), ...(fl.includes("1") ? ["1"] : []), ...(fl.find((f) => /^B/.test(f)) ? [fl.filter((f) => /^B/.test(f)).slice(-1)[0]] : [])])];
+  const row = (f) => { const u = M.unitsOf(d0, f); return `<div class="wz-row"><span class="wz-fl">${esc(M.floorLabel(f))}</span><span class="wz-us">${u.length ? u.slice(0, 10).map((x) => `<i>${esc(x)}</i>`).join("") + (u.length > 10 ? `<em>…+${u.length - 10}</em>` : "") : `<em>${w.hoRule === "none" || !d0.lines ? "호 없이 층만 써요" : "호 없음"}</em>`}</span></div>`; };
+  return `<div class="wz-sum"><b>${n(ds.length)}개 건물</b> · 호 <b>${n(total)}</b>개${total ? ` · 호수 예 ${esc(s0.first)} ~ ${esc(s0.last)}` : ""}</div>
+    <ul class="wz-dl">${ds.slice(0, 8).map((d, i) => `<li><b>${esc(d.name)}</b> <small>${d.basement ? `지하 ${d.basement}층 ~ ` : ""}지상 ${d.floors}층${d.skipFloors?.length ? ` (${d.skipFloors.join("·")}층 없음)` : ""} · 호 ${n(st[i].total)}개${d.alias ? ` · 줄임말 ${esc(d.alias)}동` : ""}</small></li>`).join("")}${ds.length > 8 ? `<li><small>…외 ${ds.length - 8}개</small></li>` : ""}</ul>
+    <div class="wz-grid" aria-label="${esc(d0.name)} 층별 호 미리보기"><div class="wz-gt">${esc(d0.name)} 모습 <small>(위쪽 층부터)</small></div>${pick.map(row).join("")}</div>
+    ${bad.length ? `<p class="help wz-warn">⚠ ‘${esc(bad.join("’, ‘"))}’은(는) 단지 공용 위치 이름으로 읽혀요. 다른 이름을 써 주세요.</p>` : ""}${total > 20000 ? `<p class="help wz-warn">⚠ 호가 아주 많아요(${n(total)}개). 층·라인 수를 확인해 주세요.</p>` : ""}`;
+}
+async function wzImportDong(w) {
+  const files = await pickFile(".xlsx,.xls,.csv,text/csv", { multiple: false }); if (!files.length) return false;
+  busy(true, "파일 읽는 중…"); let tabs;
+  try { tabs = await SITE.readTables(files[0]); } catch (e) { busy(false); toast("파일을 읽지 못했어요: " + (e.message || "형식 확인"), { ms: 4000 }); return false; }
+  busy(false);
+  const t = tabs.find((x) => SITE.looksDongSheet(x.rows)) || tabs[0]; const r = SITE.parseDongSheet(t.rows, { defaultDong: w.names?.split(/[,\n]/)[0]?.trim() || "본관" });
+  if (!r.dongs.length) { toast(r.warnings[0] || "동·호를 읽지 못했어요", { ms: 4500 }); return false; }
+  w.imported = { ...r, file: files[0].name, sheet: t.name }; w.naming = "file";
+  const vt = tabs.find((x) => x !== t && SITE.looksVendorSheet(x.rows)); let extra = "";
+  if (vt && !w.vendors.length) { const vr = SITE.parseVendorSheet(vt.rows); if (vr.vendors.length) { w.vendors = vr.vendors; extra = ` · 업체 ${vr.vendors.length}곳도 함께`; } }
+  toast(`동 ${r.dongs.length}개 · 호 ${n(r.dongs.reduce((a, d) => a + (d.units?.length || 0), 0))}개를 불러왔어요${extra}`, { ms: 3500 }); return true;
+}
+async function wzImportVendors(w) {
+  const files = await pickFile(".xlsx,.xls,.csv,text/csv", { multiple: false }); if (!files.length) return false;
+  busy(true, "파일 읽는 중…"); let tabs;
+  try { tabs = await SITE.readTables(files[0]); } catch (e) { busy(false); toast("파일을 읽지 못했어요: " + (e.message || "형식 확인"), { ms: 4000 }); return false; }
+  busy(false);
+  const t = tabs.find((x) => SITE.looksVendorSheet(x.rows)); const r = t ? SITE.parseVendorSheet(t.rows) : { vendors: [], warnings: ["‘업체명’ 열이 있는 표를 찾지 못했어요."] };
+  if (!r.vendors.length) { toast(r.warnings[0] || "업체를 읽지 못했어요", { ms: 4500 }); return false; }
+  const have = new Set(w.vendors.map((v) => M.nameKey(v.name))); let add = 0;
+  for (const v of r.vendors) if (!have.has(M.nameKey(v.name))) { w.vendors.push(v); have.add(M.nameKey(v.name)); add++; }
+  w.vendorFile = { file: files[0].name, read: r.vendors.length, added: add };
+  toast(`업체 ${add}곳을 불러왔어요${r.vendors.length - add ? ` (같은 이름 ${r.vendors.length - add}곳은 건너뜀)` : ""}`, { ms: 3500 }); return true;
+}
+const wzChips = (key, base, w, extra = "") => `<div class="chips wrap" id="w-${key}">${[...new Set([...base, ...w[key]])].map((c) => `<button type="button" class="chip ${w[key].includes(c) ? "on" : ""}" data-wk="${key}" data-c="${esc(c)}" aria-pressed="${w[key].includes(c)}">${esc(c)}</button>`).join("")}<button type="button" class="chip add" data-wadd="${key}">＋ 직접입력</button></div>${extra}`;
 ROUTES.wizard = async (qq) => {
-  const step = Number(qq.step || 1); const addMode = !!qq.add;
+  const step = Math.max(1, Math.min(5, Number(qq.step || 1))); const addMode = !!qq.add;
   if (addMode && !P()) return replace("#/home");
-  if (!S.wiz || !!S.wiz.addInit !== addMode) S.wiz = { name: "", start: 101, count: 5, floors: 20, lines: 4, basement: 2, unitStart: 1, commons: [...M.DEFAULT_COMMONS] };
-  if (addMode && !S.wiz.addInit) { const last = P().dongs.at(-1); S.wiz = { ...S.wiz, addInit: true, start: last ? Number(M.dongNum(last.name)) + 1 || 101 : 101, count: 1 }; }
-  const w = S.wiz; setTab(null);
-  setHeader(addMode ? "여러 동 추가" : `새 현장 (${step}/3)`, { backBtn: true });
-  const num = (k, label, min, max) => `<label class="fld"><span>${label}</span><input class="inp" type="number" inputmode="numeric" data-k="${k}" min="${min}" max="${max}" value="${w[k]}"></label>`;
-  if (step === 1) {
-    view().innerHTML = `<div class="wiz"><h2>현장 이름</h2><p class="help">현장명은 업체에 보내는 문구와 요청서에 들어가요.</p>
-      <input class="inp inp-lg" id="w-name" value="${esc(w.name)}" placeholder="예: ○○지구 A블록 신축공사" autocomplete="off">
+  setTab(null);
+  /* 상태: 새 현장은 S.wz, ‘여러 동 추가’는 S.wzAdd */
+  if (addMode) {
+    if (!S.wzAdd) { const p0 = P(); const last = p0.dongs.at(-1); const lastNum = last ? Number(M.dongNum(last.name)) : NaN; const t0 = SITE.typeOf(p0.siteType || "apt");
+      S.wzAdd = SITE.wizDefaults(t0.id, { naming: Number.isFinite(lastNum) && lastNum > 0 && /^\d+동?$/.test(last.name) ? "num" : "custom", start: Number.isFinite(lastNum) ? lastNum + 1 : 101, count: 1, names: "", suffix: "동",
+        ...(last ? { floors: last.floors, lines: last.lines, basement: last.basement || 0, unitStart: last.unitStart || 1, roof: !!last.roof, hoRule: last.lines ? "floor100" : "none" } : {}) }); }
+  } else if (!S.wz) S.wz = SITE.wizDefaults("apt");
+  const w = addMode ? S.wzAdd : S.wz;
+  setHeader(addMode ? "여러 동 추가" : `새 현장 (${step}/5)`, { backBtn: true });
+  const go2 = (s) => go(`#/wizard?step=${s}&keep=1`);
+  const rr = () => rerender();
+  if (step === 1 && !addMode) {
+    view().innerHTML = `<div class="wiz wz">${wzProg(1)}<h2>어떤 현장인가요?</h2><p class="help">유형을 고르면 건물·층·호, 위치 이름, 공종이 그 유형에 맞게 미리 채워져요. 뒤에서 모두 고칠 수 있어요.</p>
+      <div class="wz-types" role="radiogroup" aria-label="현장 유형">${SITE.SITE_TYPES.map((t) => `<button type="button" class="wz-type ${w.type === t.id ? "on" : ""}" data-t="${t.id}" role="radio" aria-checked="${w.type === t.id}"><span class="wt-i" aria-hidden="true">${t.ico}</span><span class="wt-t"><b>${esc(t.name)}</b><small>${esc(t.sub)}</small></span>${w.type === t.id ? '<span class="wt-ck">✓</span>' : ""}</button>`).join("")}</div>
+      <h3 class="sec">현장 이름</h3><input class="inp inp-lg" id="w-name" value="${esc(w.name)}" placeholder="예: ○○지구 A블록 신축공사 · ○○빌딩 리모델링" autocomplete="off">
       <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">다음</button></div>`;
-    $("#w-next").addEventListener("click", () => { w.name = $("#w-name").value.trim(); if (!w.name) return toast("현장 이름을 입력하세요"); go("#/wizard?step=2&keep=1"); });
+    $$("[data-t]", view()).forEach((b) => b.addEventListener("click", () => { const nm = $("#w-name").value; if (b.dataset.t !== w.type) { S.wz = SITE.wizDefaults(b.dataset.t, { name: nm }); } else w.name = nm; rr(); }));
+    $("#w-next").addEventListener("click", () => { w.name = $("#w-name").value.trim(); if (!w.name) return toast("현장 이름을 입력하세요"); go2(2); });
     return;
   }
-  if (step === 2) {
-    view().innerHTML = `<div class="wiz"><h2>동·층·호수</h2><p class="help">번호가 이어지는 동을 한 번에 만들어요. 나중에 동별로 고칠 수 있어요.</p>
-      <div class="grid2">${num("start", "시작 동 번호", 1, 9999)}${num("count", "동 개수", 1, 60)}${num("floors", "지상 층수", 1, 99)}${num("basement", "지하 층수", 0, 9)}${num("lines", "층당 호수(라인)", 0, 20)}${num("unitStart", "세대 시작층", 1, 99)}</div>
-      <div class="card preview" id="w-prev"></div>
-      <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">${addMode ? "동 추가" : "다음"}</button></div>`;
+  if (step === 2 || addMode) {
+    const num = (k, label, min, max) => `<label class="fld"><span>${label}</span><input class="inp" type="number" inputmode="numeric" data-k="${k}" min="${min}" max="${max}" value="${w[k]}"></label>`;
+    const chip = (k, v, label, cur = w[k]) => `<button type="button" class="chip ${cur === v ? "on" : ""}" data-wc="${k}" data-v="${esc(String(v))}" aria-pressed="${cur === v}">${label}</button>`;
+    const imp = w.imported;
+    const nameBox = imp ? `<div class="card wz-imp" id="w-impres"><b>📥 엑셀에서 불러옴</b> <small>${esc(imp.file || "")}${imp.sheet ? " · " + esc(imp.sheet) : ""}</small><br>건물 ${imp.dongs.length}개 · 호 ${n(imp.dongs.reduce((a, d) => a + (d.units?.length || 0), 0))}개${imp.skipped ? ` · 못 읽은 줄 ${imp.skipped}` : ""}${(imp.warnings || []).map((x) => `<br><small class="wz-warn">⚠ ${esc(x)}</small>`).join("")}<br><button type="button" class="btn btn-sm" id="w-impclear">직접 입력으로 바꾸기</button></div>`
+      : `<h3 class="sec">건물 이름</h3><div class="chips wrap" aria-label="건물 이름 방식">${chip("naming", "num", "번호 (101동·102동…)")}${chip("naming", "alpha", "알파벳 (A동·B동…)")}${chip("naming", "custom", "직접 적기 (본관·신관…)")}</div>
+      ${w.naming === "num" ? `<div class="grid2">${num("start", "시작 번호", 1, 9999)}${num("count", "건물 수", 1, 60)}</div>` : w.naming === "alpha" ? `<div class="grid2">${num("count", "건물 수 (A부터)", 1, 26)}</div>` : `<label class="fld"><span>이름 <small>쉼표나 줄바꿈으로 나눠요 · ‘신관:5’처럼 쓰면 그 건물만 5층</small></span><textarea class="inp" rows="2" data-wt="names" placeholder="예: 본관, 신관, 주차타워:8">${esc(w.names || "")}</textarea></label>`}
+      ${w.naming !== "custom" ? `<div class="fld"><span>이름 끝 글자</span><div class="chips">${wzSfxOpts.map((s) => chip("suffix", s, s || "없음")).join("")}</div></div>` : ""}`;
+    const floorsBox = `<h3 class="sec">층${imp ? "" : "·호"}</h3>${imp ? `<label class="chk-line"><input type="checkbox" data-wb="roof" ${w.roof ? "checked" : ""}> 옥상도 위치로 쓰기</label>`
+      : `<div class="grid2">${num("floors", "지상 층수", 1, 99)}${num("basement", "지하 층수", 0, 9)}</div>
+      <div class="fld"><span>호수 규칙</span><div class="chips wrap">${chip("hoRule", "floor100", "층+번호 (101·1203)")}${chip("hoRule", "perfloor", "층마다 호 수가 달라요")}${chip("hoRule", "none", "호 없이 층까지만")}</div></div>
+      ${w.hoRule !== "none" ? `<div class="grid2">${num("lines", w.hoRule === "perfloor" ? "기본 호 수(층당)" : "층당 호 수", 0, 20)}${num("unitStart", "호가 시작되는 층", 1, 99)}</div>` : ""}
+      ${w.hoRule === "perfloor" ? `<label class="fld"><span>호 수가 다른 층만 적기 <small>예: 1:8, 2-3:5 → 1층 8개, 2~3층 5개 (나머지는 위 기본 호 수)</small></span><input class="inp" data-wt="perFloor" value="${esc(w.perFloor || "")}" placeholder="1:8, 2-3:5"></label>` : ""}
+      <div class="grid2"><label class="fld"><span>없는 층 <small>예: 4, 13</small></span><input class="inp" data-wt="skipFloors" value="${esc(w.skipFloors || "")}" placeholder="비우면 전부 있음"></label>
+      ${w.hoRule === "floor100" ? `<label class="fld"><span>없는 호 줄 <small>예: 3, 4 (3·4호선)</small></span><input class="inp" data-wt="skipLines" value="${esc(w.skipLines || "")}" placeholder="비우면 전부 있음"></label>` : ""}</div>
+      <label class="chk-line"><input type="checkbox" data-wb="roof" ${w.roof ? "checked" : ""}> 옥상도 위치로 쓰기</label>`}`;
+    view().innerHTML = `<div class="wiz wz">${addMode ? "" : wzProg(2)}<h2>${addMode ? "건물 더 추가" : "건물·층·호"}</h2><p class="help">${addMode ? "새 건물을 한 번에 만들어요. 이미 있는 이름은 건너뛰어요." : "이름은 자유롭게 정하고, 층과 호는 아래 미리보기로 바로 확인하세요. 나중에 건물별로 고칠 수 있어요."}</p>
+      ${nameBox}${floorsBox}
+      ${addMode ? "" : `<div class="wz-xl"><b>📥 엑셀·CSV로 불러오기</b><small>건물·층·호 목록이 이미 있다면 파일로 한 번에 올리세요(‘동’, ‘층’, ‘호’ 제목 줄).</small>
+        <div class="row"><button type="button" class="btn btn-sm" id="w-impdong">파일 고르기</button><button type="button" class="btn btn-sm" id="w-tpl">양식 받기</button></div></div>`}
+      <h3 class="sec">미리보기</h3><div class="card preview" id="w-prev"></div>
+      <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">${addMode ? "건물 추가" : "다음"}</button></div>`;
     const read = () => $$("[data-k]", view()).forEach((i) => { w[i.dataset.k] = Math.max(Number(i.min), Math.min(Number(i.max), Number(i.value) || 0)); });
-    const prev = () => { read(); const ds = M.makeDongs(w); const u = ds.reduce((s2, d) => s2 + M.floorsOf(d).flatMap((f) => M.unitsOf(d, f)).length, 0);
-      $("#w-prev").innerHTML = `<b>${ds[0]?.name}${ds.length > 1 ? " ~ " + ds.at(-1).name : ""}</b> · ${ds.length}개 동<br>지하 ${w.basement}층 ~ 지상 ${w.floors}층 · 층당 ${w.lines}호 → 세대 약 <b>${n(u)}</b>개<br><small>호수 예: ${w.unitStart * 100 + 1}, ${w.floors * 100 + w.lines} · 빠른검색 줄임말: ${ds.slice(0, 3).map((d) => `${d.alias}동=${d.name}`).join(", ")}</small>`; };
+    const readT = () => $$("[data-wt]", view()).forEach((i) => { w[i.dataset.wt] = i.value; });
+    const prev = () => { read(); readT(); $("#w-prev").innerHTML = wzPreviewHtml(w); };
     view().oninput = prev; prev();
+    $$("[data-wb]", view()).forEach((i) => i.addEventListener("change", () => { w[i.dataset.wb] = i.checked; if (imp) imp.dongs.forEach((d) => { d.roof = i.checked; }); prev(); }));
+    $$("[data-wc]", view()).forEach((b) => b.addEventListener("click", () => { read(); readT(); w[b.dataset.wc] = b.dataset.v; if (b.dataset.wc === "hoRule" && b.dataset.v === "none") w.lines = 0; if (b.dataset.wc === "hoRule" && b.dataset.v !== "none" && !w.lines) w.lines = 4; rr(); }));
+    $("#w-impclear")?.addEventListener("click", () => { w.imported = null; w.naming = SITE.typeOf(w.type).w.naming; rr(); });
+    $("#w-impdong")?.addEventListener("click", async () => { read(); readT(); if (await wzImportDong(w)) rr(); });
+    $("#w-tpl")?.addEventListener("click", wzTemplateChoose);
     $("#w-next").addEventListener("click", async () => {
-      read();
-      if (addMode) { const p = P(); const ds = M.makeDongs(w).filter((d) => !p.dongs.some((x) => x.name === d.name)); p.dongs.push(...ds); p.dongs.sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true })); await saveProject(p); S.wiz = null; toast(`${ds.length}개 동을 추가했어요`); back(); return; }
-      go("#/wizard?step=3&keep=1");
+      read(); readT(); const ds = SITE.makeDongsFromSpec(w);
+      if (!ds.length) return toast("건물 이름을 하나 이상 적어 주세요");
+      const bad = SITE.nameProblems(ds); if (bad.length) return toast(`‘${bad[0]}’은(는) 단지 공용 이름으로 읽혀요. 다른 이름을 써 주세요`, { ms: 3500 });
+      if (new Set(ds.map((d) => M.sameKey(d.name))).size !== ds.length) return toast("같은 이름의 건물이 있어요");
+      if (addMode) { const p = P(); const add = ds.filter((d) => !p.dongs.some((x) => M.sameKey(x.name) === M.sameKey(d.name))); if (!add.length) return toast("이미 있는 건물이에요. 다른 이름이나 번호로 해 주세요", { ms: 3200 });
+        p.dongs.push(...add); p.dongs.sort((a, b) => a.name.localeCompare(b.name, "ko", { numeric: true })); await saveProject(p); S.wzAdd = null; toast(`${add.length}개 동을 추가했어요`); back(); return; }
+      go2(3);
     });
     return;
   }
-  view().innerHTML = `<div class="wiz"><h2>공용부</h2><p class="help">세대 밖 하자 위치로 쓸 곳을 고르세요. 직접 추가할 수도 있어요.</p>
-    <div class="chips wrap" id="w-commons">${[...new Set([...M.DEFAULT_COMMONS, ...w.commons])].map((c) => `<button type="button" class="chip ${w.commons.includes(c) ? "on" : ""}" data-c="${esc(c)}">${esc(c)}</button>`).join("")}<button type="button" class="chip add" id="w-cadd">＋ 직접입력</button></div>
-    <p class="help">공종(${M.DEFAULT_TRADES.length}개)·하자 유형(${M.DEFAULT_TYPES.length}개)·실 목록은 공동주택 기본값으로 만들어지고, 설정에서 바꿀 수 있어요.</p>
-    <button type="button" class="btn btn-primary btn-lg btn-block" id="w-done">현장 만들기</button></div>`;
-  $("#w-commons").addEventListener("click", async (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    if (b.id === "w-cadd") { const v = await prompt2("공용부 이름"); if (v && !w.commons.includes(v)) w.commons.push(v); return rerender(); }
-    const c = b.dataset.c; w.commons = w.commons.includes(c) ? w.commons.filter((x) => x !== c) : [...w.commons, c]; b.classList.toggle("on");
-  });
-  $("#w-done").addEventListener("click", async () => {
+  if (step === 3) {
+    const t = SITE.typeOf(w.type);
+    view().innerHTML = `<div class="wiz wz">${wzProg(3)}<h2>하자 위치 이름</h2><p class="help">누르면 켜고 꺼요. 목록에 없으면 ＋ 직접입력으로 더하세요.</p>
+      <h3 class="sec">건물 밖·단지 공용</h3>${wzChips("commons", t.commons, w)}
+      <h3 class="sec">건물 안 공용부 <small>계단·복도 같은 곳</small></h3>${wzChips("dongCommons", t.dongCommons, w)}
+      <h3 class="sec">실(방) 이름</h3>${wzChips("rooms", t.rooms, w)}
+      <h3 class="sec">부위</h3>${wzChips("parts", t.parts, w)}
+      <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">다음</button></div>`;
+  } else if (step === 4) {
+    const sel = new Set(w.trades.map((x) => x.name)); const names = [...new Set([...SITE.typeOf(w.type).trades, ...SITE.TRADE_CATALOG.map((x) => x.name), ...w.trades.map((x) => x.name)])];
+    view().innerHTML = `<div class="wiz wz">${wzProg(4)}<h2>공종 고르기</h2><p class="help">이 현장에서 쓸 공종만 켜 두세요(${w.trades.length}개 선택). 세부 공종은 ✎로 고쳐요.</p>
+      <div class="chips wrap" id="w-trades">${names.map((c) => `<button type="button" class="chip ${sel.has(c) ? "on" : ""}" data-wtr="${esc(c)}" aria-pressed="${sel.has(c)}">${esc(c)}</button>`).join("")}<button type="button" class="chip add" id="w-tradd">＋ 직접입력</button></div>
+      <h3 class="sec">세부 공종 고치기</h3><div class="slist" id="w-tsubs">${w.trades.map((x, i) => `<button type="button" class="sitem" data-wsub="${i}"><span class="si-ico">✎</span><span><b>${esc(x.name)}</b><small>${esc(x.subs.join(" · ") || "세부 공종 없음 — 눌러서 적기")}</small></span><span class="chev">›</span></button>`).join("")}</div>
+      <button type="button" class="btn btn-primary btn-lg btn-block" id="w-next">다음</button></div>`;
+  } else {
+    const vs = w.vendors;
+    view().innerHTML = `<div class="wiz wz">${wzProg(5)}<h2>업체 등록 <small>(건너뛰어도 돼요)</small></h2><p class="help">담당 공종을 적어 두면 하자 등록 때 업체가 자동으로 정해져요. 나중에 더보기 › 업체에서도 더할 수 있어요.</p>
+      <div class="row wz-vbtn"><button type="button" class="btn btn-sm" id="w-vadd">＋ 직접 추가</button><button type="button" class="btn btn-sm" id="w-impven">📥 엑셀·CSV 불러오기</button><button type="button" class="btn btn-sm" id="w-tpl2">양식 받기</button></div>
+      ${w.vendorFile ? `<p class="help" id="w-venres">📥 ${esc(w.vendorFile.file)} — 업체 ${w.vendorFile.read}곳 읽음${w.vendorFile.read - w.vendorFile.added ? ` · 같은 이름 ${w.vendorFile.read - w.vendorFile.added}곳 건너뜀` : ""}</p>` : ""}
+      <div class="slist" id="w-vlist">${vs.length ? vs.map((v, i) => `<div class="sitem wz-v"><span class="si-ico">🏢</span><span><b>${esc(v.name)}</b><small>${esc([v.trades.join("·"), v.person, v.phone].filter(Boolean).join(" · ") || "담당 공종 없음")}</small></span><button type="button" class="btn btn-sm" data-wve="${i}" aria-label="${esc(v.name)} 고치기">✎</button><button type="button" class="btn btn-sm" data-wvd="${i}" aria-label="${esc(v.name)} 빼기">✕</button></div>`).join("") : `<div class="card empty-card"><p>아직 없어요. 건너뛰고 나중에 해도 돼요.</p></div>`}</div>
+      <div class="card wz-fin" id="w-fin"><b>만들 현장</b><br>${esc(SITE.typeOf(w.type).name)} · ${esc(w.name)}<br><small>${(() => { const ds = SITE.makeDongsFromSpec(w); const t = ds.reduce((a, d) => a + SITE.dongStats(d).total, 0); return `건물 ${ds.length}개 · 호 ${n(t)}개 · 공종 ${w.trades.length}개 · 업체 ${vs.length}곳`; })()}</small></div>
+      <button type="button" class="btn btn-primary btn-lg btn-block" id="w-done">현장 만들기</button></div>`;
+  }
+  /* 3~5단계 공통 연결 */
+  $("#w-next")?.addEventListener("click", () => go2(step + 1));
+  $$("[data-wk]", view()).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.wk, c = b.dataset.c; w[k] = w[k].includes(c) ? w[k].filter((x) => x !== c) : [...w[k], c]; b.classList.toggle("on"); b.setAttribute("aria-pressed", w[k].includes(c)); }));
+  $$("[data-wadd]", view()).forEach((b) => b.addEventListener("click", async () => { const k = b.dataset.wadd; const v = ((await prompt2("이름")) || "").trim(); if (v && !M.hasSame(w[k], v)) w[k].push(v.slice(0, 20)); rr(); }));
+  $$("[data-wtr]", view()).forEach((b) => b.addEventListener("click", () => { const c = b.dataset.wtr; if (w.trades.some((x) => x.name === c)) w.trades = w.trades.filter((x) => x.name !== c); else { const cat = SITE.TRADE_CATALOG.find((x) => x.name === c); w.trades.push({ name: c, subs: cat ? [...cat.subs] : [] }); } rr(); }));
+  $("#w-tradd")?.addEventListener("click", async () => { const v = ((await prompt2("공종 이름")) || "").trim(); if (v && !w.trades.some((x) => M.sameTrade(x.name, v))) w.trades.push({ name: v.slice(0, 20), subs: [] }); rr(); });
+  $$("[data-wsub]", view()).forEach((b) => b.addEventListener("click", async () => { const t = w.trades[Number(b.dataset.wsub)]; const v = await prompt2(`${t.name} 세부 공종 (쉼표로 나눠 적기)`, t.subs.join(", ")); if (v == null) return; t.subs = [...new Set(String(v).split(/[,\n、]+/).map((x) => x.trim()).filter(Boolean))].slice(0, 30); rr(); }));
+  const vForm = async (v0 = {}) => { const r = await formSheet({ title: v0.name ? "업체 고치기" : "업체 추가", ok: "저장", fields: [{ k: "name", label: "업체명", value: v0.name || "", placeholder: "예: ○○타일" }, { k: "trades", label: "담당 공종 (쉼표로)", value: (v0.trades || []).join(", "), placeholder: "예: 타일, 석공사" }, { k: "person", label: "담당자", value: v0.person || "" }, { k: "phone", label: "연락처", value: v0.phone || "", placeholder: "010-0000-0000" }],
+    validate: ({ name }) => (!name ? "업체명을 입력하세요" : "") }); if (!r) return null; return { name: r.name.slice(0, 30), trades: [...new Set(r.trades.split(/[,/·、;]+/).map((x) => x.trim()).filter(Boolean))], person: r.person, phone: M.normPhone(r.phone), memo: v0.memo || "" }; };
+  $("#w-vadd")?.addEventListener("click", async () => { const v = await vForm(); if (!v) return; if (w.vendors.some((x) => M.nameKey(x.name) === M.nameKey(v.name))) return toast("같은 이름의 업체가 이미 있어요"); w.vendors.push(v); rr(); });
+  $$("[data-wve]", view()).forEach((b) => b.addEventListener("click", async () => { const i = Number(b.dataset.wve); const v = await vForm(w.vendors[i]); if (v) { w.vendors[i] = v; rr(); } }));
+  $$("[data-wvd]", view()).forEach((b) => b.addEventListener("click", () => { w.vendors.splice(Number(b.dataset.wvd), 1); rr(); }));
+  $("#w-impven")?.addEventListener("click", async () => { if (await wzImportVendors(w)) rr(); });
+  $("#w-tpl2")?.addEventListener("click", wzTemplateChoose);
+  $("#w-done")?.addEventListener("click", async () => {
     if (!Pro.can("multiProject", { projectCount: realProjects() })) return proSheet("무료판은 현장 1개까지 만들 수 있어요.");
-    const p = M.newProject(w.name || "새 현장"); p.dongs = M.makeDongs(w); p.commons = [...w.commons];
-    await saveProject(p); S.pid = p.id; LS.set("pid", p.id); S.wiz = null; S.filter = { status: "_open" }; LS.set("filter", S.filter);
-    toast(`‘${p.name}’ 현장을 만들었어요`);
+    const ds = SITE.makeDongsFromSpec(w); if (!ds.length) return toast("건물 이름을 하나 이상 적어 주세요");
+    const p = M.newProject(w.name || "새 현장"); p.dongs = ds; p.commons = [...w.commons]; p.dongCommons = [...w.dongCommons]; p.rooms = [...w.rooms]; p.parts = [...w.parts]; p.categories = [...w.categories];
+    p.trades = w.trades.map((t) => ({ name: t.name, subs: [...t.subs] })); p.siteType = w.type;
+    for (const v of w.vendors) for (const tn of v.trades) if (!p.trades.some((t) => M.sameTrade(t.name, tn))) { const cat = SITE.TRADE_CATALOG.find((x) => M.sameTrade(x.name, tn)); p.trades.push({ name: tn, subs: cat ? [...cat.subs] : [] }); }
+    await saveProject(p); S.pid = p.id; LS.set("pid", p.id);
+    const { recs, skipped } = SITE.vendorRecords(w.vendors, S.vendors); for (const v of recs) await saveVendor(v);
+    S.wz = null; S.filter = { status: "_open" }; LS.set("filter", S.filter);
+    toast(`‘${p.name}’ 현장을 만들었어요${recs.length ? ` · 업체 ${recs.length}곳` : ""}${skipped ? ` (이미 있는 업체 ${skipped}곳은 그대로)` : ""}`, { ms: 3500 });
     await unwind(Math.min(step, navDepth() - 1)); replace("#/home");
     if (!S.vendors.length && await ask("업체를 먼저 등록할까요?\n공종별 담당업체를 등록해 두면 하자 등록 때 자동으로 지정되고 카톡·문자로 바로 보낼 수 있어요.", { ok: "업체 등록", cancel: "나중에" })) go("#/vendor-edit");
   });

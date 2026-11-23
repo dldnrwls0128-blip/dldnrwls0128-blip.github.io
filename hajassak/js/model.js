@@ -73,7 +73,8 @@ export const ageDays = (d, now = Date.now()) => Math.max(0, Math.floor((now - ne
 export function floorsOf(dong) {
   const out = [];
   for (let b = dong.basement || 0; b >= 1; b--) out.push(`B${b}`);
-  for (let f = 1; f <= (dong.floors || 0); f++) out.push(String(f));
+  const skipF = skipFloorsOf(dong);
+  for (let f = 1; f <= (dong.floors || 0); f++) if (!skipF.has(f)) out.push(String(f));
   if (dong.roof) out.push("옥상");
   for (const x of dong.extraFloors || []) if (!out.includes(x)) out.push(x); // 위치 선택기에서 직접 추가한 층
   return out.sort((a, b) => floorRank(a) - floorRank(b));
@@ -97,9 +98,11 @@ export function unitsOf(dong, floor) {
   const ex = (dong.extraUnits || []).filter((h) => floorOfHo(h) === String(floor) && !base.includes(h));
   return ex.length ? [...base, ...ex].sort((a, b) => Number(a) - Number(b)) : base;
 }
+/** 1.4.1 건너뛸 층(예: 4층·13층 없는 건물). 선택 항목 — 없으면 전부 사용 */
+export const skipFloorsOf = (dong) => new Set((Array.isArray(dong?.skipFloors) ? dong.skipFloors : []).map(Number).filter((n) => Number.isFinite(n)));
 function baseUnitsOf(dong, floor) {
   const f = Number(floor);
-  if (!Number.isFinite(f) || f < (dong.unitStart || 1) || f > (dong.floors || 0)) return [];
+  if (!Number.isFinite(f) || f < (dong.unitStart || 1) || f > (dong.floors || 0) || skipFloorsOf(dong).has(f)) return [];
   if (Array.isArray(dong.units) && dong.units.length) return dong.units.filter((h) => Math.floor(Number(h) / 100) === f).sort((a, b) => a - b);
   const skip = new Set(String(dong.skipLines || "").split(/[,\s]+/).filter(Boolean).map(Number));
   const out = [];
