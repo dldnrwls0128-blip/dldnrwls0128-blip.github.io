@@ -490,7 +490,7 @@ function defectCard(d, { sel = false, photo = false, cam = true } = {}) {
   return `<article class="dcard ${phState(d)} ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
     ${photo ? phBlock(d) : ""}
-    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span>${d.tabs?.length ? `<span class="d-focus" title="팀 관리 탭(데이터 보존)">중점관리</span>` : ""}${pill(d.status, d)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기" title="목록에 담기 · 복사해서 등록 …">⋯</button></div>
+    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span>${(() => { const nm = TABS().filter((x) => M.inTab(d, x.id)).map((x) => x.name); return nm.length ? `<span class="d-focus" title="팀과 공유하는 목록">${esc(nm.join(" · "))}</span>` : ""; })()}${pill(d.status, d)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기" title="목록에 담기 · 복사해서 등록 …">⋯</button></div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
@@ -1029,8 +1029,10 @@ function locIndex() {
 ROUTES.list = async () => {
   setTab("list");
   setHeader("하자", { backBtn: navDepth() > 1 });
-  const allP = PD(); const ltab = "";
-  const f = S.filter; const all = allP;
+  const allP = PD(); const tabs = TABS();
+  let ltab = LS.get("listTab", "") || "";
+  if (ltab && !tabs.some((x) => x.id === ltab)) { ltab = ""; LS.set("listTab", ""); }
+  const f = S.filter; const all = ltab ? allP.filter((d) => M.inTab(d, ltab)) : allP;
   /* 1.2.5 정렬(기억) — 위치·코어 묶음에서 ‘기본’이면 안에서 층·호 순 */
   const grp = LS.get("listGroup", ""); const srt = { mode: "", dir: "", ...LS.get("listSort", {}) };
   const effMode = srt.mode || (grp === "core" ? "core" : grp === "loc" ? "loc" : ""); const effDir = srt.dir || M.sortDefaultDir(effMode);
@@ -1053,6 +1055,7 @@ ROUTES.list = async () => {
   view().innerHTML = `${bare ? '<i class="bare-mark" hidden></i>' : ""}
     <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="동·호·내용 검색" data-ph-ex="예: 312-802 · 지하주차장" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
       <button type="button" class="btn" id="btn-filter">필터${nUi ? ` <b class="badge">${nUi}</b>` : ""}</button></form>
+    ${!bare && tabs.length ? `<div class="ltabs" id="ltabs" role="tablist" aria-label="팀과 공유하는 목록">${tabs.map((tb) => `<button type="button" class="ltab ${ltab === tb.id ? "on" : ""}" role="tab" aria-selected="${ltab === tb.id}" data-ltab="${esc(tb.id)}">★ ${esc(tb.name)} <small>${n(tabCount(tb.id))}</small></button>`).join("")}</div>` : ""}
     ${facetBarHtml(list.length)}
     ${chips ? `<div class="chips scroll" id="fchips">${chips}<button type="button" class="chip" data-rm="_all" aria-label="필터 모두 지우기">모두 지우기</button></div>` : ""}
     ${presetRowHtml("list")}
@@ -1069,7 +1072,7 @@ ROUTES.list = async () => {
     ${list.length ? photoLegendHtml(null, { short: true, extra: `<span class="sp"></span><button type="button" class="btn btn-sm" id="btn-sendphotos" title="이 결과의 사진을 띠를 붙여 여러 장 보내기" aria-label="사진으로 보내기">📷 사진으로 보내기</button>` }) : ""}
     <div class="list-menu" id="list-menu" ${window.__listMenuOpen ? "" : "hidden"}><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기(엑셀·CSV)</button><button type="button" class="btn btn-sm" id="btn-shoot">📷 사진 없는 건 연속 촬영</button><button type="button" class="btn btn-sm" id="btn-places">▦ 전체 위치 보기</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
-    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : bare ? `<div class="card empty-card" id="list-empty"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-primary" id="empty-new">＋ 첫 하자 등록</button></div>` : `<div class="card empty-card" id="list-empty"><p>조건에 맞는 하자가 없어요.</p>${nUi || f.hideDone ? `<button type="button" class="btn" id="empty-clear">조건 모두 지우기</button>` : ""}</div>`}</div>
+    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : bare ? `<div class="card empty-card" id="list-empty"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-primary" id="empty-new">＋ 첫 하자 등록</button></div>` : `<div class="card empty-card" id="list-empty"><p>조건에 맞는 하자가 없어요.</p>${nUi || f.hideDone || ltab ? `<button type="button" class="btn" id="empty-clear">조건 모두 지우기</button>` : ""}</div>`}</div>
     ${(grp ? S.lgTrunc : list.length > S.listLimit) ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(grp ? S.lgHid : list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true, core: true })}`;
   bindCards(); syncChecks(); bindSelBar(list); bindFacetBar();
@@ -1134,10 +1137,10 @@ ROUTES.list = async () => {
   { const ex = lsI.dataset.phEx, ph = lsI.placeholder; lsI.addEventListener("focus", () => { lsI.placeholder = ex; }); lsI.addEventListener("blur", () => { lsI.placeholder = ph; }); }
   $("#btn-filter")?.addEventListener("click", () => filterSheet({ prefill: true })); // 1.2.9 목록 ‘필터’는 지금 걸린 조건 그대로(건수 찾기는 초기화)
   $$("[data-fopen]", view()).forEach((b) => b.addEventListener("click", () => filterSheet({ prefill: true, focus: b.dataset.fopen })));
-  $$("[data-ltab]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltab); S.listLimit = 60; S.select.clear(); S.noRestore = true; rerender(); }));
+  $$("[data-ltab]", view()).forEach((b) => b.addEventListener("click", () => { const id = b.dataset.ltab; const cur = LS.get("listTab", "") || ""; LS.set("listTab", cur === id ? "" : id); S.listLimit = 60; S.select.clear(); S.noRestore = true; rerender(); }));
   $("#ltab-cfg")?.addEventListener("click", () => tabManager());
   $("#core-fix")?.addEventListener("click", () => coreAssign(coreFix));
-  $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (k === "_all") S.filter = {}; else if (b.dataset.rv != null && Array.isArray(S.filter[k])) { S.filter[k] = S.filter[k].filter((x) => x !== b.dataset.rv); if (!S.filter[k].length) delete S.filter[k]; } else delete S.filter[k]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
+  $$("[data-rm]", view()).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.rm; if (k === "_all") { S.filter = {}; LS.set("listTab", ""); } else if (b.dataset.rv != null && Array.isArray(S.filter[k])) { S.filter[k] = S.filter[k].filter((x) => x !== b.dataset.rv); if (!S.filter[k].length) delete S.filter[k]; } else delete S.filter[k]; LS.set("filter", S.filter); S.noRestore = true; rerender(); }));
   $("#btn-more")?.addEventListener("click", () => { S.listLimit += 120; rerender(); });
   $("#lgroup").addEventListener("change", (e) => { LS.set("listGroup", e.target.value); S.noRestore = true; rerender(); });
   $("#lsort").addEventListener("change", (e) => { LS.set("listSort", { mode: e.target.value, dir: M.sortDefaultDir(e.target.value) }); S.noRestore = true; rerender(); });
@@ -3777,9 +3780,11 @@ ROUTES.sets = async (qq) => {
       const c = Sets.countsOf(st, PD(), M.isOpen);
       return `<button type="button" class="set-card" data-set="${esc(st.id)}"><b>${esc(st.name)}</b><span>미조치 ${n(c.open)} · 조치 ${n(c.done)} · 전체 ${n(c.all)}</span></button>`;
     }).join("");
+    const teamRows = TABS().map((tb) => { const items = PD().filter((d) => M.inTab(d, tb.id)); const open = items.filter(M.isOpen).length; return `<button type="button" class="set-card set-card-team" data-ltab-go="${esc(tb.id)}"><b>★ ${esc(tb.name)}</b><span>미조치 ${n(open)} · 전체 ${n(items.length)} · 팀과 공유</span></button>`; }).join("");
     view().innerHTML = `<div class="sets-hub">
-      <p class="help">하자를 골라 이름 붙인 목록으로 모아요. 이 기기에만 저장되고 팀과 동기화하지 않아요.</p>
-      ${cards || `<div class="card empty-card"><p>아직 목록이 없어요.<br>하자 카드의 ⋯에서 ‘목록에 담기’를 누르거나, 위에서 새 목록을 만드세요.</p></div>`}
+      ${teamRows}
+      <p class="help">아래는 이 기기에만 저장되는 이름 붙인 목록이에요. 팀과 공유하는 ★ 목록은 위에서 바로 볼 수 있어요.</p>
+      ${cards || `<div class="card empty-card"><p>아직 이 기기 목록이 없어요.<br>하자 카드의 ⋯에서 ‘목록에 담기’를 누르거나, 위에서 새 목록을 만드세요.</p></div>`}
     </div>`;
     $("#set-new")?.addEventListener("click", async () => {
       const r = await formSheet({ title: "새 목록", ok: "만들기", hint: "예: 내일 점검, 입주전 필수", fields: [{ k: "v", label: "목록 이름", placeholder: "예: 내일 점검" }],
@@ -3789,6 +3794,7 @@ ROUTES.sets = async (qq) => {
       saveUserSets(made.sets); toast(`‘${made.set.name}’을(를) 만들었어요`); go(`#/sets?k=${made.set.id}`);
     });
     $$("[data-set]", view()).forEach((b) => b.addEventListener("click", () => go(`#/sets?k=${b.dataset.set}`)));
+    $$("[data-ltab-go]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltabGo); S.filter = {}; LS.set("filter", {}); S.listLimit = 60; S.select.clear(); go("#/list"); }));
     return;
   }
   const c = Sets.countsOf(cur, PD(), M.isOpen);
