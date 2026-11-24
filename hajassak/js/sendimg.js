@@ -129,7 +129,10 @@ async function drawPhotos(ctx, y, rows, photos) {
       if (k === 0) {
         ctx.fillStyle = ACC; rr(ctx, x, y, 44, 36, 8); ctx.fill();
         ctx.fillStyle = "#fff"; ctx.font = f(22, 800);
-        const ns = String(r.no); ctx.fillText(ns, x + 22 - ctx.measureText(ns).width / 2, y + 6);
+        const ns = String(r.no);
+        ctx.textBaseline = "middle";
+        ctx.fillText(ns, x + 22 - ctx.measureText(ns).width / 2, y + 18);
+        ctx.textBaseline = "top";
       }
       const py = y + (k === 0 ? 0 : 0);
       const px = k === 0 ? x + 52 : x;
@@ -166,7 +169,10 @@ async function drawPhotosSimple(ctx, y, rows, photos) {
     // one row per item: badge + up to 4 thumbs
     ctx.fillStyle = ACC; rr(ctx, PAD, y, 52, 52, 10); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.font = f(26, 800);
-    const ns = String(r.no); ctx.fillText(ns, PAD + 26 - ctx.measureText(ns).width / 2, y + 12);
+    const ns = String(r.no);
+    ctx.textBaseline = "middle";
+    ctx.fillText(ns, PAD + 26 - ctx.measureText(ns).width / 2, y + 26);
+    ctx.textBaseline = "top";
     const startX = PAD + 66;
     const avail = inner - 66;
     const s = Math.min(thumb, Math.floor((avail - (phs.length - 1) * gap) / Math.max(1, phs.length)));
@@ -212,8 +218,9 @@ export async function renderVendorPages({ project, vendor, items, photos = new M
       else if (r === rows[rows.length - 1] && !rows.some((x) => (photos.get(x.d.id) || []).length)) h += 48;
     }
     h += 60;
-    const cv = document.createElement("canvas"); cv.width = W; cv.height = Math.max(800, Math.ceil(h));
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = Math.max(1440, Math.ceil(h));
     const ctx = cv.getContext("2d");
+    ctx.textBaseline = "top";
     ctx.fillStyle = BG; ctx.fillRect(0, 0, cv.width, cv.height);
     drawHeader(ctx, { project, vendor, today, page: p + 1, pages: chunks.length, total: items.length });
     let y = 152;

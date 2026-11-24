@@ -387,7 +387,11 @@ function facetSumInfo(f, shownN) {
   for (const v of M.fArr(f.vendorId)) parts.push(v === "_none" ? "업체 미지정" : (vLabel(v) || "업체"));
   const dong = M.fArr(f.dong);
   if (dong.length && dong[0] !== "_none") parts.push(dong.length === 1 ? dong[0] : `동 ${dong.length}개`);
-  else if (dong[0] === "_none" || f.common) parts.push(f.common && f.common !== "_any" ? f.common : "단지 공용");
+  else if (dong[0] === "_none") parts.push("단지 공용");
+  if (f.common) {
+    const cl = f.common === "_any" ? "공용부·세대 외" : f.common === "_bare" ? "공용부 미지정" : f.common;
+    if (!parts.includes(cl)) parts.push(cl);
+  }
   if (f.ho) parts.push(f.ho + "호");
   if (f.floor) parts.push((Array.isArray(f.floor) ? f.floor : [f.floor]).map(M.floorLabel).join(", "));
   const skip = new Set(["trade", "vendorId", "dong", "ho", "floor", "common", "status", "hideDone", "text"]);
@@ -1050,6 +1054,7 @@ ROUTES.list = async () => {
     <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="동·호·내용 검색" data-ph-ex="예: 312-802 · 지하주차장" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
       <button type="button" class="btn" id="btn-filter">필터${nUi ? ` <b class="badge">${nUi}</b>` : ""}</button></form>
     ${facetBarHtml(list.length)}
+    ${chips ? `<div class="chips scroll" id="fchips">${chips}<button type="button" class="chip" data-rm="_all" aria-label="필터 모두 지우기">모두 지우기</button></div>` : ""}
     ${presetRowHtml("list")}
     <div class="loc-row" id="loc-row">
       <button type="button" class="dd-btn ${lb.v1 ? "on" : ""}" id="dd-loc" aria-haspopup="listbox"><small>위치</small><b>${esc(lb.l1)}</b></button>
@@ -3485,7 +3490,7 @@ async function requestImageSheet({ vendor, items }) {
     pngs = await Promise.all(pages.map((pg) => SI.toPng(pg.canvas)));
     jpgs = pngs;
     urls = pngs.map((b) => URL.createObjectURL(b));
-    text = `${P()?.name || ""} · ${vendor?.name || "업체 미지정"} · ${items.length}건 조치 요청`;
+    text = `${P()?.name || ""} · ${vendor?.name || "업체 미지정"} · ${items.length}건 하자 조치 요청 (${docNo})`;
   } catch (e) { busy(false); console.error(e); return toast("요청서 이미지를 만들지 못했어요: " + (e.message || e)); }
   busy(false);
   const files = pngs.map((b, i) => new File([b], `조치요청_${(vendor?.name || "업체").replace(/\s+/g, "")}_${docNo}${pngs.length > 1 ? "_" + (i + 1) : ""}.png`, { type: "image/png" }));
