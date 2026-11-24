@@ -255,6 +255,26 @@ export const hasEx = (f = {}) => exFilterCount(f) > 0 || !!f.hideDone;
 export const exFilterCount = (f) => fArr(f.exw).length + EX_KEYS.reduce((a, k) => a + fArr(f[k]).length, 0);
 export const filterCount = (f) => exFilterCount(f) + [...FACET_KEYS, "ho", "room", "common", "turn", "chain", "mine", "overdue", "photo", "hideDone", "text", "from", "to"].reduce((a, k) => a + (FACET_KEYS.includes(k) ? fArr(f[k]).length : f[k] ? 1 : 0), 0);
 
+/** 확인 대기: 조치완료(업체 보고 후·관리자 확인 전 포함) */
+export const isWaitConfirm = (d) => d.status === "조치완료";
+export const isConfirmed = (d) => d.status === "확인완료";
+export const UNASSIGNED_VENDOR = "업체 미지정";
+/** 하자위치 업체별 보기: 필터가 이미 적용된 목록을 업체별로 묶음. 미지정은 맨 아래. */
+export function vendorGroups(list, { vendorName = () => "" } = {}) {
+  const m = new Map();
+  for (const d of list || []) {
+    const id = d.vendorId || "";
+    if (!m.has(id)) m.set(id, { vendorId: id, name: id ? "" : UNASSIGNED_VENDOR, items: [], open: 0, wait: 0, done: 0 });
+    const g = m.get(id);
+    if (id) { const nm = vendorName(d) || ""; if (nm && !g.name) g.name = nm; }
+    g.items.push(d);
+    if (isOpen(d)) g.open++;
+    else if (isWaitConfirm(d)) g.wait++;
+    else if (isConfirmed(d)) g.done++;
+  }
+  for (const g of m.values()) if (g.vendorId && !g.name) g.name = "업체";
+  return [...m.values()].sort((a, b) => (!a.vendorId) - (!b.vendorId) || (b.open + b.wait) - (a.open + a.wait) || b.items.length - a.items.length || a.name.localeCompare(b.name, "ko"));
+}
 export function countBy(list, key) {
   const m = new Map();
   for (const d of list) { const k = typeof key === "function" ? key(d) : d[key]; m.set(k, (m.get(k) || 0) + 1); }

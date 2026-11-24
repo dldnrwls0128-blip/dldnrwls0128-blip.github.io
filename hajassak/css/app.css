@@ -876,3 +876,16 @@ body[data-simple="1"] #ltabs,body[data-simple="1"] #ltab-cfg,body[data-simple="1
 .vw-ph{display:flex;gap:6px;margin:6px 0 8px}.vw-ph img{width:31%;aspect-ratio:4/3;object-fit:cover;border-radius:6px;background:#eee}
 .vd-ph{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.vd-th{position:relative}.vd-th img{width:96px;height:72px;object-fit:cover;border-radius:6px}.vd-th b{position:absolute;top:2px;right:2px;background:#0009;color:#fff;border-radius:50%;width:22px;height:22px;display:grid;place-items:center;cursor:pointer;font-size:12px}
 .vi-made{margin-top:10px}.vi-row small{display:block}
+
+/* 1.5.1 하자위치: 위치별 ↔ 업체별 */
+.pl-modes{display:flex;gap:6px;align-items:center;margin:8px 0 10px;flex-wrap:wrap}
+.pl-modes .pl-ml{font-size:12px;color:var(--sub);font-weight:700}
+.pl-modes .vseg{flex:1;min-width:0}
+.pl-vlist{display:flex;flex-direction:column;gap:8px;margin-bottom:var(--gap)}
+.pl-vcard{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;width:100%;padding:12px 14px;border:1.5px solid var(--line);border-left-width:5px;border-radius:12px;background:var(--card);text-align:left;cursor:pointer;color:var(--ink);font:inherit}
+.pl-vcard .pl-vn{font-weight:800;font-size:16px;flex:1;min-width:0;word-break:keep-all}
+.pl-vcard b{font-size:20px;line-height:1.1}.pl-vcard b small{font-size:12px;font-weight:600;color:var(--sub)}
+.pl-vcard .pl-vcnts{flex-basis:100%;font-size:13px;color:var(--sub);line-height:1.4}
+.pl-vcard .c-open{color:#b45309;font-weight:700}.pl-vcard .c-wait{color:#b45309;font-weight:700}.pl-vcard .c-done{color:var(--ok);font-weight:700}
+.pl-vcard.has{border-left-color:#f59e0b}.pl-vcard.wait{border-left-color:#f59e0b}.pl-vcard.clean{border-left-color:var(--ok)}.pl-vcard.zero{border-left-color:var(--line)}
+.pl-vempty{padding:20px;text-align:center;color:var(--sub)}

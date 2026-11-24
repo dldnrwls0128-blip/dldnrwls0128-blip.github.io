@@ -1145,7 +1145,7 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
   const has = (k, v) => M.fArr(nf[k]).includes(v);
   const day = (dd) => { const t = new Date(Date.now() - dd * 864e5); return M.localDay(t.toISOString()); };
   const facetHtml = (fc) => `<details class="fc" data-fc="${fc.k}" ${fc.fold && !M.fArr(nf[fc.k]).length && !M.fArr(nf["x_" + fc.k]).length && focus !== fc.k && focus !== "x_" + fc.k ? "" : "open"}><summary><b>${fc.t}</b> <small class="fc-sel" data-sel-of="${fc.k}"></small></summary>
-    ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div></details>`;
+    ${fc.k === "vendorId" && fc.o.length > 6 ? `<input class="inp fc-q" data-fq="${fc.k}" type="search" placeholder="업체 찾기 · 초성 가능 (예: ㄷㅎ)" aria-label="업체 찾기">` : ""}<div class="chips fc-chips">${fc.o.map(([v, t]) => `<button type="button" class="chip fchip ${has(fc.k, v) ? "on" : ""}" data-fk="${fc.k}" data-fv="${esc(v)}" aria-pressed="${has(fc.k, v)}">${esc(t)} <small class="fn">0</small></button>`).join("")}</div>${fc.k === "vendorId" ? `<p class="help fc-vhint" id="fl-vhint">여러 업체를 고를 수 있어요. 고르지 않으면 <b>전체</b>(업체 미지정 포함)예요.</p>` : ""}</details>`;
   const s = openSheet({ title: "필터 · 건수 찾기", full: true, cls: "fl-sheet",
     html: `${presetRowHtml("panel")}<p class="fl-res" aria-live="polite">검색 결과 <b id="fl-n">0</b>건 <span class="ex-gone" id="fl-exn" hidden></span> <small class="help">항목 안에서는 ‘또는’, 항목끼리는 ‘그리고’</small></p>
       <div class="chips scroll" id="fl-active"></div>
@@ -1223,7 +1223,11 @@ function filterSheet({ prefill = false, focus = "" } = {}) {
     if (b.dataset.a === "reset") { for (const k of Object.keys(nf)) delete nf[k]; syncInputs(); refresh(); return; }
     if (b.dataset.a === "psave") { addExw(); if (await savePresetFlow(clean())) redrawPresets(); return; }
     addExw(); S.filter = clean(); LS.set("filter", S.filter); S.listLimit = 60; S.noRestore = true; await s.close();
-    if (location.hash.split("?")[0] !== "#/list") go("#/list"); else rerender();
+    /* 1.5.1: 하자위치에서 열면 그 화면에 머물러 위치별·업체별 토글로 결과를 봄. 다른 화면은 기존처럼 목록으로. */
+    const path = location.hash.split("?")[0];
+    if (path === "#/places" || path === "#/grid") rerender();
+    else if (path !== "#/list") go("#/list");
+    else rerender();
   }));
   /** 그 항목으로 펼치고 스크롤(제외 단어는 제외 칸) */
   function goFacet(k) { const t = k === "exw" ? $("#fl-ex", el) : $(`details.fc[data-fc="${k.replace(/^x_/, "")}"]`, el); if (!t) return; if (t.tagName === "DETAILS") t.open = true; t.scrollIntoView({ block: "start" }); t.classList.add("fc-focus"); setTimeout(() => t.classList.remove("fc-focus"), 1500); }
@@ -1512,27 +1516,38 @@ ROUTES.places = async () => {
   for (const nm of sitePlaces()) if (!sg.has(nm)) sg.set(nm, { name: nm, l: [] });
   const sites = [...sg.values()].map((g) => ({ name: g.name, o: g.l.filter(M.isOpen).length, a: g.l.length, pills: phPills(g.l), od: g.l.some((d) => M.isOverdue(d)) })).filter((g) => g.name !== "기타(위치 미지정)" || g.a).sort((a, b) => (a.name === "기타(위치 미지정)") - (b.name === "기타(위치 미지정)") || b.a - a.a || a.name.localeCompare(b.name, "ko"));
   const val = { d: (c) => cntOf(c.uo + c.co, c.ua + c.ca), s: (c) => cntOf(c.o, c.a) };
+  const plMode = LS.get("placesView", "loc") === "vendor" ? "vendor" : "loc";
+  const vGroups = M.vendorGroups(all, { vendorName: vName });
+
   const sc = relScale([...dongCards.map(val.d), ...sites.map(val.s)]);
   view().innerHTML = `<div class="places">
     <form class="search" id="pl-search" role="search"><input class="inp" id="pl-q" type="search" inputmode="search" placeholder="동·호·내용 검색" data-ph-ex="예: ${esc(exampleQuery(p))}" aria-label="검색"><button class="btn btn-primary" type="submit">검색</button><button class="btn" type="button" id="pl-filter">필터${nfN ? ` <b>${nfN}</b>` : ""}</button></form>
     ${presets().length ? presetRowHtml("home") : ""}
     ${nfN ? `<div class="pl-fon" id="pl-fon"><span>🔎 필터 ${nfN}개 적용 중 — 카드 숫자는 이 조건 기준이에요</span><button type="button" class="btn btn-sm" id="pl-fclr">해제</button></div>` : ""}
+    <div class="pl-modes" role="tablist" aria-label="하자위치 보기"><span class="pl-ml">보기</span>
+      <button type="button" class="vseg ${plMode === "loc" ? "on" : ""}" id="pl-view-loc" role="tab" aria-selected="${plMode === "loc"}">위치별</button>
+      <button type="button" class="vseg ${plMode === "vendor" ? "on" : ""}" id="pl-view-vendor" role="tab" aria-selected="${plMode === "vendor"}">업체별</button></div>
     <button type="button" class="btn btn-block pl-allbtn" id="pl-viewall">📋 전체 보기 <small>${n(all.length)}건 · 미조치 ${n(all.filter(M.isOpen).length)}</small> <span class="chev">›</span></button>
     <p class="help pl-sum">전체 ${n(all.length)}건 · 미조치 ${n(all.filter(M.isOpen).length)} · <span class="pl-ph">📷 사진 없음 ${n(phOf(all))}</span></p>
-    ${hvLegendHtml(sc, allBasis ? "전체 건수 기준" : "미조치 건수 기준")}
-    ${photoLegendHtml(phCounts(all))}
-    <h3 class="sec">동 <small>세대 미조치/전체 · 공용부</small></h3>
+    ${plMode === "vendor" ? "" : hvLegendHtml(sc, allBasis ? "전체 건수 기준" : "미조치 건수 기준")}
+    ${plMode === "vendor" ? "" : photoLegendHtml(phCounts(all))}
+    ${plMode === "vendor" ? `<h3 class="sec">업체별 <small>미조치 · 확인대기 · 완료${nfN ? " · 지금 필터 기준" : ""}</small></h3>
+    <div class="pl-vlist" id="pl-vlist">${vGroups.length ? vGroups.map((g) => `<button type="button" class="pl-vcard ${g.open ? "has" : g.wait ? "wait" : g.done ? "clean" : "zero"}" data-pv="${esc(g.vendorId || "_none")}" aria-label="${esc(g.name)} ${g.items.length}건, 미조치 ${g.open}, 확인대기 ${g.wait}, 완료 ${g.done}"><span class="pl-vn">${esc(g.name)}</span><b>${n(g.items.length)}<small>건</small></b><span class="pl-vcnts"><span class="c-open">미조치 ${n(g.open)}</span> · <span class="c-wait">확인대기 ${n(g.wait)}</span> · <span class="c-done">완료 ${n(g.done)}</span></span></button>`).join("") : `<div class="card empty-card pl-vempty"><p>이 조건에 맞는 하자가 없어요.</p></div>`}</div>` : `<h3 class="sec">동 <small>세대 미조치/전체 · 공용부</small></h3>
     <div class="pl-grid" id="pl-dongs">${dongCards.map((c) => `<div class="pl-card ${sc.cls(val.d(c))} ${c.uo || c.co ? "has" : "zero"} ${c.od ? "od" : ""}" data-pcard="${esc(c.name)}"><button type="button" class="pl-hit" data-pd="${esc(c.name)}" aria-label="${esc(c.name)} 세대별 보기 · 세대 미조치 ${c.uo}건 전체 ${c.ua}건 공용부 ${c.ca}건"><span class="pl-n">${esc(c.name)}</span><b style="--len:${String(n(c.uo)).length + String(n(c.ua)).length + 3}">${n(c.uo)}<small> / ${n(c.ua)}</small></b><span class="pl-s">세대 미조치/전체</span><span class="pl-c">공용부 ${n(c.co)}/${n(c.ca)}</span>${c.pills}</button><button type="button" class="pl-sub" data-pl="${esc(c.name)}" aria-label="${esc(c.name)} 하자 카드 목록">📋 하자 ${n(c.ua + c.ca)}건 목록</button></div>`).join("")}</div>
     <h3 class="sec">단지 공용 <small>지하주차장 · 부대시설 · 조경 · 외부 등</small></h3>
-    <div class="pl-grid" id="pl-sites">${sites.map((c) => `<button type="button" class="pl-card site ${sc.cls(val.s(c))} ${c.o ? "has" : "zero"} ${c.od ? "od" : ""}" data-ps="${esc(c.name)}" aria-label="${esc(c.name)} 미조치 ${c.o}건 전체 ${c.a}건"><span class="pl-n">${esc(c.name)}</span><b style="--len:${String(n(c.o)).length + String(n(c.a)).length + 3}">${n(c.o)}<small> / ${n(c.a)}</small></b><span class="pl-s">미조치/전체</span>${c.pills}</button>`).join("")}</div>
+    <div class="pl-grid" id="pl-sites">${sites.map((c) => `<button type="button" class="pl-card site ${sc.cls(val.s(c))} ${c.o ? "has" : "zero"} ${c.od ? "od" : ""}" data-ps="${esc(c.name)}" aria-label="${esc(c.name)} 미조치 ${c.o}건 전체 ${c.a}건"><span class="pl-n">${esc(c.name)}</span><b style="--len:${String(n(c.o)).length + String(n(c.a)).length + 3}">${n(c.o)}<small> / ${n(c.a)}</small></b><span class="pl-s">미조치/전체</span>${c.pills}</button>`).join("")}</div>`}
     ${verFoot()}</div>`;
   bindVerFoot(); bindPresetRow(view());
   const ex = $("#pl-q"); if (ex) { const e0 = ex.dataset.phEx, ph = ex.placeholder; ex.addEventListener("focus", () => { ex.placeholder = e0; }); ex.addEventListener("blur", () => { ex.placeholder = ph; }); }
   $("#pl-search").addEventListener("submit", (e) => { e.preventDefault(); quickSearch($("#pl-q").value); });
   $("#pl-filter").addEventListener("click", () => filterSheet({ prefill: true }));
   $("#pl-fclr")?.addEventListener("click", () => { S.filter = {}; LS.set("filter", {}); rerender(); });
+  const setPlMode = (m) => { LS.set("placesView", m); rerender(); };
+  $("#pl-view-loc").addEventListener("click", () => setPlMode("loc"));
+  $("#pl-view-vendor").addEventListener("click", () => setPlMode("vendor"));
   $("#pl-viewall").addEventListener("click", () => { S.filter = nf; LS.set("filter", nf); S.listMode = "list"; go("#/list"); });
   const goList = (f) => { S.filter = f; LS.set("filter", f); S.listMode = "list"; go("#/list"); };
+  $$("[data-pv]", view()).forEach((b) => b.addEventListener("click", () => goList({ ...nf, vendorId: [b.dataset.pv] })));
   $$("[data-pd]", view()).forEach((b) => b.addEventListener("click", () => go(`#/grid?dong=${encodeURIComponent(b.dataset.pd)}`)));
   $$("[data-pl]", view()).forEach((b) => b.addEventListener("click", () => { const c = dongCards.find((x) => x.name === b.dataset.pl); goList({ ...nf, dong: b.dataset.pl, ...(c?.uo || c?.co ? openBasis : {}) }); }));
   $$("[data-ps]", view()).forEach((b) => b.addEventListener("click", () => { const g = sites.find((x) => x.name === b.dataset.ps); goList({ ...nf, dong: ["_none"], common: b.dataset.ps === "기타(위치 미지정)" ? "_any" : b.dataset.ps, ...(g?.o ? openBasis : {}) }); }));
