@@ -911,3 +911,26 @@ form.search .tg-fav{padding:6px 8px;font-size:12px;min-height:36px;min-width:36p
   .tg-fav-list .fav-short{display:inline}
   .tg-fav-list .fav-lbl{display:none}
 }
+
+/* ---------- 1.6.0 개편: 공통 필터 · 목록 · 상태 두 단계 ---------- */
+.facet-bar{display:flex;gap:8px;align-items:center;padding:8px 16px 4px;flex-wrap:nowrap}
+.facet-btn{flex:1;min-width:0;height:40px;border:1px solid var(--line,#d1d5db);background:#fff;border-radius:10px;font-weight:650;font-size:13px;padding:0 10px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.facet-btn.on{border-color:var(--brand,#147a6b);background:#f0faf7;color:#0f3d38}
+.facet-bar .tg-done{flex:none;white-space:nowrap}
+.facet-sum{display:flex;align-items:center;gap:8px;margin:4px 16px 8px;padding:8px 12px;background:#f3f4f6;border-radius:10px;font-size:13px}
+.facet-sum span{flex:1;min-width:0}
+.cw-mini{display:block;width:calc(100% - 32px);margin:10px 16px 0;padding:8px 12px;border:0;border-radius:10px;background:#fef3c7;color:#92400e;font-weight:700;text-align:left}
+.d-focus{font-size:11px;font-weight:700;color:#0f3d38;background:#e8f5f2;border-radius:999px;padding:2px 8px;margin-right:6px;white-space:nowrap}
+.pill.s-open{background:#f3f4f6;color:#374151}
+.pill.s-done{background:#d1fae5;color:#065f46}
+.pill.wait-mini{background:#fef3c7;color:#92400e;margin-left:4px;font-size:11px}
+.st-adv{margin:8px 16px 12px;border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:8px 12px;background:#fafafa}
+.st-adv summary{cursor:pointer;font-weight:650;color:#4b5563}
+.dcard .ddone.is-done{background:#fff;border:1px solid var(--line,#d1d5db);color:#374151}
+.set-card{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:calc(100% - 32px);margin:8px 16px;padding:14px 16px;border:1px solid var(--line,#e5e7eb);border-radius:14px;background:#fff;text-align:left}
+.set-card b{font-size:16px}
+.set-card span{font-size:13px;color:#6b7280}
+.sets-hub .help{margin:12px 16px}
+.tab-bar{justify-content:space-around}
+.tab-item.tab-new .plus{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--brand,#147a6b);color:#fff;font-size:24px;line-height:1}
+.dd-ft{padding:8px 12px 12px;display:flex;justify-content:flex-end}

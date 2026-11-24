@@ -3,26 +3,26 @@ export const ROLE_IDS = ["manager", "vendor", "auditor", "resident"];
 export const ROLES = {
   manager: {
     id: "manager", ico: "🏗", name: "시공관리자", sub: "현장 전체 기능 · 등록·업체·보내기·도면까지",
-    tabs: ["home", "places", "new", "photos", "more"], tabLabel: {}, tabHref: {},
+    tabs: ["places", "list", "new", "sets", "more"], tabLabel: {}, tabHref: {},
     more: null, // null = 전부
     home: ["search", "stat", "kpimine", "presets", "new", "places", "find", "send", "sendph", "recent"],
   },
   vendor: {
     id: "vendor", ico: "🛠", name: "협력업체", sub: "내 하자 확인 · 조치 후 사진 올리기",
-    tabs: ["home", "places", "photos", "more"], tabLabel: { places: "내 하자" }, tabHref: { places: "#/list" },
-    more: ["wo", "export", "settings", "help", "role", "simple"],
+    tabs: ["places", "list", "sets", "more"], tabLabel: { list: "내 하자" }, tabHref: {},
+    more: ["wo", "export", "settings", "help", "role", "simple", "photos", "home"],
     home: ["stat", "kpimine", "afterphoto", "recent"],
   },
   auditor: {
     id: "auditor", ico: "🔍", name: "감리·발주처", sub: "현황·기한초과 확인 · 업체별 조치 점검",
-    tabs: ["home", "places", "photos", "more"], tabLabel: {}, tabHref: {},
-    more: ["vendors", "places", "dash", "wo", "export", "settings", "help", "role", "simple"],
+    tabs: ["places", "list", "sets", "more"], tabLabel: {}, tabHref: {},
+    more: ["vendors", "places", "dash", "wo", "export", "settings", "help", "role", "simple", "photos", "home"],
     home: ["search", "stat", "kpimine", "places", "find", "recent"],
   },
   resident: {
     id: "resident", ico: "🏠", name: "입주자 점검(개인)", sub: "내 집 하나 · 사진·위치·내용만 등록",
-    tabs: ["home", "new", "places", "more"], tabLabel: { places: "목록" }, tabHref: { places: "#/list" },
-    more: ["export", "settings", "help", "role", "simple"],
+    tabs: ["list", "new", "sets", "more"], tabLabel: { list: "내 하자" }, tabHref: {},
+    more: ["export", "settings", "help", "role", "simple", "photos", "home"],
     home: ["new", "stat", "exportbtn", "recent"],
   },
 };

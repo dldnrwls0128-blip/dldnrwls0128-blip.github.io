@@ -66,6 +66,13 @@ export const STATUS_CLS = { 접수: "s0", 업체전달: "s1", 조치중: "s2", �
 export const NEXT = { 접수: "업체전달", 업체전달: "조치중", 조치중: "조치완료", 재접수: "업체전달", 조치완료: "확인완료" };
 
 export const isOpen = (d) => OPEN_STATUSES.has(d.status);
+/** 1.6.0 화면용 두 단계. 저장·동기화 값은 STATUSES 그대로. */
+export const UI_OPEN = "미조치";
+export const UI_DONE = "조치";
+export const uiStatusOf = (status) => (OPEN_STATUSES.has(status) ? UI_OPEN : UI_DONE);
+export const uiStatus = (d) => uiStatusOf(d?.status);
+/** 한 번 탭: 미조치 → 조치완료, 조치 → 재접수(데이터 호환). */
+export const toggleUiTarget = (d) => (isOpen(d) ? "조치완료" : "재접수");
 export const isOverdue = (d, today = todayStr()) => !!d.due && d.due < today && d.status !== "조치완료" && d.status !== "확인완료";
 export const ageDays = (d, now = Date.now()) => Math.max(0, Math.floor((now - new Date(d.createdAt).getTime()) / 864e5));
 

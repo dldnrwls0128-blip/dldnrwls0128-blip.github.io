@@ -9,18 +9,16 @@ export const simpleOn = (get) => simplePref(get) === true;
 export const defaultSimpleFor = (role, first) => !!(first && (role === "resident" || role === "vendor"));
 
 export function simpleTabs(roleId) {
-  const base = roleOf(roleId).tabs.filter((t) => t !== "photos");
+  const base = roleOf(roleId).tabs.filter((t) => t !== "photos" && t !== "sets");
+  // 간단 모드: 위치·하자·기록·더보기. 목록은 더보기에서.
+  if (!base.includes("list") && roleId !== "resident") base.splice(Math.min(1, base.length), 0, "list");
   return base;
 }
 export function simpleTabLabel(roleId) {
-  const o = { ...(roleOf(roleId).tabLabel || {}) };
-  o.places = "목록";
-  return o;
+  return { ...(roleOf(roleId).tabLabel || {}) };
 }
 export function simpleTabHref(roleId) {
-  const o = { ...(roleOf(roleId).tabHref || {}) };
-  o.places = "#/list";
-  return o;
+  return { ...(roleOf(roleId).tabHref || {}) };
 }
 
 /** 마법사 · 입주자 · 협력업체 화면, 또는 간단 모드일 때 쉬운 말. 시공관리자 기본 화면은 전문 용어 유지. */
