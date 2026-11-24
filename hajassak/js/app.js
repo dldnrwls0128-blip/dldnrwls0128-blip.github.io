@@ -355,13 +355,33 @@ ROUTES.guide = async (qq) => {
   }));
 };
 
+/* ---------- 1.5.2 개인 즐겨찾기: 이 기기 localStorage만, 하자 문서·동기화에 안 넣음 ---------- */
+const favStoreKey = () => "favIds:" + (S.pid || "");
+const favList = () => M.parseFavIds(LS.get(favStoreKey(), []));
+const favSet = () => new Set(favList());
+const favOnlyOn = () => !!LS.get("favOnly", false);
+const setFavOnly = (on) => { LS.set("favOnly", !!on); };
+const isFav = (id) => favSet().has(id);
+function toggleFav(id) {
+  const next = M.toggleFavId(favList(), id);
+  LS.set(favStoreKey(), next);
+  return next.includes(id);
+}
+function favBannerHtml(shown) {
+  if (!favOnlyOn()) return "";
+  const tot = favSet().size;
+  const hint = !tot ? "하자 카드의 ⭐를 누르면 즐겨찾기에 넣어요. 이 기기에만 저장돼요." : "";
+  return `<div class="fav-ban" id="fav-ban"><span>⭐ <b>즐겨찾기만</b> · ${n(shown)}건${tot && shown !== tot ? ` <small>(즐겨찾기 ${n(tot)}건 중)</small>` : ""}</span>${hint ? `<p class="help fav-hint">${hint}</p>` : ""}</div>`;
+}
+const favToggleBtn = (id, shown, { short = false } = {}) => `<button type="button" class="btn btn-sm tg-fav ${short ? "tg-fav-list" : ""} ${favOnlyOn() ? "on" : ""}" id="${id}" aria-pressed="${favOnlyOn()}" aria-label="즐겨찾기만" title="별표 친 하자만 봐요. 이 기기 즐겨찾기예요(팀과 동기화하지 않아요).">${favOnlyOn() ? "✓ " : ""}⭐<span class="fav-short">만</span><span class="fav-lbl"> 즐겨찾기만</span>${favOnlyOn() ? ` ${n(shown)}` : ""}</button>`;
+
 /* ---------- 카드 ---------- */
 function defectCard(d, { sel = false, photo = false, cam = true } = {}) {
   const pc = photoCount(d); const od = M.isOverdue(d); const on = sel && S.select.has(d.id);
   return `<article class="dcard ${phState(d)} ${od ? "overdue" : ""} ${sel ? "selectable" : ""} ${on ? "checked" : ""}" data-id="${d.id}" tabindex="0">
     ${sel ? `<label class="dchk" title="선택 (Shift+클릭: 범위 선택)"><input type="checkbox" class="dsel" data-sel="${d.id}" aria-label="${esc(M.locText(d) || "하자")} ${esc(M.tradeText(d))} 선택" ${on ? "checked" : ""}></label>` : ""}
     ${photo ? phBlock(d) : ""}
-    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${d.waitReport && d.status === "조치완료" ? `<span class="pill s3 wait">확인 대기</span>` : pill(d.status)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기(복사해서 등록 등)" title="복사해서 등록 · 수정 …">⋯</button></div>
+    <div class="dc-top"><span class="dc-loc">${esc(M.locText(d) || "위치 미지정")}</span><button type="button" class="dfav ${isFav(d.id) ? "on" : ""}" data-fav="${d.id}" aria-pressed="${isFav(d.id)}" aria-label="${isFav(d.id) ? "즐겨찾기 해제" : "즐겨찾기"}" title="즐겨찾기(이 기기에만)">${isFav(d.id) ? "⭐" : "☆"}</button><button type="button" class="dtag ${d.tabs?.length ? "on" : ""}" data-tag="${d.id}" aria-label="관리 탭${d.tabs?.length ? ` (${d.tabs.length}개)` : ""}" title="관리 탭">${d.tabs?.length ? "★" : "☆"}</button>${d.waitReport && d.status === "조치완료" ? `<span class="pill s3 wait">확인 대기</span>` : pill(d.status)}<button type="button" class="dmore" data-more="${d.id}" aria-label="더 보기(복사해서 등록 등)" title="복사해서 등록 · 수정 …">⋯</button></div>
     <div class="dc-mid">${sevBadge(d)}<b>${esc(M.tradeText(d) || "공종 미지정")}</b>${d.type ? ` <span class="tbadge">${esc(d.type)}</span>` : ""} ${esc(d.content || "")}</div>
     <div class="dc-bot"><span>${esc(vName(d) || "업체 미지정")}</span>${M.hasSteps(d) ? `<span class="stp-b" title="${esc(M.stepsText(d))}">🔗 ${M.stepProgress(d)}${M.curStep(d) ? ` · ${esc(M.curStep(d).trade)}` : ""}</span>` : ""}
       ${d.due ? `<span class="${od ? "od" : ""}">기한 ${shortDate(d.due)}${od ? " 초과" : ""}</span>` : ""}
@@ -497,6 +517,17 @@ function bindCards(root = view()) {
       });
       chk.addEventListener("keydown", (e) => e.stopPropagation());
     }
+    $(".dfav", c)?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = c.dataset.id; const on = toggleFav(id);
+      e.currentTarget.classList.toggle("on", on);
+      e.currentTarget.textContent = on ? "⭐" : "☆";
+      e.currentTarget.setAttribute("aria-pressed", String(on));
+      e.currentTarget.setAttribute("aria-label", on ? "즐겨찾기 해제" : "즐겨찾기");
+      toast(on ? "즐겨찾기에 넣었어요(이 기기만)" : "즐겨찾기를 해제했어요");
+      if (favOnlyOn()) rerender();
+    });
+    $(".dfav", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     $(".dtag", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) tabSheet([d], () => rerender()); });
     $(".dtag", c)?.addEventListener("keydown", (e) => e.stopPropagation());
     $(".dmore", c)?.addEventListener("click", (e) => { e.stopPropagation(); const d = S.defects.find((x) => x.id === c.dataset.id); if (d) cardMenu(d); });
@@ -904,7 +935,8 @@ ROUTES.list = async () => {
   setHeader(isSimple() ? "목록" : "하자위치", { backBtn: navDepth() > 1 });
   /* 1.2.8 관리 탭: [전체] [중점관리 n] … — 고른 탭 안에서 필터·정렬·묶음·보내기 그대로 */
   const allP = PD(); const tabs = TABS(); let ltab = LS.get("listTab", ""); if (ltab && !tabs.some((t) => t.id === ltab)) { ltab = ""; LS.set("listTab", ""); }
-  const f = S.filter; const all = ltab ? allP.filter((d) => M.inTab(d, ltab)) : allP;
+  const f = S.filter; const favOnly = favOnlyOn(); const scoped = ltab ? allP.filter((d) => M.inTab(d, ltab)) : allP;
+  const all = favOnly ? M.onlyFavs(scoped, favSet()) : scoped;
   /* 1.2.5 정렬(기억) — 위치·코어 묶음에서 ‘기본’이면 안에서 층·호 순 */
   const grp = LS.get("listGroup", ""); const srt = { mode: "", dir: "", ...LS.get("listSort", {}) };
   const effMode = srt.mode || (grp === "core" ? "core" : grp === "loc" ? "loc" : ""); const effDir = srt.dir || M.sortDefaultDir(effMode);
@@ -927,7 +959,7 @@ ROUTES.list = async () => {
   view().innerHTML = `${bare ? '<i class="bare-mark" hidden></i>' : ""}
     <div class="ltabs" id="ltabs" role="tablist" aria-label="관리 탭"><button type="button" class="ltab ${ltab ? "" : "on"}" role="tab" aria-selected="${!ltab}" data-ltab="">전체 <small>${n(allP.length)}</small></button>${tabs.map((t) => `<button type="button" class="ltab ${ltab === t.id ? "on" : ""}" role="tab" aria-selected="${ltab === t.id}" data-ltab="${esc(t.id)}">★ ${esc(t.name)} <small>${n(tabCount(t.id))}</small></button>`).join("")}<button type="button" class="ltab ltab-cfg" id="ltab-cfg" aria-label="관리 탭 설정" title="탭 만들기·이름·순서">⚙</button></div>
     <form class="search ls-form" id="lsearch" role="search" autocomplete="off"><input class="inp" id="ls" type="search" value="${esc(f.text || "")}" placeholder="동·호·내용 검색" data-ph-ex="예: 312-802 · 지하주차장" aria-label="목록 검색(위치도 돼요)" aria-autocomplete="list" aria-controls="ls-sugg"><div class="ls-sugg" id="ls-sugg" role="listbox" hidden></div>
-      <button type="button" class="btn" id="btn-filter">필터${nUi ? ` <b class="badge">${nUi}</b>` : ""}</button></form>
+      <button type="button" class="btn" id="btn-filter">필터${nUi ? ` <b class="badge">${nUi}</b>` : ""}</button>${favToggleBtn("btn-favonly", list.length, { short: true })}</form>
     ${presetRowHtml("list")}
     ${chips ? `<div class="chips scroll">${chips}<button type="button" class="chip" data-rm="_all">모두 지우기</button></div>` : ""}
     <div class="loc-row" id="loc-row">
@@ -937,13 +969,14 @@ ROUTES.list = async () => {
       ${lb.room3 ? `<button type="button" class="dd-btn ${f.room ? "on" : ""}" id="dd-room" aria-haspopup="listbox"><small>실</small><b>${esc(f.room || "전체")}</b></button>` : ""}
       <button type="button" class="dd-btn ${fTypes.length ? "on" : ""}" id="dd-type" aria-haspopup="listbox"><small>유형</small><b>${esc(typeLabel)}</b></button>
     </div>
+    ${favBannerHtml(list.length)}
     <div class="list-ctl" id="list-ctl"><button type="button" class="btn btn-sm tg-done ${vOpen ? "on" : ""}" id="btn-hidedone" aria-pressed="${vOpen}" title="조치완료·확인완료 건은 숨기고 미조치만 봐요">${vOpen ? "✓ 미조치만" : "미조치만 보기"}</button>${noPhN || f.photo ? `<button type="button" class="btn btn-sm tg-done tg-photo ${f.photo ? "on" : ""}" id="btn-nophoto" aria-pressed="${!!f.photo}" title="조치 전 사진이 없는 하자만 봐요">${f.photo ? "✓ 📷 사진 없음" : "📷 사진 없음"} ${n(noPhN)}</button>` : ""}<select class="inp inp-sm" id="lgroup" aria-label="묶어 보기">${[["", "묶음 없음"], ["type", "유형별"], ["vendor", "업체별"], ["tv", "공종·업체별"], ["loc", "위치(동)별"], ["core", "코어별"]].map(([v, t]) => `<option value="${v}" ${grp === v ? "selected" : ""}>${t}</option>`).join("")}</select><select class="inp inp-sm" id="lsort" aria-label="정렬">${M.SORTS.map(([v, t]) => `<option value="${v}" ${srt.mode === v ? "selected" : ""}>↕ ${t}</option>`).join("")}</select>${effMode ? `<button type="button" class="btn btn-sm" id="lsdir" aria-label="정렬 방향" data-dir="${effDir}">${effDir === "desc" ? "↓ 내림" : "↑ 오름"}</button>` : ""}</div>
-    <div class="list-hd"><b class="res-n" id="res-n">${nUi ? "검색 결과 " : vOpen ? "미조치 " : ""}${n(list.length)}건</b>${M.hasEx(f) ? `<span class="ex-gone" id="res-ex">제외 −${n(exGone)}</span>` : ""}<button type="button" class="chip chip-od ${f.overdue ? "on" : ""}" id="btn-od" aria-pressed="${!!f.overdue}" aria-label="기한초과 ${n(odN)}건만 보기" title="기한초과 ${n(odN)}건">⏰ ${n(odN)}</button>
+    <div class="list-hd"><b class="res-n" id="res-n">${favOnly ? "즐겨찾기 " : nUi ? "검색 결과 " : vOpen ? "미조치 " : ""}${n(list.length)}건</b>${M.hasEx(f) ? `<span class="ex-gone" id="res-ex">제외 −${n(exGone)}</span>` : ""}<button type="button" class="chip chip-od ${f.overdue ? "on" : ""}" id="btn-od" aria-pressed="${!!f.overdue}" aria-label="기한초과 ${n(odN)}건만 보기" title="기한초과 ${n(odN)}건">⏰ ${n(odN)}</button>
       <span class="sp"></span><button type="button" class="btn btn-sm" id="btn-listmore" aria-expanded="${!!window.__listMenuOpen}" aria-controls="list-menu" aria-label="집계·내보내기">⋯</button><button type="button" class="btn btn-sm btn-primary" id="btn-sendlist">요청서 보내기</button></div>
     ${list.length ? photoLegendHtml(null, { short: true, extra: `<span class="sp"></span><button type="button" class="btn btn-sm" id="btn-sendphotos" title="이 결과의 사진을 띠를 붙여 여러 장 보내기" aria-label="사진으로 보내기">📷 사진으로 보내기</button>` }) : ""}
     <div class="list-menu" id="list-menu" ${window.__listMenuOpen ? "" : "hidden"}><button type="button" class="btn btn-sm" id="btn-agg">📊 집계</button><button type="button" class="btn btn-sm" id="btn-export">내보내기(엑셀·CSV)</button><button type="button" class="btn btn-sm" id="btn-shoot">📷 사진 없는 건 연속 촬영</button><button type="button" class="btn btn-sm" id="btn-places">▦ 전체 위치 보기</button></div>
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
-    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : bare ? `<div class="card empty-card" id="list-empty"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-primary" id="empty-new">＋ 첫 하자 등록</button></div>` : `<div class="card empty-card" id="list-empty"><p>조건에 맞는 하자가 없어요.</p>${nUi || f.hideDone || ltab ? `<button type="button" class="btn" id="empty-clear">조건 모두 지우기</button>` : ""}</div>`}</div>
+    <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : bare ? `<div class="card empty-card" id="list-empty"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-primary" id="empty-new">＋ 첫 하자 등록</button></div>` : `<div class="card empty-card" id="list-empty"><p>${favOnly && !favSet().size ? "즐겨찾은 하자가 없어요. 하자 카드의 ⭐를 누르면 즐겨찾기에 넣어요." : favOnly ? "이 조건에 맞는 즐겨찾기가 없어요." : "조건에 맞는 하자가 없어요."}</p>${favOnly ? `<button type="button" class="btn" id="empty-favoff">즐겨찾기만 끄기</button>` : ""}${nUi || f.hideDone || ltab ? `<button type="button" class="btn" id="empty-clear">조건 모두 지우기</button>` : ""}</div>`}</div>
     ${(grp ? S.lgTrunc : list.length > S.listLimit) ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(grp ? S.lgHid : list.length - S.listLimit)}건 남음)</button>` : ""}
     ${selBarHtml({ all: true, core: true })}`;
   bindCards(); syncChecks(); bindSelBar(list);
@@ -1030,6 +1063,8 @@ ROUTES.list = async () => {
   $("#btn-nophoto")?.addEventListener("click", () => { const nf = { ...S.filter }; if (nf.photo) delete nf.photo; else nf.photo = "none"; S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
   $("#btn-places")?.addEventListener("click", () => { listMore(false); go("#/places"); });
   $("#btn-shoot")?.addEventListener("click", () => { listMore(false); const base = M.applyFilter(all, M.stripEx(f), { vendorName: vName }); shootSheet({ items: base.length ? base : allP, kind: "before" }); });
+  $("#btn-favonly")?.addEventListener("click", () => { setFavOnly(!favOnlyOn()); S.listLimit = 60; S.noRestore = true; rerender(); });
+  $("#empty-favoff")?.addEventListener("click", () => { setFavOnly(false); rerender(); });
   $("#btn-hidedone").addEventListener("click", () => { const nf = { ...S.filter }; if (M.viewOpen(nf)) { delete nf.hideDone; if (M.isOpenOnlyStatus(nf)) delete nf.status; } else { nf.hideDone = true; } S.filter = nf; LS.set("filter", nf); S.listLimit = 60; S.noRestore = true; rerender(); });
   $("#btn-agg").addEventListener("click", () => { listMore(false); aggSheet(list); });
   if (S.openFilter) { S.openFilter = false; setTimeout(() => filterSheet(), 50); }
@@ -1505,7 +1540,9 @@ ROUTES.places = async () => {
   setTab("places"); setHeader("하자위치", { backBtn: false });
   const p = P(); const allP = PD();
   if (!p.dongs.length && !sitePlaces().length) { view().innerHTML = `<div class="card empty-card"><p>동이 없어요. 설정 &gt; 현장 설정에서 동을 추가하세요.</p><button class="btn btn-primary" type="button" onclick="location.hash='#/project'">현장 설정</button></div>`; return; }
-  const nf = stripLoc(S.filter); const nfN = M.filterCount(nf); const all = nfN ? M.applyFilter(allP, nf, { vendorName: vName }) : allP;
+  const nf = stripLoc(S.filter); const nfN = M.filterCount(nf); const favOnly = favOnlyOn();
+  const all0 = nfN ? M.applyFilter(allP, nf, { vendorName: vName }) : allP;
+  const all = favOnly ? M.onlyFavs(all0, favSet()) : all0;
   const th = M.heatThresholds(p, allP); const allBasis = nf.status && nf.status !== "_open" ? true : th.basis === "all" && !nfN;
   const cntOf = (o, a) => (allBasis ? a : o);
   const openBasis = nf.status ? {} : { status: "_open" };
@@ -1526,7 +1563,9 @@ ROUTES.places = async () => {
     ${nfN ? `<div class="pl-fon" id="pl-fon"><span>🔎 필터 ${nfN}개 적용 중 — 카드 숫자는 이 조건 기준이에요</span><button type="button" class="btn btn-sm" id="pl-fclr">해제</button></div>` : ""}
     <div class="pl-modes" role="tablist" aria-label="하자위치 보기"><span class="pl-ml">보기</span>
       <button type="button" class="vseg ${plMode === "loc" ? "on" : ""}" id="pl-view-loc" role="tab" aria-selected="${plMode === "loc"}">위치별</button>
-      <button type="button" class="vseg ${plMode === "vendor" ? "on" : ""}" id="pl-view-vendor" role="tab" aria-selected="${plMode === "vendor"}">업체별</button></div>
+      <button type="button" class="vseg ${plMode === "vendor" ? "on" : ""}" id="pl-view-vendor" role="tab" aria-selected="${plMode === "vendor"}">업체별</button>
+      ${favToggleBtn("pl-fav", all.length)}</div>
+    ${favBannerHtml(all.length)}
     <button type="button" class="btn btn-block pl-allbtn" id="pl-viewall">📋 전체 보기 <small>${n(all.length)}건 · 미조치 ${n(all.filter(M.isOpen).length)}</small> <span class="chev">›</span></button>
     <p class="help pl-sum">전체 ${n(all.length)}건 · 미조치 ${n(all.filter(M.isOpen).length)} · <span class="pl-ph">📷 사진 없음 ${n(phOf(all))}</span></p>
     ${plMode === "vendor" ? "" : hvLegendHtml(sc, allBasis ? "전체 건수 기준" : "미조치 건수 기준")}
@@ -1545,6 +1584,7 @@ ROUTES.places = async () => {
   const setPlMode = (m) => { LS.set("placesView", m); rerender(); };
   $("#pl-view-loc").addEventListener("click", () => setPlMode("loc"));
   $("#pl-view-vendor").addEventListener("click", () => setPlMode("vendor"));
+  $("#pl-fav")?.addEventListener("click", () => { setFavOnly(!favOnlyOn()); rerender(); });
   $("#pl-viewall").addEventListener("click", () => { S.filter = nf; LS.set("filter", nf); S.listMode = "list"; go("#/list"); });
   const goList = (f) => { S.filter = f; LS.set("filter", f); S.listMode = "list"; go("#/list"); };
   $$("[data-pv]", view()).forEach((b) => b.addEventListener("click", () => goList({ ...nf, vendorId: [b.dataset.pv] })));
@@ -1727,9 +1767,10 @@ async function copyToNewSheet(d) {
 }
 /** 카드 ⋯ / 길게 누르기 메뉴 */
 async function cardMenu(d) {
-  const k = await choose(`${M.locText(d) || "하자"} · ${M.tradeText(d) || ""}`, [{ icon: "📋", label: "복사해서 등록", sub: "같은 내용으로 다른 위치에", value: "copy" }, { icon: "✏️", label: "수정", value: "edit" }, { icon: "★", label: "관리 탭", value: "tab" }, { icon: "🧾", label: "요청서 만들기", value: "req" }]);
+  const k = await choose(`${M.locText(d) || "하자"} · ${M.tradeText(d) || ""}`, [{ icon: "📋", label: "복사해서 등록", sub: "같은 내용으로 다른 위치에", value: "copy" }, { icon: "✏️", label: "수정", value: "edit" }, { icon: isFav(d.id) ? "⭐" : "☆", label: isFav(d.id) ? "즐겨찾기 해제" : "즐겨찾기", sub: "이 기기에만 저장", value: "fav" }, { icon: "★", label: "관리 탭", value: "tab" }, { icon: "🧾", label: "요청서 만들기", value: "req" }]);
   if (k === "copy") return copyToNewSheet(d);
   if (k === "edit") { startDraft({}, d); return go(`#/edit?id=${d.id}`); }
+  if (k === "fav") { const on = toggleFav(d.id); toast(on ? "즐겨찾기에 넣었어요(이 기기만)" : "즐겨찾기를 해제했어요"); return rerender(); }
   if (k === "tab") return tabSheet([d], () => rerender());
   if (k === "req") return requestImageFor([d], V(d.vendorId) || null);
 }
@@ -2381,6 +2422,7 @@ ROUTES.item = async (qq) => {
       <button type="button" class="btn btn-kakao" id="btn-kakao">카톡 문구 보내기</button></div>` : `<button type="button" class="btn btn-block" id="btn-kakao">카톡·공유로 문구 보내기</button>`}
     ${S.justSaved === d.id ? `<button type="button" class="btn btn-primary btn-block" id="btn-again">➕ 같은 내용으로 하나 더 <small>위치만 바꿔서</small></button>` : ""}
     <div class="btn-row2"><button type="button" class="btn btn-req" id="btn-move">🔁 업체 이관</button><button type="button" class="btn btn-req" id="btn-copy">📋 복사해서 등록</button></div>
+    <button type="button" class="btn btn-block btn-fav ${isFav(d.id) ? "on" : ""}" id="btn-fav">${isFav(d.id) ? "⭐ 즐겨찾기 해제" : "☆ 즐겨찾기"} <small>이 기기에만</small></button>
     <button type="button" class="btn btn-block btn-tags ${d.tabs?.length ? "on" : ""}" id="btn-tags">${d.tabs?.length ? "★" : "☆"} 관리 탭${(() => { const nm = TABS().filter((t) => M.inTab(d, t.id)).map((t) => t.name); return nm.length ? ` · ${esc(nm.join(", "))}` : " 넣기"; })()}</button>
     ${stepsHtml(d, photos)}
     <section class="card ${before.length ? "" : "nophoto-card"}"><h3>조치 전 사진 <small>${before.length}</small>${before.length ? "" : ' <span class="nophoto-b">사진 없음</span>'}</h3>${before.length ? "" : '<p class="help nophoto-help">📷 조치 전 사진이 없어요. 찍어 두면 요청서·‘사진으로 보내기’에 위치·공종·시각 띠가 붙어서 나가요.</p>'}<div class="photos">${before.map((ph) => `<div class="ph" data-ph="${ph.id}"><button type="button" class="ph-open" data-ph="${ph.id}" aria-label="조치 전 사진 크게 보기"><img src="${purl(ph)}" alt="조치 전"></button>${isViewerNow() ? "" : `<button type="button" class="ph-x" data-rmph="${ph.id}" aria-label="사진 삭제">🗑</button>`}</div>`).join("")}
@@ -2403,6 +2445,7 @@ ROUTES.item = async (qq) => {
   $("#btn-reqimg").addEventListener("click", () => requestImageFor([d], v || null));
   $("#btn-copy").addEventListener("click", () => copyToNewSheet(d));
   $("#btn-again")?.addEventListener("click", () => { S.justSaved = null; startCopyDraft(d, { keepLoc: true, focusLoc: true }); go("#/new"); });
+  $("#btn-fav")?.addEventListener("click", () => { const on = toggleFav(d.id); toast(on ? "즐겨찾기에 넣었어요(이 기기만)" : "즐겨찾기를 해제했어요"); rerender(); });
   $("#btn-tags").addEventListener("click", () => tabSheet([d], () => rerender()));
   $("#btn-move").addEventListener("click", () => transferSheet([d])); $("#btn-move-kv").addEventListener("click", () => transferSheet([d]));
   $("[data-sms]", view())?.addEventListener("click", () => setTimeout(() => markSent([d], "문자"), 300));

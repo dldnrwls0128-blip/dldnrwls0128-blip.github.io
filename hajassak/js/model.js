@@ -275,6 +275,19 @@ export function vendorGroups(list, { vendorName = () => "" } = {}) {
   for (const g of m.values()) if (g.vendorId && !g.name) g.name = "업체";
   return [...m.values()].sort((a, b) => (!a.vendorId) - (!b.vendorId) || (b.open + b.wait) - (a.open + a.wait) || b.items.length - a.items.length || a.name.localeCompare(b.name, "ko"));
 }
+/** 1.5.2 개인 즐겨찾기(기기만, 동기화 안 함) */
+export const parseFavIds = (raw) => [...new Set((Array.isArray(raw) ? raw : []).map((x) => String(x || "")).filter(Boolean))];
+export const isFavId = (id, ids) => !!(ids && (ids.has ? ids.has(id) : ids.includes(id)));
+export function toggleFavId(ids, id) {
+  const s = new Set(parseFavIds(ids instanceof Set ? [...ids] : ids));
+  if (!id) return [...s];
+  if (s.has(id)) s.delete(id); else s.add(String(id));
+  return [...s];
+}
+export function onlyFavs(list, ids) {
+  const s = ids instanceof Set ? ids : new Set(parseFavIds(ids));
+  return (list || []).filter((d) => s.has(d.id));
+}
 export function countBy(list, key) {
   const m = new Map();
   for (const d of list) { const k = typeof key === "function" ? key(d) : d[key]; m.set(k, (m.get(k) || 0) + 1); }

@@ -889,3 +889,25 @@ body[data-simple="1"] #ltabs,body[data-simple="1"] #ltab-cfg,body[data-simple="1
 .pl-vcard .c-open{color:#b45309;font-weight:700}.pl-vcard .c-wait{color:#b45309;font-weight:700}.pl-vcard .c-done{color:var(--ok);font-weight:700}
 .pl-vcard.has{border-left-color:#f59e0b}.pl-vcard.wait{border-left-color:#f59e0b}.pl-vcard.clean{border-left-color:var(--ok)}.pl-vcard.zero{border-left-color:var(--line)}
 .pl-vempty{padding:20px;text-align:center;color:var(--sub)}
+
+/* 1.5.2 개인 즐겨찾기(기기만) */
+.dfav{flex:none;border:0;background:transparent;font-size:20px;line-height:1;color:var(--sub);cursor:pointer;min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:0;margin:-10px 0 -10px auto}
+.dfav.on{color:#e6a700;filter:none}
+.dc-top .dfav + .dtag{margin-left:0}
+.tg-fav.on{background:#fff8e1;border-color:#f6d36a;color:#92400e;font-weight:700}
+.fav-ban{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 6px;padding:6px 10px;border-radius:10px;background:#fff8e1;border:1px solid #f6d36a;font-size:13px;color:#78350f}
+.fav-ban b{font-weight:800}
+.fav-ban .fav-hint{flex-basis:100%;margin:0;color:#92400e}
+.btn-fav.on{background:#fff8e1;border-color:#f6d36a;color:#92400e;font-weight:700}
+.pl-modes .tg-fav{flex:none}
+
+
+form.search .tg-fav{padding:6px 8px;font-size:12px;min-height:36px;min-width:36px;white-space:nowrap;flex:none}
+
+.tg-fav .fav-short{display:none}
+.tg-fav-list .fav-short{display:none}
+.tg-fav-list .fav-lbl{display:inline}
+@media (max-width: 400px){
+  .tg-fav-list .fav-short{display:inline}
+  .tg-fav-list .fav-lbl{display:none}
+}
