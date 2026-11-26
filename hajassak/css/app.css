@@ -934,6 +934,11 @@ form.search .tg-fav{padding:6px 8px;font-size:12px;min-height:36px;min-width:36p
 .set-card-more{flex:none;width:44px;height:44px;min-width:44px;min-height:44px;margin:0 6px 0 0;border:0;background:rgba(17,64,59,.12);color:#11403b;font-size:22px;font-weight:800;line-height:1;cursor:pointer;border-radius:10px}
 .set-card-more:hover,.set-card-more:active{background:rgba(17,64,59,.2);color:#0a2e2b}
 .set-card-more:focus-visible,.set-card-main:focus-visible{outline:2px solid var(--brand,#147a6b);outline-offset:-2px}
+.set-card-edit{flex-wrap:wrap;align-items:flex-start}
+.set-card-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%;padding:0 12px 12px 16px}
+.set-card-actions .btn{min-height:40px}
+.set-card-actions .set-move{width:44px;min-width:44px;height:44px;padding:0;font-size:18px;font-weight:800;color:#11403b}
+.set-card-actions .set-del{color:#b91c1c;border-color:#fecaca;background:#fff7f7}
 .sets-hub .help{margin:12px 16px}
 .set-card-team{background:#e8f5f2;border-color:#b7d9d3}
 .set-card-team b{color:#0f3d38}

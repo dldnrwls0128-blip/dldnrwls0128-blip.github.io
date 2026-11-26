@@ -640,14 +640,14 @@ function bindCards(root = view()) {
 }
 /* ---------- 체크 선택(세대·목록·업체 화면 공통) ---------- */
 const selItems = () => S.defects.filter((d) => S.select.has(d.id));
-function selBarHtml({ all = false, core = false } = {}) {
+function selBarHtml({ all = false, core = false, unlist = false } = {}) {
   /* 1.3.4 주 버튼은 ‘요청서 보내기’ 하나 + ‘더보기’(나머지 동작은 위로 펼침). 가운데 ＋ 버튼에 가리지 않게 아래 여백 */
   return `<div id="selbar" class="selbar" hidden role="region" aria-label="선택한 하자">
     <div class="sel-tray" id="sel-tray" ${window.__selTrayOpen ? "" : "hidden"}>
       ${all ? '<button type="button" class="btn btn-sm" data-sa="all">전체선택</button>' : ""}
       <button type="button" class="btn btn-sm" data-sa="setadd">목록에 담기</button><button type="button" class="btn btn-sm" data-sa="req">업체에 보내기</button><button type="button" class="btn btn-sm" data-sa="move">🔁 업체 이관</button><button type="button" class="btn btn-sm" data-sa="status">상태변경</button><button type="button" class="btn btn-sm" data-sa="copyto">📋 선택 위치들에 복사</button>${core ? '<button type="button" class="btn btn-sm" data-sa="core">코어 지정</button>' : ""}<button type="button" class="btn btn-sm" data-sa="clear">선택 해제</button>
     </div>
-    <div class="sel-main"><span id="selcount"></span><button type="button" class="btn btn-sm btn-primary" data-sa="send">업체에 보내기</button><button type="button" class="btn btn-sm" data-sa="done" id="sel-done">조치로</button><button type="button" class="btn btn-sm" id="sel-more" aria-expanded="false" aria-controls="sel-tray">더보기 ▴</button></div></div>`;
+    <div class="sel-main"><span id="selcount"></span>${unlist ? '<button type="button" class="btn btn-sm" data-sa="setoff">목록에서 빼기</button>' : ""}<button type="button" class="btn btn-sm btn-primary" data-sa="send">업체에 보내기</button><button type="button" class="btn btn-sm" data-sa="done" id="sel-done">조치로</button><button type="button" class="btn btn-sm" id="sel-more" aria-expanded="false" aria-controls="sel-tray">더보기 ▴</button></div></div>`;
 }
 /** 하단 바 ‘더보기’ 펼치기/접기(테스트는 selMore(true)) */
 function selMore(open) {
@@ -675,7 +675,7 @@ function updateSelBar() {
   if (db) { db.hidden = !openN || isViewerNow(); db.textContent = openN ? `조치로 ${n(openN)}건` : "조치로"; }
 }
 /** 하단 바 버튼. pool: ‘전체선택’ 대상 */
-function bindSelBar(pool = []) {
+function bindSelBar(pool = [], { unlist } = {}) {
   $("#sel-more", view())?.addEventListener("click", () => selMore());
   $$("[data-sa]", view()).forEach((b) => b.addEventListener("click", async () => {
     const a = b.dataset.sa; const sel = selItems(); if (b.closest("#sel-tray")) selMore(false);
@@ -689,6 +689,17 @@ function bindSelBar(pool = []) {
     if (a === "copyto") return bulkCopySheet(sel);
     if (a === "setadd") return addToSetSheet(sel.map((d) => d.id));
     if (a === "done") return markDoneMany(sel);
+    if (a === "setoff") {
+      if (!unlist?.id) return;
+      if (unlist.kind === "tab" && !canManageTabs()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
+      if (!(await ask(`선택한 ${sel.length}건을 이 목록에서만 뺄까요? 하자 자체는 지워지지 않아요.`, { ok: "목록에서 빼기" }))) return;
+      if (unlist.kind === "set") {
+        saveUserSets(Sets.toggleIds(loadUserSets(), unlist.id, sel.map((d) => d.id), false).sets);
+      } else if (unlist.kind === "tab") {
+        await setTabs(sel, unlist.id, false);
+      } else return;
+      S.select.clear(); toast(`${sel.length}건을 목록에서 빼었어요`); rerender(); return;
+    }
     const st = await choose(`${sel.length}건 상태 변경`, [{ label: "미조치", value: "재접수" }, { label: "조치", value: "조치완료" }]);
     if (!st) return;
     for (const d of sel) { setStatus(d, st, "일괄 변경"); await saveDefect(d); }
@@ -716,6 +727,26 @@ async function deleteTeamTab(id) {
   await saveTabs(TABS().filter((x) => x.id !== id));
   if (LS.get("listTab", "") === id) LS.set("listTab", "");
   toast("목록을 삭제했어요"); return true;
+}
+async function moveTeamTab(id, dir) {
+  if (!canManageTabs()) { toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요"); return false; }
+  const list = [...TABS()]; const i = list.findIndex((x) => x.id === id); const j = i + (Number(dir) < 0 ? -1 : 1);
+  if (i < 0 || j < 0 || j >= list.length) return false;
+  [list[i], list[j]] = [list[j], list[i]]; await saveTabs(list); return true;
+}
+async function renameDeviceSet(id) {
+  const st = Sets.setById(loadUserSets(), id); if (!st) return false;
+  const r = await formSheet({ title: "목록 이름 변경", ok: "변경", fields: [{ k: "v", label: "새 이름", value: st.name }],
+    validate: ({ v }) => Sets.renameSet(loadUserSets(), st.id, v).error || "" });
+  if (!r || r.v === st.name) return false;
+  const next = Sets.renameSet(loadUserSets(), st.id, r.v);
+  if (next.error) { toast(next.error); return false; }
+  saveUserSets(next.sets); toast("이름을 바꿨어요"); return true;
+}
+async function deleteDeviceSet(id) {
+  const st = Sets.setById(loadUserSets(), id); if (!st) return false;
+  if (!(await ask(`‘${st.name}’ 목록을 삭제할까요? 담긴 하자는 그대로 남아요.`, { ok: "삭제", danger: true }))) return false;
+  saveUserSets(Sets.deleteSet(loadUserSets(), st.id).sets); toast("목록을 삭제했어요"); return true;
 }
 async function setTabs(items, id, on) {
   let k = 0;
@@ -1089,8 +1120,8 @@ ROUTES.list = async () => {
     ${coreFix.length ? `<div class="lg-bar core-fix"><span class="help">코어 미지정 동 공용부 <b>${n(coreFix.length)}</b>건</span><span class="sp"></span><button type="button" class="btn btn-sm" id="core-fix">코어 지정</button></div>` : ""}
     <div id="cards">${list.length ? (grp ? listGroupsHtml(list, grp, !!effMode) : list.slice(0, S.listLimit).map((d) => defectCard(d, { sel: true })).join("")) : bare ? `<div class="card empty-card" id="list-empty"><p>아직 등록된 하자가 없어요.<br>‘＋ 하자 등록’을 눌러 시작하세요.</p><button type="button" class="btn btn-primary" id="empty-new">＋ 첫 하자 등록</button></div>` : `<div class="card empty-card" id="list-empty"><p>조건에 맞는 하자가 없어요.</p>${nUi || f.hideDone || ltab ? `<button type="button" class="btn" id="empty-clear">조건 모두 지우기</button>` : ""}</div>`}</div>
     ${(grp ? S.lgTrunc : list.length > S.listLimit) ? `<button type="button" class="btn btn-block" id="btn-more">더 보기 (${n(grp ? S.lgHid : list.length - S.listLimit)}건 남음)</button>` : ""}
-    ${selBarHtml({ all: true, core: true })}`;
-  bindCards(); syncChecks(); bindSelBar(list); bindFacetBar();
+    ${selBarHtml({ all: true, core: true, unlist: !!(ltab && canManageTabs()) })}`;
+  bindCards(); syncChecks(); bindSelBar(list, { unlist: ltab && canManageTabs() ? { kind: "tab", id: ltab } : null }); bindFacetBar();
   /* 1.2.7 위치 고르기: [위치 ▾] → [세부 위치 ▾] (→ [실 ▾]) · 고르면 바로 걸림 · 목록이 길면 안에서 검색 */
   const setLoc = (patch, from) => { const nf = { ...S.filter }; const order = ["dong", "core", "floor", "ho", "common", "room"];
     for (const k of order.slice(order.indexOf(from))) delete nf[k]; Object.assign(nf, patch);
@@ -3790,50 +3821,53 @@ ROUTES.sets = async (qq) => {
   const cur = id ? Sets.setById(sets, id) : null;
   if (id && !cur) { toast("목록을 찾을 수 없어요"); return replace("#/sets"); }
   if (!cur) {
-    setHeader("목록", { backBtn: false, action: `<button type="button" class="hdr-btn" id="set-new">＋ 새 목록</button>` });
     const canTeam = canManageTabs();
-    const cards = sets.map((st) => {
+    const editing = !!S.setsEdit;
+    const canEditHub = canTeam && TABS().length || sets.length;
+    setHeader("목록", { backBtn: false, action: `${canEditHub ? `<button type="button" class="hdr-btn" id="sets-edit" aria-pressed="${editing}">${editing ? "완료" : "편집"}</button>` : ""}<button type="button" class="hdr-btn" id="set-new">＋ 새 목록</button>` });
+    const actions = (kind, id, i, n0, allow) => {
+      if (!editing || !allow) return "";
+      return `<div class="set-card-actions">
+        <button type="button" class="btn btn-sm set-move" data-move="${kind}" data-id="${esc(id)}" data-dir="-1" ${i === 0 ? "disabled" : ""} aria-label="위로">↑</button>
+        <button type="button" class="btn btn-sm set-move" data-move="${kind}" data-id="${esc(id)}" data-dir="1" ${i === n0 - 1 ? "disabled" : ""} aria-label="아래로">↓</button>
+        <button type="button" class="btn btn-sm" data-ren="${kind}" data-id="${esc(id)}">이름 변경</button>
+        <button type="button" class="btn btn-sm set-del" data-del="${kind}" data-id="${esc(id)}">삭제</button>
+      </div>`;
+    };
+    const cards = sets.map((st, i) => {
       const c = Sets.countsOf(st, PD(), M.isOpen);
-      return `<div class="set-card"><button type="button" class="set-card-main" data-set="${esc(st.id)}"><b>${esc(st.name)}</b><span>미조치 ${n(c.open)} · 조치 ${n(c.done)} · 전체 ${n(c.all)}</span></button><button type="button" class="set-card-more" data-set-menu="${esc(st.id)}" aria-label="${esc(st.name)} 목록 편집">⋯</button></div>`;
+      return `<div class="set-card${editing ? " set-card-edit" : ""}"><button type="button" class="set-card-main" data-set="${esc(st.id)}"><b>${esc(st.name)}</b><span>미조치 ${n(c.open)} · 조치 ${n(c.done)} · 전체 ${n(c.all)}</span></button>${actions("set", st.id, i, sets.length, true)}</div>`;
     }).join("");
-    const teamRows = TABS().map((tb) => { const items = PD().filter((d) => M.inTab(d, tb.id)); const open = items.filter(M.isOpen).length; return `<div class="set-card set-card-team"><button type="button" class="set-card-main" data-ltab-go="${esc(tb.id)}"><b>★ ${esc(tb.name)}</b><span>미조치 ${n(open)} · 전체 ${n(items.length)} · 팀과 공유</span></button>${canTeam ? `<button type="button" class="set-card-more" data-team-menu="${esc(tb.id)}" aria-label="${esc(tb.name)} 목록 편집">⋯</button>` : ""}</div>`; }).join("");
+    const teamList = TABS();
+    const teamRows = teamList.map((tb, i) => { const items = PD().filter((d) => M.inTab(d, tb.id)); const open = items.filter(M.isOpen).length; return `<div class="set-card set-card-team${editing && canTeam ? " set-card-edit" : ""}"><button type="button" class="set-card-main" data-ltab-go="${esc(tb.id)}"><b>★ ${esc(tb.name)}</b><span>미조치 ${n(open)} · 전체 ${n(items.length)} · 팀과 공유</span></button>${actions("team", tb.id, i, teamList.length, canTeam)}</div>`; }).join("");
     view().innerHTML = `<div class="sets-hub">
       ${teamRows}
-      <p class="help">${teamRows ? "아래는 이 기기에만 저장되는 이름 붙인 목록이에요. 팀과 공유하는 ★ 목록은 위에서 바로 볼 수 있어요. ⋯에서 이름 변경·삭제를 할 수 있어요." : "하자를 골라 이름 붙인 목록으로 모아요. 이 기기에만 저장되고 팀과 동기화하지 않아요."}</p>
+      <p class="help">${teamRows ? "아래는 이 기기에만 저장되는 이름 붙인 목록이에요. 팀과 공유하는 ★ 목록은 위에서 바로 볼 수 있어요. 위의 <b>편집</b>에서 이름 변경·삭제·순서를 바꿔요." : "하자를 골라 이름 붙인 목록으로 모아요. 이 기기에만 저장되고 팀과 동기화하지 않아요. <b>편집</b>에서 이름 변경·삭제·순서를 바꿔요."}</p>
       ${cards || `<div class="card empty-card"><p>아직 이 기기 목록이 없어요.<br>하자 카드의 ⋯에서 ‘목록에 담기’를 누르거나, 위에서 새 목록을 만드세요.</p></div>`}
     </div>`;
     $("#set-new")?.addEventListener("click", async () => {
       const r = await formSheet({ title: "새 목록", ok: "만들기", hint: "예: 내일 점검, 입주전 필수", fields: [{ k: "v", label: "목록 이름", placeholder: "예: 내일 점검" }],
-        validate: ({ v }) => Sets.addSet(sets, v).error || "" });
+        validate: ({ v }) => Sets.addSet(loadUserSets(), v).error || "" });
       if (!r) return; const made = Sets.addSet(loadUserSets(), r.v);
       if (made.error) return toast(made.error);
       saveUserSets(made.sets); toast(`‘${made.set.name}’을(를) 만들었어요`); go(`#/sets?k=${made.set.id}`);
     });
-    $$("[data-set]", view()).forEach((b) => b.addEventListener("click", () => go(`#/sets?k=${b.dataset.set}`)));
-    $$("[data-ltab-go]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltabGo); S.filter = {}; LS.set("filter", {}); S.listLimit = 60; S.select.clear(); go("#/list"); }));
-    $$("[data-team-menu]", view()).forEach((b) => b.addEventListener("click", async (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const tid = b.dataset.teamMenu; const t = TABS().find((x) => x.id === tid); if (!t) return;
-      const k = await choose(t.name, [{ icon: "✎", label: "이름 변경", value: "ren" }, { icon: "🗑", label: "삭제", sub: "하자 자체는 지워지지 않아요", value: "del" }]);
-      if (k === "ren" && await renameTeamTab(tid)) replace("#/sets");
-      if (k === "del" && await deleteTeamTab(tid)) replace("#/sets");
+    $("#sets-edit")?.addEventListener("click", () => { S.setsEdit = !S.setsEdit; replace("#/sets"); });
+    $$("[data-set]", view()).forEach((b) => b.addEventListener("click", () => { if (S.setsEdit) return; go(`#/sets?k=${b.dataset.set}`); }));
+    $$("[data-ltab-go]", view()).forEach((b) => b.addEventListener("click", () => { if (S.setsEdit) return; LS.set("listTab", b.dataset.ltabGo); S.filter = {}; LS.set("filter", {}); S.listLimit = 60; S.select.clear(); go("#/list"); }));
+    $$("[data-ren]", view()).forEach((b) => b.addEventListener("click", async () => {
+      const ok = b.dataset.ren === "team" ? await renameTeamTab(b.dataset.id) : await renameDeviceSet(b.dataset.id);
+      if (ok) replace("#/sets");
     }));
-    $$("[data-set-menu]", view()).forEach((b) => b.addEventListener("click", async (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const sid = b.dataset.setMenu; const st = Sets.setById(loadUserSets(), sid); if (!st) return;
-      const k = await choose(st.name, [{ icon: "✎", label: "이름 변경", value: "ren" }, { icon: "🗑", label: "삭제", sub: "하자 자체는 지워지지 않아요", value: "del" }]);
-      if (k === "ren") {
-        const r = await formSheet({ title: "목록 이름 변경", ok: "변경", fields: [{ k: "v", label: "새 이름", value: st.name }],
-          validate: ({ v }) => Sets.renameSet(loadUserSets(), st.id, v).error || "" });
-        if (!r || r.v === st.name) return;
-        const next = Sets.renameSet(loadUserSets(), st.id, r.v);
-        if (next.error) return toast(next.error);
-        saveUserSets(next.sets); toast("이름을 바꿨어요"); replace("#/sets");
-      }
-      if (k === "del") {
-        if (!(await ask(`‘${st.name}’ 목록을 삭제할까요? 담긴 하자는 그대로 남아요.`, { ok: "삭제", danger: true }))) return;
-        saveUserSets(Sets.deleteSet(loadUserSets(), st.id).sets); toast("목록을 삭제했어요"); replace("#/sets");
-      }
+    $$("[data-del]", view()).forEach((b) => b.addEventListener("click", async () => {
+      const ok = b.dataset.del === "team" ? await deleteTeamTab(b.dataset.id) : await deleteDeviceSet(b.dataset.id);
+      if (ok) replace("#/sets");
+    }));
+    $$("[data-move]", view()).forEach((b) => b.addEventListener("click", async () => {
+      const dir = Number(b.dataset.dir);
+      if (b.dataset.move === "team") { if (await moveTeamTab(b.dataset.id, dir)) replace("#/sets"); return; }
+      const next = Sets.moveSet(loadUserSets(), b.dataset.id, dir);
+      saveUserSets(next.sets); replace("#/sets");
     }));
     return;
   }
@@ -3845,9 +3879,9 @@ ROUTES.sets = async (qq) => {
       <button type="button" class="btn btn-sm btn-primary" id="set-send" ${c.all ? "" : "disabled"}>업체에 보내기</button>
       <button type="button" class="btn btn-sm" id="set-export" ${c.all ? "" : "disabled"}>내보내기</button></div>
     <div id="cards">${items.length ? items.map((d) => defectCard(d, { sel: true })).join("") : `<div class="card empty-card"><p>이 목록이 비어 있어요. 하자 화면에서 ⋯ → 목록에 담기를 누르세요.</p></div>`}</div>
-    ${selBarHtml({ all: true })}
+    ${selBarHtml({ all: true, unlist: true })}
   </div>`;
-  bindCards(); syncChecks(); bindSelBar(items);
+  bindCards(); syncChecks(); bindSelBar(items, { unlist: { kind: "set", id: cur.id } });
   $("#set-send")?.addEventListener("click", () => { const sel = selItems(); sendSheet({ items: sel.length ? sel : items }); });
   $("#set-export")?.addEventListener("click", () => exportSheet(items, cur.name));
   $("#set-menu")?.addEventListener("click", async () => {
@@ -3855,18 +3889,8 @@ ROUTES.sets = async (qq) => {
       { icon: "✎", label: "이름 변경", value: "ren" },
       { icon: "🗑", label: "삭제", sub: "하자 자체는 지워지지 않아요", value: "del" },
     ]);
-    if (k === "ren") {
-      const r = await formSheet({ title: "목록 이름 변경", ok: "변경", fields: [{ k: "v", label: "새 이름", value: cur.name }],
-        validate: ({ v }) => Sets.renameSet(loadUserSets(), cur.id, v).error || "" });
-      if (!r || r.v === cur.name) return;
-      const next = Sets.renameSet(loadUserSets(), cur.id, r.v);
-      if (next.error) return toast(next.error);
-      saveUserSets(next.sets); toast("이름을 바꿨어요"); replace(`#/sets?k=${cur.id}`);
-    }
-    if (k === "del") {
-      if (!(await ask(`‘${cur.name}’ 목록을 삭제할까요? 담긴 하자는 그대로 남아요.`, { ok: "삭제", danger: true }))) return;
-      saveUserSets(Sets.deleteSet(loadUserSets(), cur.id).sets); toast("목록을 삭제했어요"); replace("#/sets");
-    }
+    if (k === "ren" && await renameDeviceSet(cur.id)) replace(`#/sets?k=${cur.id}`);
+    if (k === "del" && await deleteDeviceSet(cur.id)) replace("#/sets");
   });
 };
 

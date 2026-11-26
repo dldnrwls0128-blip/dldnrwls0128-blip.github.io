@@ -57,6 +57,16 @@ export function deleteSet(sets, id) {
   return { sets: sets.filter((s) => s.id !== id) };
 }
 
+/** dir: -1 위로, +1 아래로. 끝이면 그대로. */
+export function moveSet(sets, id, dir) {
+  const i = sets.findIndex((s) => s.id === id);
+  const j = i + (Number(dir) < 0 ? -1 : 1);
+  if (i < 0 || j < 0 || j >= sets.length) return { sets };
+  const next = sets.slice();
+  [next[i], next[j]] = [next[j], next[i]];
+  return { sets: next };
+}
+
 export const setById = (sets, id) => sets.find((s) => s.id === id) || null;
 export const inSet = (set, id) => !!(set && set.ids.includes(id));
 
