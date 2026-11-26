@@ -699,6 +699,24 @@ function bindSelBar(pool = []) {
 const TABS = () => M.tabsOf(P());
 const tabCount = (id) => { let k = 0; for (const d of PD()) if (M.inTab(d, id)) k++; return k; };
 async function saveTabs(list) { const p = P(); p.tabs = list.map((t) => ({ id: t.id, name: t.name })); await saveProject(p); }
+const canManageTabs = () => !isViewerNow() && RL.moreShows(roleId(), "tabs");
+async function renameTeamTab(id) {
+  if (!canManageTabs()) { toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요"); return false; }
+  const list = [...TABS()]; const t = list.find((x) => x.id === id); if (!t) return false;
+  const r = await formSheet({ title: "목록 이름 변경", ok: "변경", fields: [{ k: "name", label: "목록 이름", value: t.name }],
+    validate: ({ name }) => (!name.trim() ? "이름을 입력하세요" : name.trim().length > 20 ? "20자 이내로" : list.some((x) => x.id !== id && x.name === name.trim()) ? "이미 있는 목록이에요" : "") });
+  if (!r) return false; t.name = r.name.trim(); await saveTabs(list); toast("이름을 바꿨어요"); return true;
+}
+async function deleteTeamTab(id) {
+  if (!canManageTabs()) { toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요"); return false; }
+  const t = TABS().find((x) => x.id === id); if (!t) return false;
+  const k = tabCount(id);
+  if (!(await ask(`‘${t.name}’ 목록을 삭제할까요?\n하자 ${k}건은 지워지지 않고, 이 목록에서만 빠져요.`, { ok: "삭제", danger: true }))) return false;
+  await setTabs(PD().filter((d) => M.inTab(d, id)), id, false);
+  await saveTabs(TABS().filter((x) => x.id !== id));
+  if (LS.get("listTab", "") === id) LS.set("listTab", "");
+  toast("목록을 삭제했어요"); return true;
+}
 async function setTabs(items, id, on) {
   let k = 0;
   for (const d of items) { const cur = Array.isArray(d.tabs) ? d.tabs : []; const has = cur.includes(id); if (has === on) continue; d.tabs = on ? [...cur, id] : cur.filter((x) => x !== id); await saveDefect(d); k++; }
@@ -754,11 +772,8 @@ function tabManager(onDone = () => rerender()) {
     const b = e.target.closest("[data-tm]"); if (!b) return; const id = b.closest("[data-tid]").dataset.tid; const list = [...TABS()]; const i = list.findIndex((t) => t.id === id); const t = list[i];
     if (isViewerNow()) return toast("보기 전용 멤버라 이 팀 현장을 고칠 수 없어요");
     if (b.dataset.tm === "up" || b.dataset.tm === "down") { const j = b.dataset.tm === "up" ? i - 1 : i + 1; [list[i], list[j]] = [list[j], list[i]]; await saveTabs(list); return body(); }
-    if (b.dataset.tm === "ren") { const r = await formSheet({ title: "탭 이름 바꾸기", ok: "바꾸기", fields: [{ k: "name", label: "탭 이름", value: t.name }], validate: ({ name }) => (!name.trim() ? "이름을 입력하세요" : name.trim().length > 20 ? "20자 이내로" : list.some((x) => x.id !== id && x.name === name.trim()) ? "이미 있는 탭이에요" : "") });
-      if (!r) return; t.name = r.name.trim(); await saveTabs(list); return body(); }
-    if (b.dataset.tm === "del") { const k = tabCount(id);
-      if (!(await ask(`‘${t.name}’ 탭을 지울까요?\n하자 ${k}건은 지워지지 않고 이 탭에서만 빠져요.`, { ok: "탭 삭제", danger: true }))) return;
-      await setTabs(PD().filter((d) => M.inTab(d, id)), id, false); await saveTabs(list.filter((x) => x.id !== id)); if (LS.get("listTab", "") === id) LS.set("listTab", ""); toast("탭을 지웠어요"); return body(); }
+    if (b.dataset.tm === "ren") { if (await renameTeamTab(id)) body(); return; }
+    if (b.dataset.tm === "del") { if (await deleteTeamTab(id)) body(); return; }
   });
   return s;
 }
@@ -3776,14 +3791,15 @@ ROUTES.sets = async (qq) => {
   if (id && !cur) { toast("목록을 찾을 수 없어요"); return replace("#/sets"); }
   if (!cur) {
     setHeader("목록", { backBtn: false, action: `<button type="button" class="hdr-btn" id="set-new">＋ 새 목록</button>` });
+    const canTeam = canManageTabs();
     const cards = sets.map((st) => {
       const c = Sets.countsOf(st, PD(), M.isOpen);
-      return `<button type="button" class="set-card" data-set="${esc(st.id)}"><b>${esc(st.name)}</b><span>미조치 ${n(c.open)} · 조치 ${n(c.done)} · 전체 ${n(c.all)}</span></button>`;
+      return `<div class="set-card"><button type="button" class="set-card-main" data-set="${esc(st.id)}"><b>${esc(st.name)}</b><span>미조치 ${n(c.open)} · 조치 ${n(c.done)} · 전체 ${n(c.all)}</span></button><button type="button" class="set-card-more" data-set-menu="${esc(st.id)}" aria-label="${esc(st.name)} 목록 편집">⋯</button></div>`;
     }).join("");
-    const teamRows = TABS().map((tb) => { const items = PD().filter((d) => M.inTab(d, tb.id)); const open = items.filter(M.isOpen).length; return `<button type="button" class="set-card set-card-team" data-ltab-go="${esc(tb.id)}"><b>★ ${esc(tb.name)}</b><span>미조치 ${n(open)} · 전체 ${n(items.length)} · 팀과 공유</span></button>`; }).join("");
+    const teamRows = TABS().map((tb) => { const items = PD().filter((d) => M.inTab(d, tb.id)); const open = items.filter(M.isOpen).length; return `<div class="set-card set-card-team"><button type="button" class="set-card-main" data-ltab-go="${esc(tb.id)}"><b>★ ${esc(tb.name)}</b><span>미조치 ${n(open)} · 전체 ${n(items.length)} · 팀과 공유</span></button>${canTeam ? `<button type="button" class="set-card-more" data-team-menu="${esc(tb.id)}" aria-label="${esc(tb.name)} 목록 편집">⋯</button>` : ""}</div>`; }).join("");
     view().innerHTML = `<div class="sets-hub">
       ${teamRows}
-      <p class="help">아래는 이 기기에만 저장되는 이름 붙인 목록이에요. 팀과 공유하는 ★ 목록은 위에서 바로 볼 수 있어요.</p>
+      <p class="help">${teamRows ? "아래는 이 기기에만 저장되는 이름 붙인 목록이에요. 팀과 공유하는 ★ 목록은 위에서 바로 볼 수 있어요. ⋯에서 이름 변경·삭제를 할 수 있어요." : "하자를 골라 이름 붙인 목록으로 모아요. 이 기기에만 저장되고 팀과 동기화하지 않아요."}</p>
       ${cards || `<div class="card empty-card"><p>아직 이 기기 목록이 없어요.<br>하자 카드의 ⋯에서 ‘목록에 담기’를 누르거나, 위에서 새 목록을 만드세요.</p></div>`}
     </div>`;
     $("#set-new")?.addEventListener("click", async () => {
@@ -3795,6 +3811,30 @@ ROUTES.sets = async (qq) => {
     });
     $$("[data-set]", view()).forEach((b) => b.addEventListener("click", () => go(`#/sets?k=${b.dataset.set}`)));
     $$("[data-ltab-go]", view()).forEach((b) => b.addEventListener("click", () => { LS.set("listTab", b.dataset.ltabGo); S.filter = {}; LS.set("filter", {}); S.listLimit = 60; S.select.clear(); go("#/list"); }));
+    $$("[data-team-menu]", view()).forEach((b) => b.addEventListener("click", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const tid = b.dataset.teamMenu; const t = TABS().find((x) => x.id === tid); if (!t) return;
+      const k = await choose(t.name, [{ icon: "✎", label: "이름 변경", value: "ren" }, { icon: "🗑", label: "삭제", sub: "하자 자체는 지워지지 않아요", value: "del" }]);
+      if (k === "ren" && await renameTeamTab(tid)) replace("#/sets");
+      if (k === "del" && await deleteTeamTab(tid)) replace("#/sets");
+    }));
+    $$("[data-set-menu]", view()).forEach((b) => b.addEventListener("click", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const sid = b.dataset.setMenu; const st = Sets.setById(loadUserSets(), sid); if (!st) return;
+      const k = await choose(st.name, [{ icon: "✎", label: "이름 변경", value: "ren" }, { icon: "🗑", label: "삭제", sub: "하자 자체는 지워지지 않아요", value: "del" }]);
+      if (k === "ren") {
+        const r = await formSheet({ title: "목록 이름 변경", ok: "변경", fields: [{ k: "v", label: "새 이름", value: st.name }],
+          validate: ({ v }) => Sets.renameSet(loadUserSets(), st.id, v).error || "" });
+        if (!r || r.v === st.name) return;
+        const next = Sets.renameSet(loadUserSets(), st.id, r.v);
+        if (next.error) return toast(next.error);
+        saveUserSets(next.sets); toast("이름을 바꿨어요"); replace("#/sets");
+      }
+      if (k === "del") {
+        if (!(await ask(`‘${st.name}’ 목록을 삭제할까요? 담긴 하자는 그대로 남아요.`, { ok: "삭제", danger: true }))) return;
+        saveUserSets(Sets.deleteSet(loadUserSets(), st.id).sets); toast("목록을 삭제했어요"); replace("#/sets");
+      }
+    }));
     return;
   }
   const c = Sets.countsOf(cur, PD(), M.isOpen);
@@ -3812,8 +3852,8 @@ ROUTES.sets = async (qq) => {
   $("#set-export")?.addEventListener("click", () => exportSheet(items, cur.name));
   $("#set-menu")?.addEventListener("click", async () => {
     const k = await choose(cur.name, [
-      { icon: "✎", label: "이름 바꾸기", value: "ren" },
-      { icon: "🗑", label: "목록 삭제", sub: "하자 자체는 지워지지 않아요", value: "del" },
+      { icon: "✎", label: "이름 변경", value: "ren" },
+      { icon: "🗑", label: "삭제", sub: "하자 자체는 지워지지 않아요", value: "del" },
     ]);
     if (k === "ren") {
       const r = await formSheet({ title: "목록 이름 변경", ok: "변경", fields: [{ k: "v", label: "새 이름", value: cur.name }],

@@ -927,9 +927,12 @@ form.search .tg-fav{padding:6px 8px;font-size:12px;min-height:36px;min-width:36p
 .st-adv{margin:8px 16px 12px;border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:8px 12px;background:#fafafa}
 .st-adv summary{cursor:pointer;font-weight:650;color:#4b5563}
 .dcard .ddone.is-done{background:#fff;border:1px solid var(--line,#d1d5db);color:#374151}
-.set-card{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:calc(100% - 32px);margin:8px 16px;padding:14px 16px;border:1px solid var(--line,#e5e7eb);border-radius:14px;background:#fff;text-align:left}
+.set-card{display:flex;flex-direction:row;align-items:center;gap:0;width:calc(100% - 32px);margin:8px 16px;padding:0;border:1px solid var(--line,#e5e7eb);border-radius:14px;background:#fff;text-align:left;overflow:hidden}
+.set-card-main{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:14px 12px 14px 16px;border:0;background:transparent;text-align:left;cursor:pointer;color:inherit}
 .set-card b{font-size:16px}
 .set-card span{font-size:13px;color:#6b7280}
+.set-card-more{flex:none;width:44px;height:44px;margin:0 6px 0 0;border:0;background:transparent;color:inherit;font-size:20px;line-height:1;cursor:pointer;border-radius:10px}
+.set-card-more:focus-visible,.set-card-main:focus-visible{outline:2px solid var(--brand,#147a6b);outline-offset:-2px}
 .sets-hub .help{margin:12px 16px}
 .set-card-team{background:#e8f5f2;border-color:#b7d9d3}
 .set-card-team b{color:#0f3d38}
